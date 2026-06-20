@@ -1,0 +1,21 @@
+{
+  "package": "applygray.mixins.ae2",
+  "refmap": "mixins.applygray.refmap.json",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [
+    "MixinCraftingCPUCluster",
+    "MixinCraftingGridCache",
+    "MixinWorldHelper",
+    "MixinDualityInterface",
+    "MixinDualityFluidInterface",
+    "MixinContainerInterfaceTerminal",
+    "MixinAETrack",
+    "MixinNonBlockingItems"
+  ],
+  "client": [
+    "MixinRecipeTransferHandler"
+  ],
+  "server": []
+}

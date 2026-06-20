@@ -1,0 +1,339 @@
+// ApplyGray - AE2/AE2FC integration addon for GregTech
+
+import com.gtnewhorizons.retrofuturagradle.util.Distribution
+
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'eclipse'
+    id 'org.jetbrains.gradle.plugin.idea-ext' version '1.1.8'
+    id 'com.gtnewhorizons.retrofuturagradle' version '1.4.0'
+}
+
+// Project properties from gradle.properties
+checkPropertyExists("modName")
+checkPropertyExists("modId")
+checkPropertyExists("modGroup")
+checkPropertyExists("minecraftVersion")
+checkPropertyExists("usesMixins")
+checkPropertyExists("mixinsPackage")
+checkPropertyExists("coreModClass")
+checkPropertyExists("containsMixinsAndOrCoreModOnly")
+
+propertyDefaultIfUnset("modVersion", "")
+propertyDefaultIfUnset("includeMCVersionJar", false)
+propertyDefaultIfUnset("modArchivesBaseName", project.modId)
+propertyDefaultIfUnset("developmentEnvironmentUserName", "Developer")
+propertyDefaultIfUnset("additionalJavaArguments", "")
+propertyDefaultIfUnset("enableJava17RunTasks", false)
+propertyDefaultIfUnset("generateGradleTokenClass", "")
+propertyDefaultIfUnset("gradleTokenModId", "")
+propertyDefaultIfUnset("gradleTokenModName", "")
+propertyDefaultIfUnset("gradleTokenVersion", "")
+propertyDefaultIfUnset("includeWellKnownRepositories", true)
+propertyDefaultIfUnset("includeCommonDevEnvMods", true)
+propertyDefaultIfUnset("stripForgeRequirements", false)
+propertyDefaultIfUnset("forceEnableMixins", false)
+propertyDefaultIfUnset("mixinConfigRefmap", "mixins.${project.modId}.refmap.json")
+propertyDefaultIfUnset("generateMixinConfig", true)
+propertyDefaultIfUnset("mixinProviderSpec", "zone.rong:mixinbooter:10.6")
+propertyDefaultIfUnset("enableModernJavaSyntax", false)
+propertyDefaultIfUnset("noPublishedSources", false)
+
+final String modGroupPath = modGroup.toString().replace('.' as char, '/' as char)
+
+// Configure Java
+java {
+    toolchain {
+        if (enableModernJavaSyntax.toBoolean()) {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        } else {
+            languageVersion.set(JavaLanguageVersion.of(8))
+        }
+        vendor.set(JvmVendorSpec.AZUL)
+    }
+    if (!noPublishedSources.toBoolean()) {
+        withSourcesJar()
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+
+    if (enableModernJavaSyntax.toBoolean()) {
+        if (it.name in ['compileMcLauncherJava', 'compilePatchedMcJava']) {
+            return
+        }
+        sourceCompatibility = 17
+        options.release.set(8)
+        javaCompiler.set(javaToolchains.compilerFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+            vendor.set(JvmVendorSpec.AZUL)
+        })
+    }
+}
+
+// Mod version
+if (!modVersion) {
+    modVersion = '1.0.0'
+}
+
+if (includeMCVersionJar.toBoolean()) {
+    version = "${minecraftVersion}-${modVersion}"
+} else {
+    version = modVersion
+}
+
+group = modGroup
+base {
+    archivesName = modArchivesBaseName
+}
+
+// Configure Minecraft
+minecraft {
+    mcVersion = minecraftVersion
+    username = developmentEnvironmentUserName.toString()
+    useDependencyAccessTransformers = true
+
+    if (gradleTokenModId) {
+        injectedTags.put gradleTokenModId, modId
+    }
+    if (gradleTokenModName) {
+        injectedTags.put gradleTokenModName, modName
+    }
+    if (gradleTokenVersion) {
+        injectedTags.put gradleTokenVersion, modVersion
+    }
+
+    extraRunJvmArguments.add("-ea:${modGroup}")
+    if (usesMixins.toBoolean()) {
+        extraRunJvmArguments.addAll([
+            '-Dmixin.hotSwap=true',
+            '-Dmixin.checks.interfaces=true',
+            '-Dmixin.debug.export=true'
+        ])
+    }
+}
+
+if (coreModClass) {
+    for (runTask in ['runClient', 'runServer']) {
+        tasks.named(runTask).configure {
+            extraJvmArgs.add("-Dfml.coreMods.load=${modGroup}.${coreModClass}")
+        }
+    }
+}
+
+if (generateGradleTokenClass) {
+    tasks.injectTags.outputClassName.set(generateGradleTokenClass)
+}
+
+// Repositories
+repositories.configureEach { repo ->
+    if (repo instanceof UrlArtifactRepository) {
+        if (repo.getUrl() != null && repo.getUrl().getScheme() == "http" && !repo.allowInsecureProtocol) {
+            repo.allowInsecureProtocol = true
+        }
+    }
+}
+
+repositories {
+    if (includeWellKnownRepositories.toBoolean() || includeCommonDevEnvMods.toBoolean()) {
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'Curse Maven'
+                    url = 'https://www.cursemaven.com'
+                }
+            }
+            filter {
+                includeGroup 'curse.maven'
+            }
+        }
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'Modrinth'
+                    url = 'https://api.modrinth.com/maven'
+                }
+            }
+            filter {
+                includeGroup 'maven.modrinth'
+            }
+        }
+        maven {
+            name 'Cleanroom Maven'
+            url 'https://maven.cleanroommc.com'
+        }
+        maven {
+            name 'BlameJared Maven'
+            url 'https://maven.blamejared.com'
+        }
+        maven {
+            name 'GTNH Maven'
+            url 'https://nexus.gtnewhorizons.com/repository/public/'
+        }
+        maven {
+            name 'GTCEu Maven'
+            url 'https://maven.gtceu.com'
+        }
+    }
+    mavenLocal()
+}
+
+// Dependencies
+configurations {
+    embed
+    implementation.extendsFrom(embed)
+
+    create("runtimeOnlyNonPublishable") {
+        description = "Runtime only dependencies that are not published alongside the jar"
+        canBeConsumed = false
+        canBeResolved = false
+    }
+    create("devOnlyNonPublishable") {
+        description = "Runtime and compiletime dependencies that are not published alongside the jar"
+        canBeConsumed = false
+        canBeResolved = false
+    }
+
+    compileOnly.extendsFrom(devOnlyNonPublishable)
+    runtimeOnlyNonPublishable.extendsFrom(devOnlyNonPublishable)
+    runtimeClasspath.extendsFrom(runtimeOnlyNonPublishable)
+}
+
+dependencies {
+    if (usesMixins.toBoolean()) {
+        annotationProcessor 'org.ow2.asm:asm-debug-all:5.2'
+        annotationProcessor 'com.google.guava:guava:30.0-jre'
+        annotationProcessor 'com.google.code.gson:gson:2.8.9'
+
+        def activeMixinProviderSpec = modUtils.enableMixins(mixinProviderSpec, mixinConfigRefmap)
+        api(activeMixinProviderSpec) {
+            transitive = false
+        }
+        annotationProcessor(activeMixinProviderSpec) {
+            transitive = false
+        }
+    }
+
+    if (enableModernJavaSyntax.toBoolean()) {
+        annotationProcessor 'com.github.bsideup.jabel:jabel-javac-plugin:1.0.1'
+        compileOnly('com.github.bsideup.jabel:jabel-javac-plugin:1.0.1') {
+            transitive = false
+        }
+        annotationProcessor 'net.java.dev.jna:jna-platform:5.13.0'
+        patchedMinecraft 'me.eigenraven.java8unsupported:java-8-unsupported-shim:1.0.0'
+    }
+
+    compileOnlyApi 'org.jetbrains:annotations:24.1.0'
+    annotationProcessor 'org.jetbrains:annotations:24.1.0'
+
+    // Compile against the matching local fork without publishing it with ApplyGray.
+    devOnlyNonPublishable files('libs/gregtech-dev.jar')
+
+    // AE2 and AE2FC dependencies
+    implementation rfg.deobf(files("libs/appliedenergistics2-v1.0.5-gtqt.jar"))
+    implementation rfg.deobf(files("libs/ae2fc-2.7.10-unofficial.jar"))
+
+    // Common dev env mods
+    if (includeCommonDevEnvMods.toBoolean()) {
+        implementation 'mezz.jei:jei_1.12.2:4.16.1.302'
+        implementation rfg.deobf('curse.maven:top-245211:2667280')
+    }
+}
+
+// Apply custom dependencies
+if (getFile('dependencies.gradle').exists()) {
+    apply from: 'dependencies.gradle'
+}
+
+// Resource processing
+processResources {
+    inputs.property 'version', modVersion
+    inputs.property 'mcversion', minecraftVersion
+
+    filesMatching('mcmod.info') { fcd ->
+        fcd.expand(
+                'version': modVersion,
+                'mcversion': minecraftVersion,
+                'modid': modId,
+                'modname': modName
+        )
+    }
+}
+
+// Generate assets
+tasks.register('generateAssets') {
+    group = 'ApplyGray Build'
+    description = 'Generates pack.mcmeta and mcmod.info if needed'
+    doLast {
+        def packMcmetaFile = getFile('src/main/resources/pack.mcmeta')
+        if (!packMcmetaFile.exists()) {
+            packMcmetaFile.text = """{
+  "pack": {
+    "pack_format": 3,
+    "description": "${modName} Resource Pack"
+  }
+}
+"""
+        }
+
+        def mcmodInfoFile = getFile('src/main/resources/mcmod.info')
+        if (!mcmodInfoFile.exists()) {
+            mcmodInfoFile.text = """[{
+    "modid": "\${modid}",
+    "name": "\${modname}",
+    "description": "AE2/AE2FC integration addon for GregTech",
+    "version": "\${version}",
+    "mcversion": "\${mcversion}",
+    "logoFile": "",
+    "url": "",
+    "authorList": [],
+    "credits": "",
+    "dependencies": ["gregtech"]
+}]
+"""
+        }
+    }
+}
+
+tasks.named('processResources').configure {
+    dependsOn('generateAssets')
+}
+
+jar {
+    manifest {
+        attributes(getManifestAttributes())
+    }
+}
+
+def getManifestAttributes() {
+    def attributes = [:]
+    if (coreModClass) {
+        attributes['FMLCorePlugin'] = "${modGroup}.${coreModClass}"
+    }
+    if (!containsMixinsAndOrCoreModOnly.toBoolean() && (usesMixins.toBoolean() || coreModClass)) {
+        attributes['FMLCorePluginContainsFMLMod'] = true
+    }
+    if (usesMixins.toBoolean()) {
+        attributes['ForceLoadAsMod'] = !containsMixinsAndOrCoreModOnly.toBoolean()
+    }
+    return attributes
+}
+
+// Helpers
+def getFile(String relativePath) {
+    return new File(projectDir, relativePath)
+}
+
+def checkPropertyExists(String propertyName) {
+    if (!project.hasProperty(propertyName)) {
+        throw new GradleException("This project requires a property \"" + propertyName + "\"! Please add it to \"gradle.properties\".")
+    }
+}
+
+def propertyDefaultIfUnset(String propertyName, defaultValue) {
+    if (!project.hasProperty(propertyName) || project.property(propertyName) == "") {
+        project.ext.setProperty(propertyName, defaultValue)
+    }
+}
