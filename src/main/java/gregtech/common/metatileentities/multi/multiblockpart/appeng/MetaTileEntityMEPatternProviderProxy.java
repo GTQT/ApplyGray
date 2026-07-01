@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IDataStickIntractable;
@@ -12,7 +14,6 @@ import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.mui.factory.MetaTileEntityGuiFactory;
 import gregtech.api.util.TextFormattingUtil;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityMultiblockNotifiablePart;
 
@@ -189,7 +190,7 @@ public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblo
     public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (shouldRenderOverlay()) {
-            SimpleOverlayRenderer overlay = Textures.ME_BUFFER_HATCH_PROXY_OVERLAY;
+            SimpleOverlayRenderer overlay = ApplyGrayTextures.ME_BUFFER_HATCH_PROXY_OVERLAY;
             overlay.renderSided(getFrontFacing(), renderState, translation, pipeline);
         }
     }

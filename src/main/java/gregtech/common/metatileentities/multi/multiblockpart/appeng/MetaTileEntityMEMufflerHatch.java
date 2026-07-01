@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.GTValues;
 import gregtech.api.capability.IMufflerHatch;
 import gregtech.api.metatileentity.ITieredMetaTileEntity;
@@ -10,7 +12,6 @@ import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.mui.drawable.GTObjectDrawable;
 import gregtech.api.util.KeyUtil;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOutputBase;
 
 import net.minecraft.client.resources.I18n;
@@ -154,7 +155,7 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
     public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
-            Textures.ME_MUFFLER_OVERLAY.renderSided(getFrontFacing(), renderState, translation, pipeline);
+            ApplyGrayTextures.ME_MUFFLER_OVERLAY.renderSided(getFrontFacing(), renderState, translation, pipeline);
         }
     }
 

@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.api.mui.ApplyGrayGuiTextures;
+
 import gregtech.api.capability.impl.ItemHandlerList;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -316,8 +318,8 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
                     .margin(1)
                     .value(new BooleanSyncValue(this::isAutoPull, this::setAutoPull))
                     .disableHoverBackground()
-                    .overlay(false, GTGuiTextures.AUTO_PULL[0])
-                    .overlay(true, GTGuiTextures.AUTO_PULL[1])
+                    .overlay(false, ApplyGrayGuiTextures.AUTO_PULL[0])
+                    .overlay(true, ApplyGrayGuiTextures.AUTO_PULL[1])
                     .addTooltip(false, IKey.lang("gregtech.machine.me.stocking_auto_pull_disabled"))
                     .addTooltip(true, IKey.lang("gregtech.machine.me.stocking_auto_pull_enabled"));
         }

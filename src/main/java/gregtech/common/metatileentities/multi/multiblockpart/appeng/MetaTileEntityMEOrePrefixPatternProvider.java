@@ -1,5 +1,8 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.api.mui.ApplyGrayGuiTextures;
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -12,7 +15,6 @@ import gregtech.api.unification.material.Material;
 import gregtech.api.unification.material.info.MaterialFlag;
 import gregtech.api.unification.ore.OrePrefix;
 import gregtech.api.util.GTLog;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 import gregtech.common.mui.widget.ScrollableTextWidget;
 
@@ -159,7 +161,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (shouldRenderOverlay()) {
-            SimpleOverlayRenderer overlay = Textures.ME_BUFFER_HATCH_OVERLAY;
+            SimpleOverlayRenderer overlay = ApplyGrayTextures.ME_BUFFER_HATCH_OVERLAY;
             overlay.renderSided(getFrontFacing(), renderState, translation, pipeline);
         }
     }
@@ -883,7 +885,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                 .height(20)
                 .value(new BoolValue.Dynamic(useProxyStateValue::getBoolValue,
                         useProxyStateValue::setBoolValue))
-                .overlay(GTGuiTextures.PROXY_OVERLAY)
+                .overlay(ApplyGrayGuiTextures.PROXY_OVERLAY)
                 .tooltip(tooltip -> tooltip.addLine(IKey.str("无线代理模式"))));
 
         // 添加X坐标文本框
@@ -1155,21 +1157,21 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                 .top(18 * 2)
                                 .value(new BoolValue.Dynamic(blockStateValue::getBoolValue,
                                         blockStateValue::setBoolValue))
-                                .overlay(GTGuiTextures.BUTTON_DUAL_OUTPUT)
+                                .overlay(ApplyGrayGuiTextures.BUTTON_DUAL_OUTPUT)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("阻挡模式"))))
                         .child(new ToggleButton()
                                 .top(18 * 2)
                                 .left(18)
                                 .value(new BoolValue.Dynamic(exportStateValue::getBoolValue,
                                         exportStateValue::setBoolValue))
-                                .overlay(GTGuiTextures.EXPORT_OVERLAY)
+                                .overlay(ApplyGrayGuiTextures.EXPORT_OVERLAY)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("返回模式"))))
 
                         .child(new ToggleButton()
                                 .top(18)
                                 .value(new BoolValue.Dynamic(collapseStateValue::getBoolValue,
                                         collapseStateValue::setBoolValue))
-                                .overlay(GTGuiTextures.BUTTON_DUAL_COLLAPSE)
+                                .overlay(ApplyGrayGuiTextures.BUTTON_DUAL_COLLAPSE)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("自动整理"))))
 
                         .child(new ButtonWidget<>()
@@ -1178,7 +1180,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                     handlePatternGenerate(guiSyncManager.getPlayer());
                                     return true;
                                 })
-                                .overlay(GTGuiTextures.PATTERN_OVERLAY)
+                                .overlay(ApplyGrayGuiTextures.PATTERN_OVERLAY)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.lang(
                                         "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.button"))))
 

@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.capability.impl.ItemHandlerList;
 import gregtech.api.capability.impl.NotifiableItemStackHandler;
 import gregtech.api.metatileentity.MetaTileEntity;
@@ -13,7 +15,6 @@ import gregtech.api.mui.sync.appeng.AESyncHandler;
 import gregtech.api.mui.widget.appeng.item.AEItemConfigSlot;
 import gregtech.api.mui.widget.appeng.item.AEItemDisplaySlot;
 import gregtech.api.util.GTUtility;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemList;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemSlot;
 
@@ -194,9 +195,9 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase<IAEItemS
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
             if (isOnline()) {
-                Textures.ME_INPUT_BUS_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_INPUT_BUS_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
             } else {
-                Textures.ME_INPUT_BUS.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_INPUT_BUS.renderSided(getFrontFacing(), renderState, translation, pipeline);
             }
         }
     }

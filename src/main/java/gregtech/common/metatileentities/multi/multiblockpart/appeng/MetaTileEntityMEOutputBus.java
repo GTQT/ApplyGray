@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.GTValues;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -10,7 +12,6 @@ import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.metatileentity.multiblock.MultiblockWithDisplayBase;
 import gregtech.api.mui.drawable.GTObjectDrawable;
 import gregtech.api.util.KeyUtil;
-import gregtech.client.renderer.texture.Textures;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.item.ItemStack;
@@ -101,9 +102,9 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
             if (isOnline()) {
-                Textures.ME_OUTPUT_BUS_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_OUTPUT_BUS_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
             } else {
-                Textures.ME_OUTPUT_BUS.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_OUTPUT_BUS.renderSided(getFrontFacing(), renderState, translation, pipeline);
             }
         }
     }

@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.GTValues;
 import gregtech.api.capability.IMufflerHatch;
 import gregtech.api.metatileentity.MetaTileEntity;
@@ -10,7 +12,6 @@ import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.mui.drawable.GTObjectDrawable;
 import gregtech.api.util.FluidTooltipUtil;
 import gregtech.api.util.KeyUtil;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOutputBase;
 
 import net.minecraft.client.resources.I18n;
@@ -105,9 +106,9 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
             if (isOnline()) {
-                Textures.ME_OUTPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_OUTPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
             } else {
-                Textures.ME_OUTPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_OUTPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
             }
         }
     }

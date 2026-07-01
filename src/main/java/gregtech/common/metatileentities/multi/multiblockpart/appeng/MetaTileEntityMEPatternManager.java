@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.api.mui.ApplyGrayGuiTextures;
+
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.mui.GTGuiTextures;
@@ -218,7 +220,7 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                                             .slot(SyncHandlers.itemSlot(itemHandler, index)
                                                     .slotGroup("pattern_slots" + num)
                                                     .accessibility(true, true))
-                                            .background(GTGuiTextures.SLOT, GTGuiTextures.PATTERN_OVERLAY)
+                                            .background(GTGuiTextures.SLOT, ApplyGrayGuiTextures.PATTERN_OVERLAY)
                                     );
                                 }
 
@@ -257,7 +259,7 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                                     posListValue.setStringValue("null");
                                     return true;
                                 })
-                                .overlay(GTGuiTextures.PATTERN_OVERLAY)
+                                .overlay(ApplyGrayGuiTextures.PATTERN_OVERLAY)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("刷新终端缓存，重新打开UI以刷新")))
                         )
                 )

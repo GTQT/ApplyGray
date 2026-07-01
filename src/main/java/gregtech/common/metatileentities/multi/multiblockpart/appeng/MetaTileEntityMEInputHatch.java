@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.capability.impl.FluidTankList;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -11,7 +13,6 @@ import gregtech.api.mui.sync.appeng.AEFluidSyncHandler;
 import gregtech.api.mui.sync.appeng.AESyncHandler;
 import gregtech.api.mui.widget.appeng.fluid.AEFluidConfigSlot;
 import gregtech.api.mui.widget.appeng.fluid.AEFluidDisplaySlot;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidList;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidSlot;
 
@@ -167,9 +168,9 @@ public class MetaTileEntityMEInputHatch extends MetaTileEntityMEInputBase<IAEFlu
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
             if (isOnline()) {
-                Textures.ME_INPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_INPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
             } else {
-                Textures.ME_INPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_INPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
             }
         }
     }

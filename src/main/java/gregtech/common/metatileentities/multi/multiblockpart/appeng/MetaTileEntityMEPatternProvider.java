@@ -1,5 +1,8 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.api.mui.ApplyGrayGuiTextures;
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.GTValues;
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.IMultipleNotifiableHandler;
@@ -20,7 +23,6 @@ import gregtech.api.mui.sync.PagedWidgetSyncHandler;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.api.util.GTTransferUtils;
 import gregtech.api.util.GTUtility;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 
 import net.minecraft.client.resources.I18n;
@@ -558,7 +560,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (shouldRenderOverlay()) {
-            SimpleOverlayRenderer overlay = Textures.ME_BUFFER_HATCH_OVERLAY;
+            SimpleOverlayRenderer overlay = ApplyGrayTextures.ME_BUFFER_HATCH_OVERLAY;
             overlay.renderSided(getFrontFacing(), renderState, translation, pipeline);
         }
     }
@@ -918,7 +920,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                         .slotGroup("item_inv")
                                         .accessibility(true, true)
                                 )
-                                .background(GTGuiTextures.SLOT, GTGuiTextures.PATTERN_OVERLAY)
+                                .background(GTGuiTextures.SLOT, ApplyGrayGuiTextures.PATTERN_OVERLAY)
                         );
             }
 
@@ -998,7 +1000,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 .height(20)
                 .value(new BoolValue.Dynamic(useProxyStateValue::getBoolValue,
                         useProxyStateValue::setBoolValue))
-                .overlay(GTGuiTextures.PROXY_OVERLAY)
+                .overlay(ApplyGrayGuiTextures.PROXY_OVERLAY)
                 .tooltip(tooltip -> tooltip.addLine(IKey.str("无线代理模式"))));
 
         // 添加X坐标文本框
@@ -1259,7 +1261,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                 .top(18)
                                 .value(new BoolValue.Dynamic(collapseStateValue::getBoolValue,
                                         collapseStateValue::setBoolValue))
-                                .overlay(GTGuiTextures.BUTTON_DUAL_COLLAPSE)
+                                .overlay(ApplyGrayGuiTextures.BUTTON_DUAL_COLLAPSE)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("自动整理"))))
 
                         // 退还按钮：将所有缓冲区中的物品和流体退还到 AE 网络
@@ -1269,7 +1271,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                     refundActionValue.setIntValue(refundActionValue.getIntValue() + 1);
                                     return true;
                                 })
-                                .overlay(GTGuiTextures.EXPORT_OVERLAY)
+                                .overlay(ApplyGrayGuiTextures.EXPORT_OVERLAY)
                                 .tooltip(tooltip -> tooltip.addLine(IKey.str("退还所有缓冲区物品到AE网络"))))
 
                 );

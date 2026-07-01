@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.GregtechTileCapabilities;
@@ -17,7 +19,6 @@ import gregtech.api.mui.GTGuis;
 import gregtech.api.mui.drawable.GTObjectDrawable;
 import gregtech.api.util.FluidTooltipUtil;
 import gregtech.api.util.KeyUtil;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityAEHostablePart;
 import gregtech.common.mui.widget.ScrollableTextWidget;
 
@@ -327,9 +328,9 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (this.shouldRenderOverlay()) {
             if (isOnline) {
-                Textures.ME_DUAL_OUTPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_DUAL_OUTPUT_HATCH_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
             } else {
-                Textures.ME_DUAL_OUTPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
+                ApplyGrayTextures.ME_DUAL_OUTPUT_HATCH.renderSided(getFrontFacing(), renderState, translation, pipeline);
             }
         }
     }

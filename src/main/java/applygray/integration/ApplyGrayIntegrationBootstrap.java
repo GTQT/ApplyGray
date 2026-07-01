@@ -1,6 +1,7 @@
 package applygray.integration;
 
 import applygray.ApplyGrayMod;
+import applygray.client.renderer.texture.ApplyGrayTextures;
 
 import gregtech.api.color.ColoredBlockContainer;
 import gregtech.api.color.containers.AE2ColorContainer;
@@ -38,6 +39,7 @@ public final class ApplyGrayIntegrationBootstrap {
     private static final class ClientBootstrap {
 
         private static void init() {
+            ApplyGrayTextures.init();
             ItemRenderCompat.registerExtractor(new AE2RepresentativeStackExtractor());
             MachineBlockHighlighter.setHandler((player, pos) -> {
                 double distance = BlockPosUtils.getDistance(pos, player.getPosition());

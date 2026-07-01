@@ -1,5 +1,8 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.api.mui.ApplyGrayGuiTextures;
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.impl.FluidTankList;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
@@ -15,7 +18,6 @@ import gregtech.api.mui.GTGuis;
 import gregtech.api.mui.sync.PagedWidgetSyncHandler;
 import gregtech.api.util.GTLog;
 import gregtech.api.util.TextFormattingUtil;
-import gregtech.client.renderer.texture.Textures;
 import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 
 import net.minecraft.client.resources.I18n;
@@ -282,7 +284,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
     public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
         super.renderMetaTileEntity(renderState, translation, pipeline);
         if (shouldRenderOverlay()) {
-            SimpleOverlayRenderer overlay = Textures.ME_BUFFER_HATCH_PROXY_OVERLAY;
+            SimpleOverlayRenderer overlay = ApplyGrayTextures.ME_BUFFER_HATCH_PROXY_OVERLAY;
             overlay.renderSided(getFrontFacing(), renderState, translation, pipeline);
         }
     }
@@ -393,7 +395,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
                                 .slot(SyncHandlers.itemSlot(patternSlot, index)
                                         .slotGroup("pattern_inv")
                                         .accessibility(true, true))
-                                .background(GTGuiTextures.SLOT, GTGuiTextures.PATTERN_OVERLAY));
+                                .background(GTGuiTextures.SLOT, ApplyGrayGuiTextures.PATTERN_OVERLAY));
             }
         }
 
@@ -489,4 +491,3 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
         tooltip.add(I18n.format("gregtech.machine.pattern_mapping_slave.tooltip.3"));
     }
 }
-
