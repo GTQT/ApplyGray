@@ -11,6 +11,7 @@ applygray.machine.me_ore_dict_bus.name=ME Ore Dictionary Bus
 applygray.machine.me_pattern_manager.name=ME Pattern Manager
 applygray.machine.me_pattern_provider_proxy.name=ME sample assembly Mirroring
 applygray.machine.me_ore_prefix_pattern_provider.name=ME Mine Prefix Plate Assembly
+applygray.machine.me_recipe_map_pattern_provider.name=ME Recipe Map Pattern Provider
 applygray.machine.me_pattern_provider.hv.name=HV ME sample assembly
 applygray.machine.me_pattern_provider.ev.name=EV ME sample assembly
 applygray.machine.me_pattern_provider.iv.name=IV ME sample assembly
@@ -59,3 +60,5 @@ applygray.machine.me_gas_hatch.uiv.name=UIV ME Exhaust gas Hatch
 applygray.machine.me_gas_hatch.uxv.name=UXV ME Exhaust gas Hatch
 applygray.machine.me_gas_hatch.opv.name=OpV ME Exhaust gas Hatch
 applygray.machine.me_gas_hatch.max.name=MAX ME Exhaust gas Hatch
+
+applygray.gui.rebuild_recipe_patterns=Rebuild Best

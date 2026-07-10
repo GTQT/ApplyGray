@@ -11,6 +11,7 @@ import static gregtech.api.GTValues.EV;
 import static gregtech.api.GTValues.HV;
 import static gregtech.api.GTValues.IV;
 import static gregtech.api.GTValues.LuV;
+import static gregtech.api.GTValues.UHV;
 
 import net.minecraft.item.ItemStack;
 import static gregtech.api.recipes.RecipeMaps.ASSEMBLER_RECIPES;
@@ -22,8 +23,8 @@ import static gregtech.common.items.MetaItems.CONVEYOR_MODULE_IV;
 import static gregtech.common.items.MetaItems.SENSOR_IV;
 import static gregtech.common.items.MetaItems.ELECTRIC_PUMP_IV;
 import static gregtech.api.unification.ore.OrePrefix.circuit;
-import static gregtech.common.metatileentities.GTQTMetaTileEntities.DUAL_EXPORT_HATCH;
-import static gregtech.common.metatileentities.GTQTMetaTileEntities.DUAL_IMPORT_HATCH;
+import static gregtech.common.metatileentities.MetaTileEntities.DUAL_EXPORT_HATCH;
+import static gregtech.common.metatileentities.MetaTileEntities.DUAL_IMPORT_HATCH;
 
 import gregtech.api.unification.material.MarkerMaterial;
 
@@ -112,6 +113,15 @@ public class ApplyGrayRecipes {
                 .inputs(GTUtility.copy(4, accelerationCard))
                 .output(ApplyGrayMetaTileEntities.STOCKING_HATCH_ME)
                 .duration(300).EUt(VA[IV]).buildAndRegister();
+
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(ApplyGrayMetaTileEntities.ME_PATTERN_PROVIDER[UHV - HV])
+                .input(ApplyGrayMetaTileEntities.ME_ORE_PREFIX_PATTERN_PROVIDER)
+                .input(ApplyGrayMetaTileEntities.ME_PATTERN_PROVIDER_PROXY)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[UHV].toLowerCase()), 4)
+                .output(ApplyGrayMetaTileEntities.ME_RECIPE_MAP_PATTERN_PROVIDER)
+                .duration(600).EUt(VA[UHV]).buildAndRegister();
     }
 
     private static void registerMEConversionRecipes() {

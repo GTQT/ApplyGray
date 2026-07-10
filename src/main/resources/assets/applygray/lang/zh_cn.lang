@@ -11,6 +11,7 @@ applygray.machine.me_ore_dict_bus.name=ME矿辞总线
 applygray.machine.me_pattern_manager.name=ME样板管理器
 applygray.machine.me_pattern_provider_proxy.name=ME样板总成镜像
 applygray.machine.me_ore_prefix_pattern_provider.name=ME矿辞前缀样板总成
+applygray.machine.me_recipe_map_pattern_provider.name=ME配方表样板总成
 applygray.machine.me_pattern_provider.hv.name=HV ME样板总成
 applygray.machine.me_pattern_provider.ev.name=EV ME样板总成
 applygray.machine.me_pattern_provider.iv.name=IV ME样板总成
@@ -59,3 +60,5 @@ applygray.machine.me_gas_hatch.uiv.name=UIV ME尾气仓
 applygray.machine.me_gas_hatch.uxv.name=UXV ME尾气仓
 applygray.machine.me_gas_hatch.opv.name=OpV ME尾气仓
 applygray.machine.me_gas_hatch.max.name=MAX ME尾气仓
+
+applygray.gui.rebuild_recipe_patterns=重建最优

@@ -8,6 +8,7 @@ import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.IMultipleNotifiableHandler;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.INotifiableHandler;
+import gregtech.api.capability.IRecipeMapBoundInput;
 import gregtech.api.capability.impl.FluidTankList;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.capability.impl.ItemHandlerList;
@@ -93,6 +94,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static gregtech.api.util.AE2PatternCompat.getFluidStack;
 import static gregtech.api.util.AE2PatternCompat.isFluidDrop;
@@ -262,6 +264,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
      * 签名按材料种类聚合，并保留单份样板的数量用于容量计算。
      */
     private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
+        return extractSignature(inventoryCrafting, null, null);
+    }
+
+    private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting,
+                                             @Nullable String patternKey, @Nullable String recipeMapName) {
         List<ItemStack> itemTypes = new ArrayList<>();
         List<FluidStack> fluidTypes = new ArrayList<>();
         List<ItemStack> circuitStacks = new ArrayList<>();
@@ -291,7 +298,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             addItemRequirement(itemTypes, stack);
         }
 
-        return new BufferSignature(itemTypes, fluidTypes, circuitStacks);
+        return new BufferSignature(itemTypes, fluidTypes, circuitStacks, patternKey, recipeMapName);
     }
 
     private static void addItemRequirement(List<ItemStack> itemTypes, ItemStack stack) {
@@ -365,7 +372,12 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
      * 实现类似 PH-Mod pushPatternMulti 的累积效果。
      */
     public boolean pushToBuffer(net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
-        BufferSignature signature = extractSignature(inventoryCrafting);
+        return pushToBuffer(inventoryCrafting, null, null);
+    }
+
+    public boolean pushToBuffer(net.minecraft.inventory.InventoryCrafting inventoryCrafting,
+                                @Nullable String patternKey, @Nullable String recipeMapName) {
+        BufferSignature signature = extractSignature(inventoryCrafting, patternKey, recipeMapName);
         PatternBuffer buffer = findOrAllocateBuffer(signature);
         if (buffer == null) {
             return false;
@@ -441,8 +453,13 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     public int[] pushPatternMulti(ICraftingPatternDetails patternDetails,
                                    net.minecraft.inventory.InventoryCrafting table,
                                    int maxTodo) {
+        return pushPatternMultiToBuffer(table, maxTodo, null, null);
+    }
+
+    protected int[] pushPatternMultiToBuffer(net.minecraft.inventory.InventoryCrafting table, int maxTodo,
+                                              @Nullable String patternKey, @Nullable String recipeMapName) {
         // 第一步：一次性提取签名（避免重复创建对象）
-        BufferSignature signature = extractSignature(table);
+        BufferSignature signature = extractSignature(table, patternKey, recipeMapName);
 
         // 第二步：一次性查找或分配缓冲区
         PatternBuffer buffer = findOrAllocateBuffer(signature);
@@ -1309,11 +1326,18 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         private final List<ItemStack> itemTypes;
         private final List<FluidStack> fluidTypes;
         private final List<ItemStack> circuitStacks;
+        @Nullable
+        private final String patternKey;
+        @Nullable
+        private final String recipeMapName;
 
-        public BufferSignature(List<ItemStack> itemTypes, List<FluidStack> fluidTypes, List<ItemStack> circuitStacks) {
+        public BufferSignature(List<ItemStack> itemTypes, List<FluidStack> fluidTypes, List<ItemStack> circuitStacks,
+                               @Nullable String patternKey, @Nullable String recipeMapName) {
             this.itemTypes = itemTypes;
             this.fluidTypes = fluidTypes;
             this.circuitStacks = circuitStacks;
+            this.patternKey = patternKey;
+            this.recipeMapName = recipeMapName;
         }
 
         public List<ItemStack> getItemTypes() {
@@ -1328,10 +1352,17 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             return circuitStacks;
         }
 
+        @Nullable
+        public String getRecipeMapName() {
+            return recipeMapName;
+        }
+
         /**
          * 比较两个签名是否匹配（材料类型和单份样板数量完全相同）。
          */
         public boolean matches(BufferSignature other) {
+            if (!Objects.equals(this.patternKey, other.patternKey)) return false;
+            if (!Objects.equals(this.recipeMapName, other.recipeMapName)) return false;
             if (this.itemTypes.size() != other.itemTypes.size()) return false;
             if (this.fluidTypes.size() != other.fluidTypes.size()) return false;
             if (this.circuitStacks.size() != other.circuitStacks.size()) return false;
@@ -1363,6 +1394,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         @Override
         public int hashCode() {
             int hash = 1;
+            hash = 31 * hash + Objects.hashCode(patternKey);
+            hash = 31 * hash + Objects.hashCode(recipeMapName);
             for (ItemStack stack : itemTypes) {
                 hash = 31 * hash + Item.getIdFromItem(stack.getItem());
                 hash = 31 * hash + stack.getMetadata();
@@ -1411,6 +1444,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             if (circuitList.tagCount() > 0) {
                 tag.setTag("Circuits", circuitList);
             }
+            if (patternKey != null) tag.setString("PatternKey", patternKey);
+            if (recipeMapName != null) tag.setString("RecipeMap", recipeMapName);
 
             return tag;
         }
@@ -1441,7 +1476,9 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 circuits.add(new ItemStack(tag.getCompoundTag("Circuit")));
             }
 
-            return new BufferSignature(items, fluids, circuits);
+            String patternKey = tag.hasKey("PatternKey") ? tag.getString("PatternKey") : null;
+            String recipeMapName = tag.hasKey("RecipeMap") ? tag.getString("RecipeMap") : null;
+            return new BufferSignature(items, fluids, circuits, patternKey, recipeMapName);
         }
     }
 
@@ -1644,6 +1681,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         public BufferSignature getSignature() {
             return signature;
+        }
+
+        @Nullable
+        public String getBoundRecipeMapName() {
+            return signature == null ? null : signature.getRecipeMapName();
         }
 
         public void setSignature(BufferSignature signature) {
@@ -2016,13 +2058,18 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         private static class IsolatedPatternBufferHandler implements IItemHandlerModifiable, IMultipleTankHandler,
                                                                     INotifiableHandler, IMultipleNotifiableHandler,
-                                                                    IPatternBufferIsolatedHandler {
+                                                                    IRecipeMapBoundInput {
 
             private final PatternBuffer buffer;
             private final List<MetaTileEntity> notifiableEntities = new ArrayList<>();
 
             private IsolatedPatternBufferHandler(PatternBuffer buffer) {
                 this.buffer = buffer;
+            }
+
+            @Override
+            public @Nullable String getBoundRecipeMapName() {
+                return buffer.getBoundRecipeMapName();
             }
 
             @Override

@@ -7,6 +7,9 @@
   "mixins": [
     "MixinCraftingCPUCluster",
     "MixinCraftingGridCache",
+    "MixinCraftingGridCacheLazyRecipeMap",
+    "MixinContainerCraftConfirmLazyRecipeMap",
+    "MixinPacketValueConfigLazyRecipeMap",
     "MixinWorldHelper",
     "MixinDualityInterface",
     "MixinDualityFluidInterface",
@@ -15,7 +18,9 @@
     "MixinNonBlockingItems"
   ],
   "client": [
-    "MixinRecipeTransferHandler"
+    "MixinRecipeTransferHandler",
+    "MixinGuiCraftConfirmLazyRecipeMap",
+    "MixinGuiScreenButtonListAccessor"
   ],
   "server": []
 }

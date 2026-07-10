@@ -13,6 +13,7 @@ import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEnti
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternManager;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEInputBus;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEInputHatch;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOutputBus;
@@ -26,7 +27,7 @@ import static gregtech.common.metatileentities.MetaTileEntities.registerMetaTile
 
 /**
  * Registers all ME (Applied Energistics 2) MetaTileEntities for ApplyGray.
- * These were previously registered in GregTech's MetaTileEntities and GTQTMetaTileEntities.
+ * These are registered through GregTech's current MetaTileEntities API.
  * The same IDs and ResourceLocations are used for backward compatibility with existing worlds.
  */
 public class ApplyGrayMetaTileEntities {
@@ -46,6 +47,7 @@ public class ApplyGrayMetaTileEntities {
     public static MetaTileEntityMEPatternManager ME_PATTERN_MANAGER;
     public static MetaTileEntityMEPatternProviderProxy ME_PATTERN_PROVIDER_PROXY;
     public static MetaTileEntityMEOrePrefixPatternProvider ME_ORE_PREFIX_PATTERN_PROVIDER;
+    public static MetaTileEntityMERecipeMapPatternProvider ME_RECIPE_MAP_PATTERN_PROVIDER;
 
     // ME Pattern Providers (IDs 2710+)
     public static MetaTileEntityMEPatternProvider[] ME_PATTERN_PROVIDER = new MetaTileEntityMEPatternProvider[GTValues.V.length - 1 - GTValues.HV];
@@ -63,7 +65,7 @@ public class ApplyGrayMetaTileEntities {
         registerMEHatches();
         registerExtendedMEDevices();
         ApplyGrayMod.LOGGER.info("Registered {} AE-enabled GregTech machines",
-                12 + ME_PATTERN_PROVIDER.length + PATTERN_MAPPING_SLAVE.length +
+                13 + ME_PATTERN_PROVIDER.length + PATTERN_MAPPING_SLAVE.length +
                         ME_MUFFLER_HATCH.length + ME_GAS_HATCH.length);
     }
 
@@ -92,6 +94,8 @@ public class ApplyGrayMetaTileEntities {
         ME_PATTERN_MANAGER = new MetaTileEntityMEPatternManager(ApplyGrayAPI.id("me_pattern_manager"), GTValues.UV, false);
         ME_ORE_PREFIX_PATTERN_PROVIDER = new MetaTileEntityMEOrePrefixPatternProvider(ApplyGrayAPI.id("me_ore_prefix_pattern_provider"), GTValues.UHV);
         ME_PATTERN_PROVIDER_PROXY = new MetaTileEntityMEPatternProviderProxy(ApplyGrayAPI.id("me_pattern_provider_proxy"), GTValues.UHV);
+        ME_RECIPE_MAP_PATTERN_PROVIDER = new MetaTileEntityMERecipeMapPatternProvider(
+                ApplyGrayAPI.id("me_recipe_map_pattern_provider"), GTValues.UHV);
 
         registerMetaTileEntity(2700, ME_DUAL_IMPORT_HATCH);
         registerMetaTileEntity(2701, ME_DUAL_EXPORT_HATCH);
@@ -99,6 +103,7 @@ public class ApplyGrayMetaTileEntities {
         registerMetaTileEntity(2703, ME_PATTERN_MANAGER);
         registerMetaTileEntity(2704, ME_PATTERN_PROVIDER_PROXY);
         registerMetaTileEntity(2705, ME_ORE_PREFIX_PATTERN_PROVIDER);
+        registerMetaTileEntity(2706, ME_RECIPE_MAP_PATTERN_PROVIDER);
 
         // ME Pattern Providers, IDs 2710+
         for (int i = 0; i < ME_PATTERN_PROVIDER.length; i++) {
