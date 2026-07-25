@@ -9,7 +9,8 @@ import gregtech.client.utils.RenderUtil;
 
 import net.minecraftforge.fluids.FluidStack;
 
-import appeng.api.storage.data.IAEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.drawable.GuiDraw;
 import com.cleanroommc.modularui.screen.RichTooltip;
 import com.cleanroommc.modularui.screen.viewport.ModularGuiContext;
@@ -18,7 +19,7 @@ import com.cleanroommc.modularui.value.sync.SyncHandler;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-public class AEFluidDisplaySlot extends AEDisplaySlot<IAEFluidStack> {
+public class AEFluidDisplaySlot extends AEDisplaySlot {
 
     public AEFluidDisplaySlot(int index) {
         super(index);
@@ -27,9 +28,9 @@ public class AEFluidDisplaySlot extends AEDisplaySlot<IAEFluidStack> {
 
     @Override
     protected void buildTooltip(@NotNull RichTooltip tooltip) {
-        IAEFluidStack stock = getSyncHandler().getStock(index);
-        if (stock != null) {
-            FluidStack stack = stock.getFluidStack();
+        GenericStack stock = getSyncHandler().getStock(index);
+        if (stock != null && stock.what() instanceof AEFluidKey fluidKey) {
+            FluidStack stack = fluidKey.toStack(saturatingInt(stock.amount()));
             tooltip.addLine(KeyUtil.fluid(stack));
             FluidTooltipUtil.fluidInfo(stack, tooltip, false, true, true);
             tooltip.addLine(FluidTooltipUtil.getFluidModNameKey(stack));
@@ -48,10 +49,11 @@ public class AEFluidDisplaySlot extends AEDisplaySlot<IAEFluidStack> {
 
     @Override
     public void draw(ModularGuiContext context, WidgetThemeEntry<?> widgetTheme) {
-        IAEFluidStack stock = getSyncHandler().getStock(index);
-        if (stock != null) {
-            GuiDraw.drawFluidTexture(stock.getFluidStack(), 1, 1, getArea().w() - 2, getArea().h() - 2, 0);
-            RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(stock.getStackSize(), 4), 17d,
+        GenericStack stock = getSyncHandler().getStock(index);
+        if (stock != null && stock.what() instanceof AEFluidKey fluidKey) {
+            GuiDraw.drawFluidTexture(fluidKey.toStack(saturatingInt(stock.amount())), 1, 1, getArea().w() - 2,
+                    getArea().h() - 2, 0);
+            RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(stock.amount(), 4), 17d,
                     18d, 0xFFFFFF, true, 0.5f);
         }
 
@@ -60,7 +62,12 @@ public class AEFluidDisplaySlot extends AEDisplaySlot<IAEFluidStack> {
 
     @Override
     public @Nullable Object getIngredient() {
-        IAEFluidStack stock = getSyncHandler().getStock(index);
-        return stock == null ? null : stock.getFluidStack();
+        GenericStack stock = getSyncHandler().getStock(index);
+        return stock != null && stock.what() instanceof AEFluidKey fluidKey
+                ? fluidKey.toStack(saturatingInt(stock.amount())) : null;
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(1, amount);
     }
 }

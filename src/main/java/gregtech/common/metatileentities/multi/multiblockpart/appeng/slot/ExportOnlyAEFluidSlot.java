@@ -4,7 +4,6 @@ import gregtech.api.capability.INotifiableHandler;
 import gregtech.api.metatileentity.MetaTileEntity;
 
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.FluidTankInfo;
 import net.minecraftforge.fluids.IFluidTank;
@@ -12,24 +11,28 @@ import net.minecraftforge.fluids.capability.FluidTankProperties;
 import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.fluids.capability.IFluidTankProperties;
 
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.fluids.util.AEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
+public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot
         implements IFluidTank, INotifiableHandler, IFluidHandler {
 
     private final List<MetaTileEntity> notifiableEntities = new ArrayList<>();
+    @Nullable
     private MetaTileEntity holder;
 
-    public ExportOnlyAEFluidSlot(MetaTileEntity holder, IAEFluidStack config, IAEFluidStack stock, MetaTileEntity mte) {
+    public ExportOnlyAEFluidSlot(@Nullable MetaTileEntity holder, @Nullable GenericStack config,
+                                 @Nullable GenericStack stock, @Nullable MetaTileEntity entityToNotify) {
         super(config, stock);
         this.holder = holder;
-        this.notifiableEntities.add(mte);
+        if (entityToNotify != null) {
+            this.notifiableEntities.add(entityToNotify);
+        }
     }
 
     public ExportOnlyAEFluidSlot(MetaTileEntity holder, MetaTileEntity entityToNotify) {
@@ -37,80 +40,73 @@ public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
     }
 
     public ExportOnlyAEFluidSlot() {
-        super();
+        this(null, null, null, null);
     }
 
     @Override
     public void decrementStock(long amount) {
-        if (stock == null) return;
-        stock.decStackSize(amount);
+        if (stock != null) {
+            setStack(copy(stock, Math.max(0, stock.amount() - amount)));
+        }
     }
 
     @Override
-    public void addStack(IAEFluidStack stack) {
-        if (this.stock == null) {
-            this.stock = stack.copy();
-        } else {
-            this.stock.add(stack);
+    public void addStack(GenericStack stack) {
+        if (!(stack.what() instanceof AEFluidKey)) {
+            return;
         }
-
+        if (this.stock == null || !this.stock.what().equals(stack.what())) {
+            this.stock = copy(stack);
+        } else {
+            this.stock = new GenericStack(this.stock.what(), this.stock.amount() + stack.amount());
+        }
         trigger();
     }
 
     @Override
-    public void setStack(IAEFluidStack stack) {
+    public void setStack(@Nullable GenericStack stack) {
+        if (stack != null && !(stack.what() instanceof AEFluidKey)) {
+            return;
+        }
         if (this.stock == null && stack == null) {
             return;
-        } else if (stack == null) {
-            this.stock = null;
-        } else if (this.stock == null || this.stock.getFluid() != stack.getFluid()) {
-            this.stock = stack.copy();
-        } else if (this.stock.getStackSize() != stack.getStackSize()) {
-            this.stock.setStackSize(stack.getStackSize());
-        } else {
-            return;
         }
-
+        this.stock = stack == null || stack.amount() <= 0 ? null : copy(stack);
         trigger();
+    }
+
+    @Override
+    public void setStock(@Nullable GenericStack stack) {
+        setStack(stack);
     }
 
     @Override
     public void deserializeNBT(NBTTagCompound nbt) {
-        if (nbt.hasKey(CONFIG_TAG)) {
-            NBTTagCompound tag = nbt.getCompoundTag(CONFIG_TAG);
-            // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-            if (tag.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-                this.config = AEFluidStack.fromNBT(tag);
-            } else {
-                this.config = AEFluidStack.fromFluidStack(FluidStack.loadFluidStackFromNBT(tag));
-            }
-        }
+        this.config = readStack(nbt, CONFIG_TAG);
+        this.stock = readStack(nbt, STOCK_TAG);
+    }
 
-        if (nbt.hasKey(STOCK_TAG)) {
-            NBTTagCompound tag = nbt.getCompoundTag(STOCK_TAG);
-            // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-            if (tag.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-                this.stock = AEFluidStack.fromNBT(tag);
-            } else {
-                this.stock = AEFluidStack.fromFluidStack(FluidStack.loadFluidStackFromNBT(tag));
-            }
-        }
+    @Nullable
+    private static GenericStack readStack(NBTTagCompound owner, String key) {
+        return owner.hasKey(key) ? GenericStack.readTag(owner.getCompoundTag(key)) : null;
     }
 
     @Nullable
     @Override
     public FluidStack getFluid() {
-        return stock == null ? null : stock.getFluidStack();
+        if (stock != null && stock.what() instanceof AEFluidKey fluidKey) {
+            return fluidKey.toStack(saturatingInt(stock.amount()));
+        }
+        return null;
     }
 
     @Override
     public int getFluidAmount() {
-        return this.stock != null ? (int) this.stock.getStackSize() : 0;
+        return stock == null ? 0 : saturatingInt(stock.amount());
     }
 
     @Override
     public int getCapacity() {
-        // Its capacity is always 0.
         return 0;
     }
 
@@ -121,9 +117,7 @@ public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
 
     @Override
     public IFluidTankProperties[] getTankProperties() {
-        return new IFluidTankProperties[] {
-                new FluidTankProperties(this.getFluid(), 0)
-        };
+        return new IFluidTankProperties[] {new FluidTankProperties(getFluid(), 0)};
     }
 
     @Override
@@ -134,25 +128,21 @@ public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
     @Nullable
     @Override
     public FluidStack drain(FluidStack resource, boolean doDrain) {
-        if (this.getFluid() != null && this.getFluid().isFluidEqual(resource)) {
-            return this.drain(resource.amount, doDrain);
-        }
-        return null;
+        FluidStack fluid = getFluid();
+        return fluid != null && fluid.isFluidEqual(resource) ? drain(resource.amount, doDrain) : null;
     }
 
     @Nullable
     @Override
     public FluidStack drain(int maxDrain, boolean doDrain) {
-        if (this.stock == null) {
+        if (stock == null || !(stock.what() instanceof AEFluidKey fluidKey)) {
             return null;
         }
-        int drained = (int) Math.min(this.stock.getStackSize(), maxDrain);
-        FluidStack result = new FluidStack(this.stock.getFluid(), drained);
+        int drained = (int) Math.min(stock.amount(), maxDrain);
+        FluidStack result = fluidKey.toStack(drained);
         if (doDrain) {
-            this.stock.decStackSize(drained);
-            if (this.stock.getStackSize() == 0) {
-                this.stock = null;
-            }
+            long remaining = stock.amount() - drained;
+            stock = remaining == 0 ? null : copy(stock, remaining);
             trigger();
         }
         return result;
@@ -160,18 +150,18 @@ public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
 
     @Override
     public void addNotifiableMetaTileEntity(MetaTileEntity metaTileEntity) {
-        this.notifiableEntities.add(metaTileEntity);
+        notifiableEntities.add(metaTileEntity);
     }
 
     @Override
     public void removeNotifiableMetaTileEntity(MetaTileEntity metaTileEntity) {
-        this.notifiableEntities.remove(metaTileEntity);
+        notifiableEntities.remove(metaTileEntity);
     }
 
     protected void trigger() {
-        for (MetaTileEntity metaTileEntity : this.notifiableEntities) {
+        for (MetaTileEntity metaTileEntity : notifiableEntities) {
             if (metaTileEntity != null && metaTileEntity.isValid()) {
-                this.addToNotifiedList(metaTileEntity, this, false);
+                addToNotifiedList(metaTileEntity, this, false);
             }
         }
         if (holder != null) {
@@ -180,15 +170,16 @@ public class ExportOnlyAEFluidSlot extends ExportOnlyAESlot<IAEFluidStack>
     }
 
     @Override
-    public @NotNull IConfigurableSlot<IAEFluidStack> copy() {
-        return new ExportOnlyAEFluidSlot(
-                this.holder,
-                this.config == null ? null : this.config.copy(),
-                this.stock == null ? null : this.stock.copy(),
-                null);
+    public @NotNull ExportOnlyAEFluidSlot copy() {
+        return new ExportOnlyAEFluidSlot(holder,
+                config == null ? null : copy(config), stock == null ? null : copy(stock), null);
     }
 
     protected MetaTileEntity getHolder() {
         return holder;
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(0, amount);
     }
 }

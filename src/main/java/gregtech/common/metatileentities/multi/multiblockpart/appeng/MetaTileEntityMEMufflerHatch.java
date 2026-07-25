@@ -28,20 +28,18 @@ import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.storage.channels.IItemStorageChannel;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
 import com.cleanroommc.modularui.api.drawable.IRichTextBuilder;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAEItemStack> implements
+public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase implements
                                                                                            IMultiblockAbilityPart<IMufflerHatch>,
                                                                                            ITieredMetaTileEntity,
                                                                                            IMufflerHatch {
@@ -50,7 +48,7 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
     private final int recoveryChance;
 
     public MetaTileEntityMEMufflerHatch(ResourceLocation metaTileEntityId, int tier) {
-        super(metaTileEntityId, tier, IItemStorageChannel.class);
+        super(metaTileEntityId, tier);
         this.recoveryChance = Math.min((tier - 1) * 10, 100);
     }
 
@@ -65,8 +63,10 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
             for (ItemStack recoveryItem : recoveryItems) {
                 ItemStack itemstack = recoveryItem.copy();
                 itemstack.setCount(itemstack.getCount() * parallel);
-                IAEItemStack aeStack = AEItemStack.fromItemStack(itemstack);
-                internalBuffer.add(aeStack);
+                GenericStack aeStack = GenericStack.fromItemStack(itemstack);
+                if (aeStack != null) {
+                    addToBuffer(aeStack);
+                }
             }
         }
     }
@@ -76,16 +76,14 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
 
     }
 
-    @Override
-    protected @NotNull IByteBufDeserializer<IAEItemStack> getDeserializer() {
-        return AEItemStack::fromPacket;
-    }
-
     @SideOnly(Side.CLIENT)
     @Override
     protected void addStackLine(@NotNull IRichTextBuilder<?> text,
-                                @NotNull IAEItemStack wrappedStack) {
-        ItemStack stack = wrappedStack.getDefinition();
+                                @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEItemKey itemKey)) {
+            return;
+        }
+        ItemStack stack = itemKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -93,7 +91,7 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
                 .tooltipAutoUpdate(true)
                 .tooltipBuilder(tooltip -> tooltip.addFromItem(stack)));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "x"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "x"));
     }
 
     private boolean calculateChance() {
@@ -132,10 +130,10 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
         super.writeToNBT(data);
 
         NBTTagList nbtList = new NBTTagList();
-        for (IAEItemStack stack : internalBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalBuffer) {
+            if (stack.what() instanceof AEItemKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(ITEM_BUFFER_TAG, nbtList);
 
@@ -146,8 +144,10 @@ public class MetaTileEntityMEMufflerHatch extends MetaTileEntityMEOutputBase<IAE
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         for (NBTBase tag : data.getTagList(ITEM_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalBuffer.add(AEItemStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEItemKey) {
+                addToBuffer(stack);
+            }
         }
     }
 

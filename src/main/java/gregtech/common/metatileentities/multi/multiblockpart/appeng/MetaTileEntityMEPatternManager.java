@@ -18,7 +18,7 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.networking.IGridNode;
+import ae2.api.networking.IGrid;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -278,16 +278,15 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
     public void update() {
         super.update();
         if (pos.isEmpty()) {
-            try {
-                for (IGridNode grid : getProxy().getGrid().getMachineNodes(MetaTileEntityMEPatternProvider.class)) {
-                    pos.add(grid.getGridBlock().getLocation().getPos());
-                }
-            } catch (Exception ignored) {}
-            try {
-                for (IGridNode grid : getProxy().getGrid().getMachineNodes(MetaTileEntityPatternProviderMappingSlave.class)) {
-                    pos.add(grid.getGridBlock().getLocation().getPos());
-                }
-            } catch (Exception ignored) {}
+            IGrid grid = getMainNode().getGrid();
+            if (grid == null) return;
+            for (MetaTileEntityMEPatternProvider provider : grid.getMachines(MetaTileEntityMEPatternProvider.class)) {
+                pos.add(provider.getPos());
+            }
+            for (MetaTileEntityPatternProviderMappingSlave provider :
+                    grid.getMachines(MetaTileEntityPatternProviderMappingSlave.class)) {
+                pos.add(provider.getPos());
+            }
             writeCustomData(UPDATE_ME_POS, buffer -> {
                 buffer.writeInt(pos.size());
                 for (BlockPos blockPos : pos) {

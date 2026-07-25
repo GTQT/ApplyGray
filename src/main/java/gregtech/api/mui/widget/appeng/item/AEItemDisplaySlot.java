@@ -5,9 +5,8 @@ import gregtech.api.mui.widget.appeng.AEDisplaySlot;
 import gregtech.api.util.TextFormattingUtil;
 import gregtech.client.utils.RenderUtil;
 
-import net.minecraft.item.ItemStack;
-
-import appeng.api.storage.data.IAEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.screen.RichTooltip;
 import com.cleanroommc.modularui.screen.viewport.ModularGuiContext;
 import com.cleanroommc.modularui.theme.WidgetThemeEntry;
@@ -15,7 +14,7 @@ import com.cleanroommc.modularui.value.sync.SyncHandler;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-public class AEItemDisplaySlot extends AEDisplaySlot<IAEItemStack> {
+public class AEItemDisplaySlot extends AEDisplaySlot {
 
     public AEItemDisplaySlot(int index) {
         super(index);
@@ -24,9 +23,9 @@ public class AEItemDisplaySlot extends AEDisplaySlot<IAEItemStack> {
 
     @Override
     protected void buildTooltip(@NotNull RichTooltip tooltip) {
-        IAEItemStack stock = getSyncHandler().getStock(index);
-        if (stock != null) {
-            tooltip.addFromItem(stock.getDefinition());
+        GenericStack stock = getSyncHandler().getStock(index);
+        if (stock != null && stock.what() instanceof AEItemKey itemKey) {
+            tooltip.addFromItem(itemKey.getReadOnlyStack());
         }
     }
 
@@ -42,11 +41,10 @@ public class AEItemDisplaySlot extends AEDisplaySlot<IAEItemStack> {
 
     @Override
     public void draw(ModularGuiContext context, WidgetThemeEntry<?> widgetTheme) {
-        IAEItemStack stock = getSyncHandler().getStock(index);
-        if (stock != null) {
-            ItemStack stack = stock.getDefinition();
-            RenderUtil.drawItemStack(stack, 1, 1, false);
-            RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(stock.getStackSize(), 4), 17d,
+        GenericStack stock = getSyncHandler().getStock(index);
+        if (stock != null && stock.what() instanceof AEItemKey itemKey) {
+            RenderUtil.drawItemStack(itemKey.getReadOnlyStack(), 1, 1, false);
+            RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(stock.amount(), 4), 17d,
                     18d, 0xFFFFFF, true, 0.5f);
         }
 
@@ -55,7 +53,12 @@ public class AEItemDisplaySlot extends AEDisplaySlot<IAEItemStack> {
 
     @Override
     public @Nullable Object getIngredient() {
-        IAEItemStack stock = getSyncHandler().getStock(index);
-        return stock == null ? null : stock.createItemStack();
+        GenericStack stock = getSyncHandler().getStock(index);
+        return stock != null && stock.what() instanceof AEItemKey itemKey
+                ? itemKey.toStack(saturatingInt(stock.amount())) : null;
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(1, amount);
     }
 }

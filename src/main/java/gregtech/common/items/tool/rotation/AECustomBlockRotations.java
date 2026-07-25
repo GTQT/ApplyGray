@@ -10,7 +10,9 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.world.World;
 
-import appeng.api.util.IOrientable;
+import ae2.api.orientation.BlockOrientation;
+import ae2.api.orientation.IOrientableBlock;
+import ae2.tile.AEBaseTile;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,32 +24,25 @@ public class AECustomBlockRotations {
             @Override
             public boolean doesApply(@NotNull IBlockState state, @NotNull World world, @NotNull BlockPos pos) {
                 if (!state.isFullBlock()) return false; // try to exclude some weird stuff
-                IOrientable orientable = getOrientable(world, pos);
-                return orientable != null && orientable.canBeRotated();
+                return getOrientable(world, pos) != null;
             }
 
             @Override
             public boolean customRotate(IBlockState state, World world, BlockPos pos, RayTraceResult hitResult) {
-                IOrientable orientable = getOrientable(world, pos);
+                IOrientableBlock orientable = getOrientable(world, pos);
                 if (orientable == null) return false;
 
                 EnumFacing gridSide = CoverRayTracer.determineGridSideHit(hitResult);
                 if (gridSide == null) return false;
 
-                if (gridSide == orientable.getForward()) {
-                    // spin
-                    Axis frontAxis = orientable.getForward().getAxis();
-                    EnumFacing newFacing = orientable.getUp().rotateAround(frontAxis);
-                    if (orientable.getForward().getAxisDirection() == AxisDirection.NEGATIVE) {
-                        newFacing = newFacing.getOpposite();
-                    }
-                    orientable.setOrientation(orientable.getForward(), newFacing);
-                } else {
-                    // rotate
-                    EnumFacing newUpwardsFacing = simulateAxisRotation(gridSide,
-                            orientable.getForward(), orientable.getUp());
-                    orientable.setOrientation(gridSide, newUpwardsFacing);
-                }
+                BlockOrientation orientation = orientable.getOrientation(world.getBlockState(pos));
+                BlockOrientation updated = gridSide == orientation.getSide(ae2.api.orientation.RelativeSide.FRONT)
+                        ? orientation.rotateClockwiseAround(gridSide)
+                        : BlockOrientation.get(gridSide,
+                                simulateAxisRotation(gridSide,
+                                        orientation.getSide(ae2.api.orientation.RelativeSide.FRONT),
+                                        orientation.getSide(ae2.api.orientation.RelativeSide.TOP)));
+                updated.setOn(world, pos);
                 return true;
             }
 
@@ -58,16 +53,17 @@ public class AECustomBlockRotations {
 
             @Override
             public @Nullable EnumFacing getSpinFrontFacing(IBlockState state, World world, BlockPos pos) {
-                IOrientable orientable = getOrientable(world, pos);
+                IOrientableBlock orientable = getOrientable(world, pos);
                 if (orientable == null) return null;
-                return orientable.getForward();
+                return orientable.getOrientation(world.getBlockState(pos))
+                        .getSide(ae2.api.orientation.RelativeSide.FRONT);
             }
 
-            private IOrientable getOrientable(World world, BlockPos pos) {
-                if (world.getTileEntity(pos) instanceof IOrientable orientable) {
-                    return orientable;
+            private IOrientableBlock getOrientable(World world, BlockPos pos) {
+                if (!(world.getBlockState(pos).getBlock() instanceof IOrientableBlock orientable)) {
+                    return null;
                 }
-                return null;
+                return world.getTileEntity(pos) instanceof AEBaseTile tile && tile.canBeRotated() ? orientable : null;
             }
         };
 

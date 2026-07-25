@@ -1,12 +1,11 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng.slot;
 
-import appeng.api.storage.data.IAEStack;
 import org.jetbrains.annotations.NotNull;
 
-public interface IExportOnlyAEStackList<AEStackType extends IAEStack<AEStackType>> {
+public interface IExportOnlyAEStackList {
 
     @NotNull
-    ExportOnlyAESlot<AEStackType> @NotNull [] getInventory();
+    ExportOnlyAESlot @NotNull [] getInventory();
 
     boolean isAutoPull();
 

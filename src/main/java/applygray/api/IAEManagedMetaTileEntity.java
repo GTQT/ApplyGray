@@ -1,18 +1,17 @@
 package applygray.api;
 
-import appeng.api.util.AECableType;
-import appeng.api.util.AEPartLocation;
-import appeng.me.helpers.AENetworkProxy;
+import ae2.api.networking.IManagedGridNode;
+import ae2.api.util.AECableType;
+import net.minecraft.util.EnumFacing;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 public interface IAEManagedMetaTileEntity {
 
     @NotNull
-    AECableType getCableConnectionType(@NotNull AEPartLocation part);
+    IManagedGridNode getMainNode();
 
-    @Nullable
-    AENetworkProxy getProxy();
+    @NotNull
+    AECableType getCableConnectionType(@NotNull EnumFacing side);
 
     default void gridChanged() {}
 }

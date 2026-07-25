@@ -2,11 +2,14 @@ package applygray.integration.ae2;
 
 import applygray.ApplyGrayMod;
 
+import gregtech.api.GTValues;
+import gregtech.api.fluids.store.FluidStorageKeys;
+import gregtech.api.unification.FluidUnifier;
+import gregtech.api.unification.material.Material;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
-import gregtech.api.util.AE2PatternCompat;
 import gregtech.common.items.MetaItems;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
@@ -14,10 +17,13 @@ import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEnti
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
 
-import appeng.api.networking.IGrid;
-import appeng.api.networking.crafting.ICraftingMedium;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.storage.data.IAEItemStack;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.networking.IGrid;
+import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEKey;
+import ae2.api.stacks.GenericStack;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,6 +42,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Only recipes requested by an AE crafting calculation become virtual patterns.
  */
 public final class DynamicRecipePatternRegistry {
+
+    private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
@@ -70,36 +78,35 @@ public final class DynamicRecipePatternRegistry {
         if (state != null) state.removeProvider(providerId);
     }
 
-    public static List<ICraftingPatternDetails> findPatterns(IGrid grid, IAEItemStack target) {
+    public static List<IPatternDetails> findPatterns(IGrid grid, AEKey target) {
         GridState state = GRIDS.get(grid);
         if (state == null || target == null) return Collections.emptyList();
-        return state.findPatterns(target.createItemStack());
+        return state.findPatterns(target);
     }
 
-    public static ICraftingMedium getMedium(ICraftingPatternDetails details) {
+    public static ICraftingProvider getProvider(IPatternDetails details) {
         for (GridState state : GRIDS.values()) {
-            ICraftingMedium medium = state.mediums.get(details);
-            if (medium != null) return medium;
+            ICraftingProvider provider = state.providersByPattern.get(details);
+            if (provider != null) return provider;
         }
         return null;
     }
 
-    public static DynamicRecipePatternDetails getDynamicPattern(ICraftingPatternDetails details) {
+    public static DynamicRecipePatternDetails getDynamicPattern(IPatternDetails details) {
         return details instanceof DynamicRecipePatternDetails ? (DynamicRecipePatternDetails) details : null;
     }
 
-    public static boolean owns(ICraftingPatternDetails details, MetaTileEntityMERecipeMapPatternProvider provider) {
+    public static boolean owns(IPatternDetails details, MetaTileEntityMERecipeMapPatternProvider provider) {
         for (GridState state : GRIDS.values()) {
-            ICraftingMedium medium = state.mediums.get(details);
-            if (medium == provider) return true;
+            if (state.providersByPattern.get(details) == provider) return true;
         }
         return false;
     }
 
-    public static void invalidateTarget(IGrid grid, IAEItemStack target) {
+    public static void invalidateTarget(IGrid grid, AEKey target) {
         GridState state = GRIDS.get(grid);
         if (state == null || target == null) return;
-        state.invalidateTarget(target.createItemStack());
+        state.invalidateTarget(target);
     }
 
     public static final class ProviderSnapshot {
@@ -128,9 +135,9 @@ public final class DynamicRecipePatternRegistry {
     private static final class GridState {
 
         private final Map<String, ProviderSnapshot> providers = new ConcurrentHashMap<>();
-        private final Map<String, List<DynamicRecipePatternDetails>> patternsByTarget = new ConcurrentHashMap<>();
+        private final Map<AEKey, List<DynamicRecipePatternDetails>> patternsByTarget = new ConcurrentHashMap<>();
         private final Map<String, DynamicRecipePatternDetails> patternsByRecipe = new ConcurrentHashMap<>();
-        private final Map<ICraftingPatternDetails, ICraftingMedium> mediums = new ConcurrentHashMap<>();
+        private final Map<IPatternDetails, ICraftingProvider> providersByPattern = new ConcurrentHashMap<>();
 
         private synchronized void putProvider(ProviderSnapshot snapshot) {
             ProviderSnapshot existing = providers.put(snapshot.providerId, snapshot);
@@ -141,23 +148,21 @@ public final class DynamicRecipePatternRegistry {
             if (providers.remove(providerId) != null) clearGenerated();
         }
 
-        private List<ICraftingPatternDetails> findPatterns(ItemStack target) {
-            if (target.isEmpty()) return Collections.emptyList();
-            String targetKey = stackKey(target);
-            List<DynamicRecipePatternDetails> existing = patternsByTarget.get(targetKey);
+        private List<IPatternDetails> findPatterns(AEKey target) {
+            List<DynamicRecipePatternDetails> existing = patternsByTarget.get(target);
             if (existing == null) {
                 synchronized (this) {
-                    existing = patternsByTarget.get(targetKey);
+                    existing = patternsByTarget.get(target);
                     if (existing == null) {
                         existing = createPatterns(target);
-                        patternsByTarget.put(targetKey, existing);
+                        patternsByTarget.put(target, existing);
                     }
                 }
             }
-            return new ArrayList<ICraftingPatternDetails>(existing);
+            return new ArrayList<IPatternDetails>(existing);
         }
 
-        private List<DynamicRecipePatternDetails> createPatterns(ItemStack target) {
+        private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
             List<PatternCandidate> candidates = new ArrayList<>();
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
             for (ProviderSnapshot source : sources) {
@@ -193,15 +198,14 @@ public final class DynamicRecipePatternRegistry {
                             candidate.encoded.programmableNonConsumableInputs);
                 }
                 patternsByRecipe.put(candidate.recipeKey, detail);
-                mediums.put(detail, candidate.source.provider);
+                providersByPattern.put(detail, candidate.source.provider);
                 result.add(detail);
             }
             return Collections.unmodifiableList(result);
         }
 
-        private synchronized void invalidateTarget(ItemStack target) {
-            String targetKey = stackKey(target);
-            patternsByTarget.remove(targetKey);
+        private synchronized void invalidateTarget(AEKey target) {
+            patternsByTarget.remove(target);
             List<String> removeKeys = new ArrayList<>();
             for (Map.Entry<String, DynamicRecipePatternDetails> entry : patternsByRecipe.entrySet()) {
                 if (entry.getValue().produces(target)) removeKeys.add(entry.getKey());
@@ -209,35 +213,42 @@ public final class DynamicRecipePatternRegistry {
             for (String key : removeKeys) {
                 DynamicRecipePatternDetails detail = patternsByRecipe.remove(key);
                 if (detail == null) continue;
-                ICraftingMedium medium = mediums.remove(detail);
-                if (medium instanceof MetaTileEntityMERecipeMapPatternProvider) {
-                    ((MetaTileEntityMERecipeMapPatternProvider) medium).removeCachedDynamicPattern(key);
+                ICraftingProvider provider = providersByPattern.remove(detail);
+                if (provider instanceof MetaTileEntityMERecipeMapPatternProvider) {
+                    ((MetaTileEntityMERecipeMapPatternProvider) provider).removeCachedDynamicPattern(key);
                 }
             }
-            for (Map.Entry<String, List<DynamicRecipePatternDetails>> entry : patternsByTarget.entrySet()) {
+            for (Map.Entry<AEKey, List<DynamicRecipePatternDetails>> entry : patternsByTarget.entrySet()) {
                 List<DynamicRecipePatternDetails> retained = new ArrayList<>();
                 for (DynamicRecipePatternDetails detail : entry.getValue()) {
                     if (!detail.produces(target)) retained.add(detail);
                 }
                 entry.setValue(Collections.unmodifiableList(retained));
             }
-            ApplyGrayMod.LOGGER.info("Cleared lazy RecipeMap patterns for {}", target.getDisplayName());
+            ApplyGrayMod.LOGGER.info("Cleared lazy RecipeMap patterns for {}", target);
         }
 
         private void clearGenerated() {
             patternsByTarget.clear();
             patternsByRecipe.clear();
-            mediums.clear();
+            providersByPattern.clear();
         }
     }
 
-    private static boolean recipeProduces(Recipe recipe, ItemStack target) {
+    private static boolean recipeProduces(Recipe recipe, AEKey target) {
         if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
                 !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) {
             return false;
         }
         for (ItemStack output : recipe.getOutputs()) {
-            if (ItemStack.areItemsEqual(output, target) && ItemStack.areItemStackTagsEqual(output, target)) {
+            AEItemKey outputKey = AEItemKey.of(output);
+            if (target.equals(outputKey)) {
+                return true;
+            }
+        }
+        for (FluidStack output : recipe.getFluidOutputs()) {
+            AEFluidKey outputKey = AEFluidKey.of(output);
+            if (target.equals(outputKey)) {
                 return true;
             }
         }
@@ -248,8 +259,8 @@ public final class DynamicRecipePatternRegistry {
         if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
                 !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) return null;
 
-        List<ItemStack> inputs = new ArrayList<>();
-        List<List<ItemStack>> alternatives = new ArrayList<>();
+        List<GenericStack> inputs = new ArrayList<>();
+        List<List<GenericStack>> alternatives = new ArrayList<>();
         int circuitConfiguration = -1;
         int programmableNonConsumableInputs = 0;
         for (GTRecipeInput input : recipe.getInputs()) {
@@ -261,9 +272,9 @@ public final class DynamicRecipePatternRegistry {
                 continue;
             }
             if (input.isNonConsumable()) {
-                List<ItemStack> programmableOptions = encodeNonConsumableItem(input);
+                List<GenericStack> programmableOptions = encodeNonConsumableItem(input);
                 if (programmableOptions == null) return null;
-                inputs.add(programmableOptions.get(0).copy());
+                inputs.add(programmableOptions.get(0));
                 alternatives.add(programmableOptions);
                 programmableNonConsumableInputs++;
                 continue;
@@ -273,37 +284,38 @@ public final class DynamicRecipePatternRegistry {
             if (fluid != null) {
                 FluidStack copy = fluid.copy();
                 copy.amount = input.getAmount();
-                ItemStack fluidDrop = AE2PatternCompat.toFluidDrop(copy);
-                if (fluidDrop.isEmpty()) return null;
-                inputs.add(fluidDrop);
-                alternatives.add(Collections.singletonList(fluidDrop.copy()));
+                GenericStack genericFluid = GenericStack.fromFluidStack(copy);
+                if (genericFluid == null) return null;
+                inputs.add(genericFluid);
+                alternatives.add(Collections.singletonList(genericFluid));
                 continue;
             }
 
             ItemStack[] choices = input.getInputStacks();
             if (choices.length == 0) return null;
-            List<ItemStack> options = new ArrayList<>();
+            List<GenericStack> options = new ArrayList<>();
             for (ItemStack choice : choices) {
                 if (choice.isEmpty()) continue;
                 ItemStack option = choice.copy();
                 option.setCount(input.getAmount());
-                options.add(option);
+                GenericStack genericOption = GenericStack.fromItemStack(option);
+                if (genericOption != null) options.add(genericOption);
             }
             if (options.isEmpty()) return null;
-            inputs.add(options.get(0).copy());
+            inputs.add(options.get(0));
             alternatives.add(options);
         }
 
-        List<ItemStack> outputs = new ArrayList<>();
+        List<GenericStack> outputs = new ArrayList<>();
         for (ItemStack output : recipe.getOutputs()) {
-            if (!output.isEmpty()) outputs.add(output.copy());
+            GenericStack genericOutput = GenericStack.fromItemStack(output);
+            if (genericOutput != null) outputs.add(genericOutput);
         }
         for (FluidStack output : recipe.getFluidOutputs()) {
-            ItemStack fluidDrop = AE2PatternCompat.toFluidDrop(output);
-            if (!fluidDrop.isEmpty()) outputs.add(fluidDrop);
+            GenericStack genericOutput = GenericStack.fromFluidStack(output);
+            if (genericOutput != null) outputs.add(genericOutput);
         }
-        int inputLimit = circuitConfiguration >= 0 ? 8 : 9;
-        if (inputs.isEmpty() || outputs.isEmpty() || inputs.size() > inputLimit || outputs.size() > 3) return null;
+        if (inputs.isEmpty() || outputs.isEmpty() || inputs.size() > 81 || outputs.size() > 27) return null;
         return new EncodedRecipe(inputs, alternatives, outputs, circuitConfiguration,
                 programmableNonConsumableInputs);
     }
@@ -312,7 +324,7 @@ public final class DynamicRecipePatternRegistry {
      * Converts one non-consumable item requirement into the corresponding programmable circuit.
      * Non-consumable fluids and multi-count item requirements have no equivalent virtual circuit representation.
      */
-    private static List<ItemStack> encodeNonConsumableItem(GTRecipeInput input) {
+    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input) {
         if (input.getInputFluidStack() != null || input.getAmount() != 1 ||
                 MetaItems.PROGRAMMABLE_CIRCUIT == null) {
             return null;
@@ -321,13 +333,14 @@ public final class DynamicRecipePatternRegistry {
         ItemStack[] choices = input.getInputStacks();
         if (choices == null || choices.length == 0) return null;
 
-        List<ItemStack> programmableOptions = new ArrayList<>();
+        List<GenericStack> programmableOptions = new ArrayList<>();
         for (ItemStack choice : choices) {
             if (choice.isEmpty()) continue;
             ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
             if (programmable.isEmpty()) return null;
             ProgrammableCircuit.wrap(choice, programmable);
-            programmableOptions.add(programmable);
+            GenericStack genericProgrammable = GenericStack.fromItemStack(programmable);
+            if (genericProgrammable != null) programmableOptions.add(genericProgrammable);
         }
         return programmableOptions.isEmpty() ? null : programmableOptions;
     }
@@ -340,7 +353,7 @@ public final class DynamicRecipePatternRegistry {
             if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
             FluidStack fluid = input.getInputFluidStack();
             if (fluid != null) {
-                total.rawMaterials += Math.max(1, input.getAmount() / 1000);
+                total.rawMaterials += estimateFluidRawMaterialCost(fluid, input.getAmount());
                 continue;
             }
             ItemStack[] choices = input.getInputStacks();
@@ -352,6 +365,18 @@ public final class DynamicRecipePatternRegistry {
         return total;
     }
 
+    private static long estimateFluidRawMaterialCost(FluidStack fluid, int amount) {
+        int millibucketsPerUnit = isMoltenMaterialFluid(fluid) ?
+                GTValues.L : STANDARD_FLUID_MILLIBUCKETS_PER_UNIT;
+        return Math.max(1L, (long) amount / millibucketsPerUnit);
+    }
+
+    private static boolean isMoltenMaterialFluid(FluidStack fluidStack) {
+        Material material = FluidUnifier.getMaterialFromFluid(fluidStack.getFluid());
+        return material != null && material.hasFluid() &&
+                material.getFluid(FluidStorageKeys.MOLTEN) == fluidStack.getFluid();
+    }
+
     private static Cost estimateItemCost(ItemStack required, Collection<ProviderSnapshot> sources, int depth,
                                          Set<String> visiting) {
         String key = stackKey(required);
@@ -361,7 +386,9 @@ public final class DynamicRecipePatternRegistry {
             for (ProviderSnapshot source : sources) {
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
                     for (Recipe candidate : recipeMap.getRecipeList()) {
-                        if (!recipeProduces(candidate, required) || encodeRecipe(source, candidate) == null) continue;
+                        if (!recipeProduces(candidate, AEItemKey.of(required)) || encodeRecipe(source, candidate) == null) {
+                            continue;
+                        }
                         int outputAmount = matchingOutputAmount(candidate, required);
                         if (outputAmount <= 0) continue;
                         Cost candidateCost = estimateRecipeCost(candidate, sources, depth, visiting);
@@ -392,13 +419,14 @@ public final class DynamicRecipePatternRegistry {
     }
 
     private static final class EncodedRecipe {
-        private final List<ItemStack> inputs;
-        private final List<List<ItemStack>> alternatives;
-        private final List<ItemStack> outputs;
+        private final List<GenericStack> inputs;
+        private final List<List<GenericStack>> alternatives;
+        private final List<GenericStack> outputs;
         private final int circuitConfiguration;
         private final int programmableNonConsumableInputs;
 
-        private EncodedRecipe(List<ItemStack> inputs, List<List<ItemStack>> alternatives, List<ItemStack> outputs,
+        private EncodedRecipe(List<GenericStack> inputs, List<List<GenericStack>> alternatives,
+                              List<GenericStack> outputs,
                               int circuitConfiguration, int programmableNonConsumableInputs) {
             this.inputs = inputs;
             this.alternatives = alternatives;
@@ -437,7 +465,9 @@ public final class DynamicRecipePatternRegistry {
         private static Cost fallback(Recipe recipe) {
             long raw = 0;
             for (GTRecipeInput input : recipe.getInputs()) {
-                if (!(input instanceof IntCircuitIngredient) && !input.isNonConsumable()) raw += input.getAmount();
+                if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
+                FluidStack fluid = input.getInputFluidStack();
+                raw += fluid == null ? input.getAmount() : estimateFluidRawMaterialCost(fluid, input.getAmount());
             }
             return new Cost(raw, 1);
         }

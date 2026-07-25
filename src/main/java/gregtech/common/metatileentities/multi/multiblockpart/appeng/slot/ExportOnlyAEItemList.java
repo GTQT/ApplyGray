@@ -6,10 +6,11 @@ import gregtech.api.metatileentity.MetaTileEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 
-import appeng.api.storage.data.IAEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.NotNull;
 
-public class ExportOnlyAEItemList extends NotifiableItemStackHandler implements IExportOnlyAEStackList<IAEItemStack> {
+public class ExportOnlyAEItemList extends NotifiableItemStackHandler implements IExportOnlyAEStackList {
 
     protected final int size;
     protected ExportOnlyAEItemSlot[] inventory;
@@ -108,8 +109,9 @@ public class ExportOnlyAEItemList extends NotifiableItemStackHandler implements 
     public boolean hasStackInConfig(ItemStack stack, boolean checkExternal) {
         if (stack == null || stack.isEmpty()) return false;
         for (ExportOnlyAEItemSlot slot : inventory) {
-            IAEItemStack config = slot.getConfig();
-            if (config != null && config.isSameType(stack)) {
+            GenericStack config = slot.getConfig();
+            AEItemKey itemKey = AEItemKey.of(stack);
+            if (itemKey != null && itemKey.matches(config)) {
                 return true;
             }
         }

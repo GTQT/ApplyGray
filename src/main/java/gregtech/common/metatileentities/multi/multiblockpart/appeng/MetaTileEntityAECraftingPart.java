@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.integration.ae2.ItemHandlerInternalInventory;
+
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.IDataStickIntractable;
@@ -19,62 +21,51 @@ import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
-import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.PacketBuffer;
-import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.IItemHandlerModifiable;
 import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.config.Actionable;
-import appeng.api.implementations.ICraftingPatternItem;
-import appeng.api.implementations.IPowerChannelState;
-import appeng.api.networking.IGridNode;
-import appeng.api.networking.crafting.ICraftingGrid;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.networking.crafting.ICraftingProvider;
-import appeng.api.networking.crafting.ICraftingProviderHelper;
-import appeng.api.networking.events.MENetworkCraftingPatternChange;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.util.AEPartLocation;
-import appeng.api.util.DimensionalCoord;
-import static gregtech.api.util.AE2PatternCompat.isFluidDrop;
-import appeng.fluids.util.IAEFluidInventory;
-import appeng.fluids.util.IAEFluidTank;
-import appeng.me.GridAccessException;
-import appeng.me.helpers.AENetworkProxy;
-import appeng.me.helpers.IGridProxyable;
-import appeng.tile.grid.AENetworkPowerTile;
-import appeng.util.item.AEItemStack;
+import ae2.api.config.Actionable;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.implementations.blockentities.PatternContainerGroup;
+import ae2.api.inventories.InternalInventory;
+import ae2.api.networking.IGrid;
+import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEKey;
+import ae2.api.stacks.KeyCounter;
+import ae2.helpers.patternprovider.PatternContainer;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
 import com.cleanroommc.modularui.api.drawable.IDrawable;
 import com.cleanroommc.modularui.drawable.ItemDrawable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static gregtech.api.capability.GregtechDataCodes.UPDATE_ACTIVE;
-import static gregtech.api.util.AE2PatternCompat.getFluidStack;
 import static gregtech.api.util.GTQTUtility.isFluidTankListEmpty;
 import static gregtech.api.util.GTQTUtility.isInventoryEmpty;
 
 public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHostablePart implements ICraftingProvider,
+                                                                                                   PatternContainer,
                                                                                                    IMultiblockAbilityPart<IItemHandlerModifiable>,
                                                                                                    IGhostSlotConfigurable,
-                                                                                                   IAEFluidInventory,
-                                                                                                   IDataStickIntractable,
-                                                                                                   IGridProxyable,
-                                                                                                   IPowerChannelState {
+                                                                                                   IDataStickIntractable {
 
     // ICONS
     protected final IDrawable CHEST = new ItemDrawable(Blocks.CHEST)
@@ -89,7 +80,7 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
             .asIcon().size(16);
 
     @Nullable
-    protected List<ICraftingPatternDetails> patternDetails;
+    protected List<IPatternDetails> patternDetails;
 
     @Nullable
     protected GhostCircuitItemStackHandler circuitInventory;
@@ -198,22 +189,6 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
         this.hideInfo = hideInfo;
     }
 
-    public void pushToGridCache() {
-        try {
-            if (getProxy() != null) {
-                getProxy().getGrid().getCache(ICraftingGrid.class).addNode(getProxy().getNode(), this);
-            }
-        } catch (GridAccessException ignored) {}
-    }
-
-    public void removeFromGridCache() {
-        try {
-            if (getProxy() != null) {
-                getProxy().getGrid().getCache(ICraftingGrid.class).removeNode(getProxy().getNode(), this);
-            }
-        } catch (GridAccessException ignored) {}
-    }
-
     @Override
     public void writeInitialSyncData(PacketBuffer buf) {
         super.writeInitialSyncData(buf);
@@ -278,46 +253,35 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     }
 
     public boolean MEPatternChange() {
-        // don't post until it's active
-        if (getProxy() == null || !getProxy().isActive()) return true;
-
-        // remove from grid cache
-        pushToGridCache();
-
-        try {
-            getProxy().getGrid().postEvent(new MENetworkCraftingPatternChange(this, getProxy().getNode()));
-        } catch (Exception ignored) {
+        if (!isActive()) {
             return true;
         }
-
+        ICraftingProvider.requestUpdate(getMainNode());
         return false;
     }
 
     @Override
-    public AENetworkProxy getProxy() {
-        if (isUseProxy()) {
-            if (this.getWorld() != null) {
-                TileEntity tileEntity = this.getWorld().getTileEntity(AEProxy_pos);
-                if (tileEntity instanceof AENetworkPowerTile proxy) {
-                    return proxy.getProxy();
-                }
+    public List<? extends IPatternDetails> getAvailablePatterns() {
+        if (!isActive() || patternDetails == null) {
+            return Collections.emptyList();
+        }
+        List<IPatternDetails> result = new ArrayList<>(patternDetails.size());
+        for (IPatternDetails detail : patternDetails) {
+            if (detail != null) {
+                result.add(detail);
             }
         }
-        return super.getProxy();
+        return result;
     }
 
     @Override
-    public DimensionalCoord getLocation() {
-        return new DimensionalCoord(getWorld(), getPos());
+    public boolean canMergePatternPush(IPatternDetails patternDetails) {
+        return false;
     }
 
     @Override
-    public void provideCrafting(ICraftingProviderHelper iCraftingProviderHelper) {
-        setPatternDetails();
-        if (!isActive() || patternDetails == null) return;
-        for (ICraftingPatternDetails patternDetail : patternDetails) {
-            if (patternDetail != null) iCraftingProviderHelper.addCraftingOption(this, patternDetail);
-        }
+    public int getMaxPatternPushMultiplier(IPatternDetails patternDetails, int maxMultiplier) {
+        return 0;
     }
 
     /**
@@ -342,156 +306,34 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
         int slotCount = getPatternSlotCount();
         for (int i = 0; i < slotCount; i++) {
             ItemStack pattern = patternSlot.getStackInSlot(i);
-            if (pattern == ItemStack.EMPTY) {
+            if (pattern.isEmpty()) {
                 patternDetails.set(i, null);
                 continue;
             }
-
-            if (pattern.getItem() instanceof ICraftingPatternItem patternItem) {
-                patternDetails.set(i, patternItem.getPatternForItem(pattern, getWorld()));
-            }
+            patternDetails.set(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
         }
     }
 
-    public boolean addItemAndFluid(InventoryCrafting inventoryCrafting) throws GridAccessException {
-        // 第一阶段：模拟检查所有物品是否可插入
-        for (int i = 0; i < inventoryCrafting.getSizeInventory(); ++i) {
-            //实际插入的物品
-            ItemStack itemStack = inventoryCrafting.getStackInSlot(i);
-            if (itemStack.isEmpty()) continue;
-
-            //处理流体
-
-            // 处理假流体/气体物品
-            if (isFluidDrop(itemStack)) {
-                FluidStack fluid = getFluidStack(itemStack);
-                if (fluid != null) {
-                    if (getImportFluids().fill(fluid, false) < fluid.amount) {
-                        return false;
-                    }
-                    continue;
-                }
-            }
-
-            //处理物品
-
-            // 处理集成电路 - 模拟阶段
-            if (isAdvancedCircuit() && isOnline && MetaItems.INTEGRATED_CIRCUIT.isItemEqual(itemStack)) {
-                IAEItemStack aeStack = AEItemStack.fromItemStack(itemStack);
-                if (aeStack != null) {
-                    // 模拟注入网络，检查是否可返还
-                    IAEItemStack remaining = getItemMonitor().injectItems(aeStack, Actionable.SIMULATE,
-                            getActionSource());
-                    //大于0代表无法返回网络（可能是网络满了）
-                    if (remaining != null && remaining.getStackSize() > 0) {
-                        return false;
-                    }
-                }
-                continue; // 跳过容器插入检查
-            }
-
-            //普通物品模拟插入检查
-            //样板转化会ItemStack
-            ItemStack simulated = itemStack.copy();
-            //如果开了自动整理
-            if (isAutoCollapse()) {
-                //轮插 simulated轮询所有槽位，直到装填完毕
-                for (int slot = 0; slot < importItems.getSlots() && !simulated.isEmpty(); slot++) {
-                    ItemStack remaining = importItems.insertItem(slot, simulated, true);
-                    if (remaining.getCount() < simulated.getCount()) {
-                        simulated.shrink(simulated.getCount() - remaining.getCount());
-                    }
-                }
-            } else {
-                //simulated只会去填充空槽，用于装配线非64自动化
-                //如果没有空槽再去轮询
-
-                // 步骤1: 先尝试填充空槽
-                for (int slot = 0; slot < importItems.getSlots() && !simulated.isEmpty(); slot++) {
-                    // 检查是否是空槽
-                    if (importItems.getStackInSlot(slot).isEmpty()) {
-                        ItemStack remaining = importItems.insertItem(slot, simulated, true);
-                        if (remaining.getCount() < simulated.getCount()) {
-                            simulated.shrink(simulated.getCount() - remaining.getCount());
-                        }
-                    }
-                }
-
-                // 步骤2: 如果没有空槽或者空槽装不完，再轮询所有槽位
-                if (!simulated.isEmpty()) {
-                    for (int slot = 0; slot < importItems.getSlots() && !simulated.isEmpty(); slot++) {
-                        ItemStack remaining = importItems.insertItem(slot, simulated, true);
-                        if (remaining.getCount() < simulated.getCount()) {
-                            simulated.shrink(simulated.getCount() - remaining.getCount());
-                        }
-                    }
-                }
-            }
-
-            if (!simulated.isEmpty()) {
-                return false;
-            }
-        }
-
-        // 第二阶段：实际执行插入操作
-        for (int i = 0; i < inventoryCrafting.getSizeInventory(); ++i) {
-            ItemStack itemStack = inventoryCrafting.getStackInSlot(i);
-            if (itemStack.isEmpty()) continue;
-
-            // 处理假流体/气体物品
-            if (isFluidDrop(itemStack)) {
-                FluidStack fluid = getFluidStack(itemStack);
-                if (fluid != null) {
-                    getImportFluids().fill(fluid, true);
-                    continue;
-                }
-            }
-
-            // 处理集成电路 - 实际执行阶段
-            if (isAdvancedCircuit() && isOnline && MetaItems.INTEGRATED_CIRCUIT.isItemEqual(itemStack)) {
-                IMEMonitor<IAEItemStack> monitor = getItemMonitor();
-                IAEItemStack aeStack = AEItemStack.fromItemStack(itemStack);
-                if (aeStack != null) {
-                    // 实际注入网络返还物品
-                    monitor.injectItems(aeStack, Actionable.MODULATE, getActionSource());
-                    // 设置机器电路配置
-                    this.setGhostCircuitConfig(IntCircuitIngredient.getCircuitConfiguration(itemStack));
-                }
-                continue; // 跳过容器插入
-            }
-
-            // 普通物品实际插入 - 根据是否自动整理采用不同策略
-            ItemStack toInsert = itemStack.copy();
-
-            if (isAutoCollapse()) {
-                // 自动整理模式：轮询所有槽位
-                for (int slot = 0; slot < importItems.getSlots() && !toInsert.isEmpty(); slot++) {
-                    toInsert = importItems.insertItem(slot, toInsert, false);
-                }
-            } else {
-                // 非自动整理模式：先尝试空槽，再尝试所有槽位
-
-                // 阶段1: 只填充空槽
-                for (int slot = 0; slot < importItems.getSlots() && !toInsert.isEmpty(); slot++) {
-                    if (importItems.getStackInSlot(slot).isEmpty()) {
-                        toInsert = importItems.insertItem(slot, toInsert, false);
-                    }
-                }
-
-                // 阶段2: 如果还有剩余，再尝试所有槽位
-                if (!toInsert.isEmpty()) {
-                    for (int slot = 0; slot < importItems.getSlots() && !toInsert.isEmpty(); slot++) {
-                        toInsert = importItems.insertItem(slot, toInsert, false);
-                    }
+    public boolean addItemAndFluid(KeyCounter[] inputHolder) {
+        for (KeyCounter holder : inputHolder) {
+            for (var entry : holder) {
+                if (!canAccept(entry.getKey(), entry.getLongValue())) {
+                    return false;
                 }
             }
         }
-
+        for (KeyCounter holder : inputHolder) {
+            for (var entry : holder) {
+                if (!accept(entry.getKey(), entry.getLongValue())) {
+                    return false;
+                }
+            }
+        }
         return true;
     }
 
     @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails, InventoryCrafting inventoryCrafting) {
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive()) {
             GTLog.logger.debug("Machine is not active, rejecting pattern");
             return false;
@@ -499,50 +341,146 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
 
         boolean isEmpty = isInventoryEmpty(getImportItems()) && isFluidTankListEmpty(getImportFluids());
 
-        // 如果不是空容器且处于阻塞模式，进行兼容性检查
-        if (!isEmpty && isBlockedMode()) {
-            if (!checkBlockedModeCompatibility(inventoryCrafting)) {
+        if (!isEmpty && isBlockedMode() && !checkBlockedModeCompatibility(inputHolder)) {
                 GTLog.logger.debug("Pattern rejected by blocked mode compatibility check");
                 return false;
-            }
         }
-
-        try {
-            return addItemAndFluid(inventoryCrafting);
-        } catch (GridAccessException e) {
-            GTLog.logger.warn("Grid access failed while pushing pattern", e);
-            return false;
-        }
+        return addItemAndFluid(inputHolder);
     }
 
-    protected boolean checkBlockedModeCompatibility(InventoryCrafting inventoryCrafting) {
-        for (int i = 0; i < inventoryCrafting.getSizeInventory(); ++i) {
-            ItemStack itemStack = inventoryCrafting.getStackInSlot(i);
-            if (itemStack.isEmpty()) continue;
-
-            // 集成电路特殊处理
-            if (MetaItems.INTEGRATED_CIRCUIT.isItemEqual(itemStack)) {
-                //说明仓不空，应该检查电路是否相等
-                if (IntCircuitIngredient.getCircuitConfiguration(itemStack) != getGhostCircuitConfig())
-                    return false;
-                continue;
-            }
-
-            // 处理流体假物品
-            if (isFluidDrop(itemStack)) {
-                FluidStack fluid = getFluidStack(itemStack);
-                if (fluid == null || !GTUtility.hasMatchingFluid(fluid, getImportFluids())) {
+    protected boolean checkBlockedModeCompatibility(KeyCounter[] inputHolder) {
+        for (KeyCounter holder : inputHolder) {
+            for (var entry : holder) {
+                AEKey key = entry.getKey();
+                if (key instanceof AEFluidKey fluidKey) {
+                    if (!GTUtility.hasMatchingFluid(fluidKey.toStack(1), getImportFluids())) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!(key instanceof AEItemKey itemKey)) {
                     return false;
                 }
-            }
-            // 处理普通物品
-            else {
-                if (!GTUtility.hasMatchingItem(itemStack, importItems)) {
+                ItemStack itemStack = itemKey.toStack(1);
+                if (MetaItems.INTEGRATED_CIRCUIT.isItemEqual(itemStack)) {
+                    if (IntCircuitIngredient.getCircuitConfiguration(itemStack) != getGhostCircuitConfig()) {
+                        return false;
+                    }
+                } else if (!GTUtility.hasMatchingItem(itemStack, importItems)) {
                     return false;
                 }
             }
         }
         return true;
+    }
+
+    private boolean canAccept(AEKey key, long amount) {
+        if (amount <= 0) {
+            return true;
+        }
+        if (key instanceof AEFluidKey fluidKey) {
+            return canFillFluid(fluidKey, amount);
+        }
+        if (!(key instanceof AEItemKey itemKey)) {
+            return false;
+        }
+        ItemStack stack = itemKey.toStack(1);
+        if (isAdvancedCircuit() && isOnline && MetaItems.INTEGRATED_CIRCUIT.isItemEqual(stack)) {
+            return getNetworkStorage() != null && getNetworkStorage().insert(key, amount, Actionable.SIMULATE,
+                    getActionSource()) == amount;
+        }
+        return canInsertItem(itemKey, amount);
+    }
+
+    private boolean accept(AEKey key, long amount) {
+        if (amount <= 0) {
+            return true;
+        }
+        if (key instanceof AEFluidKey fluidKey) {
+            return fillFluid(fluidKey, amount);
+        }
+        if (!(key instanceof AEItemKey itemKey)) {
+            return false;
+        }
+        ItemStack stack = itemKey.toStack(1);
+        if (isAdvancedCircuit() && isOnline && MetaItems.INTEGRATED_CIRCUIT.isItemEqual(stack)) {
+            if (getNetworkStorage() == null || getNetworkStorage().insert(key, amount, Actionable.MODULATE,
+                    getActionSource()) != amount) {
+                return false;
+            }
+            setGhostCircuitConfig(IntCircuitIngredient.getCircuitConfiguration(stack));
+            return true;
+        }
+        return insertItem(itemKey, amount);
+    }
+
+    private boolean canFillFluid(AEFluidKey fluidKey, long amount) {
+        long remaining = amount;
+        while (remaining > 0) {
+            int part = (int) Math.min(Integer.MAX_VALUE, remaining);
+            FluidStack fluid = fluidKey.toStack(part);
+            if (getImportFluids().fill(fluid, false) != part) {
+                return false;
+            }
+            remaining -= part;
+        }
+        return true;
+    }
+
+    private boolean fillFluid(AEFluidKey fluidKey, long amount) {
+        long remaining = amount;
+        while (remaining > 0) {
+            int part = (int) Math.min(Integer.MAX_VALUE, remaining);
+            if (getImportFluids().fill(fluidKey.toStack(part), true) != part) {
+                return false;
+            }
+            remaining -= part;
+        }
+        return true;
+    }
+
+    private boolean canInsertItem(AEItemKey itemKey, long amount) {
+        long remaining = amount;
+        while (remaining > 0) {
+            int part = (int) Math.min(Integer.MAX_VALUE, remaining);
+            if (!insertItemStack(itemKey.toStack(part), true).isEmpty()) {
+                return false;
+            }
+            remaining -= part;
+        }
+        return true;
+    }
+
+    private boolean insertItem(AEItemKey itemKey, long amount) {
+        long remaining = amount;
+        while (remaining > 0) {
+            int part = (int) Math.min(Integer.MAX_VALUE, remaining);
+            if (!insertItemStack(itemKey.toStack(part), false).isEmpty()) {
+                return false;
+            }
+            remaining -= part;
+        }
+        return true;
+    }
+
+    private ItemStack insertItemStack(ItemStack stack, boolean simulate) {
+        ItemStack remainder = stack;
+        if (isAutoCollapse()) {
+            for (int slot = 0; slot < importItems.getSlots() && !remainder.isEmpty(); slot++) {
+                remainder = importItems.insertItem(slot, remainder, simulate);
+            }
+            return remainder;
+        }
+
+        for (int slot = 0; slot < importItems.getSlots() && !remainder.isEmpty(); slot++) {
+            if (importItems.getStackInSlot(slot).isEmpty()) {
+                remainder = importItems.insertItem(slot, remainder, simulate);
+            }
+        }
+        for (int slot = 0; slot < importItems.getSlots() && !remainder.isEmpty(); slot++) {
+            remainder = importItems.insertItem(slot, remainder, simulate);
+        }
+        return remainder;
     }
 
     @Override
@@ -587,24 +525,17 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
         setNeedPatternSync(true);
     }
 
-    @Override
     public boolean isPowered() {
-        return getProxy() != null && getProxy().isPowered();
+        return getMainNode().isPowered();
     }
 
-    @Override
     public boolean isActive() {
-        return getProxy() != null && getProxy().isActive();
+        return getMainNode().isActive();
     }
 
     @Override
     public boolean isBusy() {
         return isExport();
-    }
-
-    @Override
-    public void onFluidInventoryChanged(IAEFluidTank iaeFluidTank, int i) {
-        markDirty();
     }
 
     @Override
@@ -649,12 +580,55 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     }
 
     @Override
-    public IGridNode getGridNode(@NotNull AEPartLocation aePartLocation) {
-        return getProxy().getNode();
+    public @Nullable IGrid getGrid() {
+        return getMainNode().getGrid();
     }
 
     @Override
-    public void securityBreak() {
+    public boolean isVisibleInTerminal() {
+        return !hideInfo;
+    }
 
+    @Override
+    public InternalInventory getTerminalPatternInventory() {
+        if (patternSlot == null) {
+            return InternalInventory.empty();
+        }
+        return new ItemHandlerInternalInventory(patternSlot, this::onTerminalPatternInventoryChanged);
+    }
+
+    @Override
+    public boolean containsPattern(AEItemKey pattern) {
+        if (patternSlot == null) {
+            return false;
+        }
+        for (int slot = 0; slot < patternSlot.getSlots(); slot++) {
+            AEItemKey stored = AEItemKey.of(patternSlot.getStackInSlot(slot));
+            if (pattern.equals(stored)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public PatternContainerGroup getTerminalGroup() {
+        AEItemKey icon = AEItemKey.of(getStackForm());
+        return new PatternContainerGroup(icon, new TextComponentString(getTerminalDisplayName()), List.of());
+    }
+
+    private String getTerminalDisplayName() {
+        if (getController() != null && getShowName().equals(getMetaFullName())) {
+            return getController().getMetaFullName();
+        }
+        return getShowName();
+    }
+
+    private void onTerminalPatternInventoryChanged() {
+        setPatternDetails();
+        setNeedPatternSync(true);
+        if (getWorld() != null && !getWorld().isRemote) {
+            markDirty();
+        }
     }
 }

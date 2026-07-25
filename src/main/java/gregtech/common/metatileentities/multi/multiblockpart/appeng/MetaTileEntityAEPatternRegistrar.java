@@ -9,29 +9,19 @@ import gregtech.integration.ae2.GTCircuitHelper;
 
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Items;
-import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.PacketBuffer;
-import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.TextComponentTranslation;
+import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.implementations.ICraftingPatternItem;
-import appeng.api.implementations.IPowerChannelState;
-import appeng.api.networking.IGridNode;
-import appeng.api.networking.crafting.ICraftingGrid;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.networking.crafting.ICraftingProvider;
-import appeng.api.networking.crafting.ICraftingProviderHelper;
-import appeng.api.networking.events.MENetworkCraftingPatternChange;
-import appeng.api.util.AEPartLocation;
-import appeng.api.util.DimensionalCoord;
-import appeng.me.GridAccessException;
-import appeng.me.helpers.AENetworkProxy;
-import appeng.me.helpers.IGridProxyable;
-import appeng.tile.grid.AENetworkPowerTile;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.KeyCounter;
 import com.cleanroommc.modularui.api.drawable.IDrawable;
 import com.cleanroommc.modularui.drawable.ItemDrawable;
 import gregtech.common.items.MetaItems;
@@ -49,7 +39,7 @@ import java.util.List;
  * Subclasses provide pattern generation logic via {@link #createPatterns()}.
  */
 public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEHostablePart
-        implements ICraftingProvider, IGridProxyable, IPowerChannelState, IDataStickIntractable {
+        implements ICraftingProvider, IDataStickIntractable {
 
     // UI icons for subclass GUI pages
     protected final IDrawable HATCH = new ItemDrawable(getStackForm())
@@ -62,7 +52,7 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
             .asIcon().size(16);
 
     @Nullable
-    protected List<ICraftingPatternDetails> patternDetails;
+    protected List<IPatternDetails> patternDetails;
 
     // Master connection
     @Nullable
@@ -168,26 +158,26 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
     // ==================== AE2 ICraftingProvider ====================
 
     @Override
-    public void provideCrafting(ICraftingProviderHelper helper) {
+    public List<? extends IPatternDetails> getAvailablePatterns() {
         setPatternDetails();
-        if (!isActive() || patternDetails == null) return;
-        for (ICraftingPatternDetails detail : patternDetails) {
+        if (!isActive() || patternDetails == null) {
+            return java.util.Collections.emptyList();
+        }
+        List<IPatternDetails> result = new ArrayList<>(patternDetails.size());
+        for (IPatternDetails detail : patternDetails) {
             if (detail != null) {
-                helper.addCraftingOption(this, detail);
+                result.add(detail);
             }
         }
+        return result;
     }
 
     @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails, InventoryCrafting table) {
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive() || !hasMaster()) {
             return false;
         }
-
-        // Wrap non-consumable inputs for the linked provider before buffer matching.
-        wrapExtraInputsAsProgrammable(table);
-
-        return master.pushToBuffer(table);
+        return master.pushToBuffer(withProgrammableExtraInputs(inputHolder), null, null);
     }
 
     @Override
@@ -201,18 +191,26 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
      * so the master's pushToBuffer() can route them to the circuit slot instead of item slots.
      * Slot 0 is the main input (consumable), slots 1+ are extraInput (non-consumable).
      */
-    protected void wrapExtraInputsAsProgrammable(InventoryCrafting table) {
-        for (int i = 1; i < table.getSizeInventory(); i++) {
-            ItemStack stack = table.getStackInSlot(i);
-            if (stack.isEmpty()) continue;
-            // Skip if already a ProgrammableCircuit
-            if (ProgrammableCircuit.getInstanceFor(stack) != null) continue;
+    protected KeyCounter[] withProgrammableExtraInputs(KeyCounter[] inputHolder) {
+        return inputHolder;
+    }
 
-            ItemStack wrapped = wrapAsProgrammable(stack);
-            if (wrapped != null) {
-                table.setInventorySlotContents(i, wrapped);
+    protected KeyCounter[] appendProgrammableExtraInputs(KeyCounter[] inputHolder, ItemStackHandler extraInputs) {
+        KeyCounter extras = new KeyCounter();
+        for (int slot = 0; slot < extraInputs.getSlots(); slot++) {
+            ItemStack source = extraInputs.getStackInSlot(slot);
+            ItemStack wrapped = wrapAsProgrammable(source);
+            AEItemKey key = AEItemKey.of(wrapped == null ? ItemStack.EMPTY : wrapped);
+            if (key != null) {
+                extras.add(key, 1);
             }
         }
+        if (extras.isEmpty()) {
+            return inputHolder;
+        }
+        KeyCounter[] result = java.util.Arrays.copyOf(inputHolder, inputHolder.length + 1);
+        result[inputHolder.length] = extras;
+        return result;
     }
 
     @Nullable
@@ -244,75 +242,34 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
                 patternDetails.add(i, null);
                 continue;
             }
-            if (pattern.getItem() instanceof ICraftingPatternItem patternItem) {
-                patternDetails.add(i, patternItem.getPatternForItem(pattern, getWorld()));
-            }
+            patternDetails.add(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
         }
-    }
-
-    // ==================== AE2 Grid integration ====================
-
-    public void pushToGridCache() {
-        try {
-            if (getProxy() != null) {
-                getProxy().getGrid().getCache(ICraftingGrid.class).addNode(getProxy().getNode(), this);
-            }
-        } catch (GridAccessException ignored) {}
-    }
-
-    public void removeFromGridCache() {
-        try {
-            if (getProxy() != null) {
-                getProxy().getGrid().getCache(ICraftingGrid.class).removeNode(getProxy().getNode(), this);
-            }
-        } catch (GridAccessException ignored) {}
     }
 
     public boolean mePatternChange() {
-        if (getProxy() == null || !getProxy().isActive()) return true;
-        pushToGridCache();
-        try {
-            getProxy().getGrid().postEvent(new MENetworkCraftingPatternChange(this, getProxy().getNode()));
-        } catch (Exception ignored) {
+        if (!isActive()) {
             return true;
         }
+        ICraftingProvider.requestUpdate(getMainNode());
         return false;
     }
 
     @Override
-    public AENetworkProxy getProxy() {
-        if (isUseProxy()) {
-            if (this.getWorld() != null) {
-                TileEntity tileEntity = this.getWorld().getTileEntity(AEProxy_pos);
-                if (tileEntity instanceof AENetworkPowerTile proxy) {
-                    return proxy.getProxy();
-                }
-            }
-        }
-        return super.getProxy();
+    public boolean canMergePatternPush(IPatternDetails patternDetails) {
+        return false;
     }
 
     @Override
-    public DimensionalCoord getLocation() {
-        return new DimensionalCoord(getWorld(), getPos());
+    public int getMaxPatternPushMultiplier(IPatternDetails patternDetails, int maxMultiplier) {
+        return 0;
     }
 
-    @Override
-    public IGridNode getGridNode(@NotNull AEPartLocation aePartLocation) {
-        return getProxy().getNode();
-    }
-
-    @Override
-    public void securityBreak() {}
-
-    @Override
     public boolean isPowered() {
-        return getProxy() != null && getProxy().isPowered();
+        return getMainNode().isPowered();
     }
 
-    @Override
     public boolean isActive() {
-        return getProxy() != null && getProxy().isActive();
+        return getMainNode().isActive();
     }
 
     @Override
@@ -344,7 +301,6 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
         if (this.master != null) {
             this.master.removeOrePrefixRegistrar(this);
         }
-        removeFromGridCache();
         super.onRemoval();
     }
 

@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "applygray.mixins",
+  "compatibilityLevel": "JAVA_25",
+  "target": "@env(DEFAULT)",
+  "refmap": "mixins.applygray.refmap.json",
+  "mixins": [
+    "gregtech.MixinBlockMachine",
+    "gregtech.MixinIGTTool",
+    "gregtech.MixinMetaTileEntityHolder",
+    "gregtech.MixinMetaTileEntityHull"
+  ],
+  "client": [
+    "ae2.MixinGuiScreenButtonListAccessor"
+  ],
+  "server": []
+}

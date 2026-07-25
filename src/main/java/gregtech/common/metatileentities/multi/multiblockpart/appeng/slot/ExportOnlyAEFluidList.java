@@ -4,10 +4,11 @@ import gregtech.api.metatileentity.MetaTileEntity;
 
 import net.minecraftforge.fluids.FluidStack;
 
-import appeng.api.storage.data.IAEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.NotNull;
 
-public class ExportOnlyAEFluidList implements IExportOnlyAEStackList<IAEFluidStack> {
+public class ExportOnlyAEFluidList implements IExportOnlyAEStackList {
 
     protected final int size;
     protected ExportOnlyAEFluidSlot[] inventory;
@@ -38,8 +39,9 @@ public class ExportOnlyAEFluidList implements IExportOnlyAEStackList<IAEFluidSta
     public boolean hasStackInConfig(FluidStack stack, boolean checkExternal) {
         if (stack == null) return false;
         for (ExportOnlyAEFluidSlot slot : inventory) {
-            IAEFluidStack config = slot.getConfig();
-            if (config != null && config.getFluid().equals(stack.getFluid())) {
+            GenericStack config = slot.getConfig();
+            AEFluidKey fluidKey = AEFluidKey.of(stack);
+            if (fluidKey != null && fluidKey.matches(config)) {
                 return true;
             }
         }

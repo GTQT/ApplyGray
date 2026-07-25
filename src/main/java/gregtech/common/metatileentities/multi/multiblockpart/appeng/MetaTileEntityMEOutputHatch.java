@@ -29,26 +29,24 @@ import net.minecraftforge.fluids.IFluidTank;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.fluids.util.AEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
 import com.cleanroommc.modularui.api.drawable.IRichTextBuilder;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEFluidStack>
+public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase
         implements IMultiblockAbilityPart<IFluidTank> {
 
     public final static String FLUID_BUFFER_TAG = "FluidBuffer";
 
     public MetaTileEntityMEOutputHatch(ResourceLocation metaTileEntityId) {
-        super(metaTileEntityId, GTValues.EV, IFluidStorageChannel.class);
+        super(metaTileEntityId, GTValues.EV);
     }
 
     @Override
@@ -56,16 +54,14 @@ public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEF
         return new MetaTileEntityMEOutputHatch(this.metaTileEntityId);
     }
 
-    @Override
-    protected @NotNull IByteBufDeserializer<IAEFluidStack> getDeserializer() {
-        return AEFluidStack::fromPacket;
-    }
-
     @SideOnly(Side.CLIENT)
     @Override
     protected void addStackLine(@NotNull IRichTextBuilder<?> text,
-                                @NotNull IAEFluidStack wrappedStack) {
-        FluidStack stack = wrappedStack.getFluidStack();
+                                @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEFluidKey fluidKey)) {
+            return;
+        }
+        FluidStack stack = fluidKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -74,7 +70,7 @@ public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEF
                     FluidTooltipUtil.handleFluidTooltip(tooltip, stack);
                 }));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "L"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "L"));
     }
 
     @Override
@@ -82,10 +78,10 @@ public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEF
         super.writeToNBT(data);
 
         NBTTagList nbtList = new NBTTagList();
-        for (IAEFluidStack stack : internalBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalBuffer) {
+            if (stack.what() instanceof AEFluidKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(FLUID_BUFFER_TAG, nbtList);
 
@@ -96,8 +92,10 @@ public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEF
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         for (NBTBase tag : data.getTagList(FLUID_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalBuffer.add(AEFluidStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEFluidKey) {
+                addToBuffer(stack);
+            }
         }
     }
 
@@ -177,21 +175,9 @@ public class MetaTileEntityMEOutputHatch extends MetaTileEntityMEOutputBase<IAEF
             }
 
             if (doFill) {
-                int amount = stackToInsert.amount;
-                for (IAEFluidStack bufferedStack : internalBuffer) {
-                    long bufferedStackSize = bufferedStack.getStackSize();
-                    if (bufferedStack.equals(stackToInsert) && bufferedStackSize < Long.MAX_VALUE) {
-                        int amountToAdd = (int) Math.min(amount, Long.MAX_VALUE - bufferedStackSize);
-                        bufferedStack.incStackSize(amountToAdd);
-                        amount -= amountToAdd;
-                        if (amount < 1) break;
-                    }
-                }
-
-                if (amount > 0) {
-                    IAEFluidStack newStack = AEFluidStack.fromFluidStack(stackToInsert);
-                    newStack.setStackSize(amount);
-                    internalBuffer.add(newStack);
+                GenericStack stack = GenericStack.fromFluidStack(stackToInsert);
+                if (stack != null) {
+                    addToBuffer(stack);
                 }
 
                 this.trigger();

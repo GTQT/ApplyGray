@@ -12,8 +12,8 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
-import appeng.api.implementations.tiles.IColorableTile;
-import appeng.api.util.AEColor;
+import ae2.api.implementations.tiles.IColorableTile;
+import ae2.api.util.AEColor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

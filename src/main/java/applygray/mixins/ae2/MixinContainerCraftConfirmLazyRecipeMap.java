@@ -4,45 +4,44 @@ import applygray.ApplyGrayMod;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
 import applygray.integration.ae2.IRecipePatternRebuildable;
 
-import net.minecraft.world.World;
-
-import appeng.api.networking.IGrid;
-import appeng.api.networking.IGridNode;
-import appeng.api.networking.crafting.ICraftingGrid;
-import appeng.api.networking.crafting.ICraftingJob;
-import appeng.api.networking.security.IActionHost;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.container.AEBaseContainer;
-import appeng.container.implementations.ContainerCraftConfirm;
+import ae2.api.networking.IGrid;
+import ae2.api.networking.IGridNode;
+import ae2.api.networking.security.IActionHost;
+import ae2.api.stacks.AEKey;
+import ae2.container.AEBaseContainer;
+import ae2.container.implementations.ContainerCraftConfirm;
+import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.concurrent.Future;
-
+/** Invalidates a lazy target before Supergiant's native craft-confirm replanning action runs. */
 @Mixin(value = ContainerCraftConfirm.class, remap = false)
 public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipePatternRebuildable {
 
-    @Shadow private ICraftingJob result;
-    @Shadow public abstract World getWorld();
-    @Shadow public abstract void setJob(Future<ICraftingJob> job);
+    @Shadow @Nullable private AEKey whatToCraft;
+    @Shadow public abstract void replan();
+
+    @Inject(method = "replan", at = @At("HEAD"))
+    private void applygray$invalidateLazyTargetBeforeReplan(CallbackInfo ci) {
+        AEBaseContainer container = (AEBaseContainer) (Object) this;
+        if (container.getPlayer().world.isRemote || whatToCraft == null) return;
+        Object target = container.getTarget();
+        if (!(target instanceof IActionHost actionHost)) return;
+
+        IGridNode node = actionHost.getActionableNode();
+        IGrid grid = node == null ? null : node.grid();
+        if (grid == null) return;
+
+        DynamicRecipePatternRegistry.invalidateTarget(grid, whatToCraft);
+        ApplyGrayMod.LOGGER.info("Rebuilding Supergiant crafting calculation after clearing lazy patterns for {}",
+                whatToCraft);
+    }
 
     @Override
     public void applygray$clearTargetPatternsAndRecalculate() {
-        if (result == null || result.getOutput() == null) return;
-        AEBaseContainer container = (AEBaseContainer) (Object) this;
-        Object target = container.getTarget();
-        if (!(target instanceof IActionHost)) return;
-
-        IGridNode node = ((IActionHost) target).getActionableNode();
-        if (node == null || node.getGrid() == null) return;
-        IGrid grid = node.getGrid();
-        IAEItemStack output = result.getOutput().copy();
-        output.reset();
-
-        DynamicRecipePatternRegistry.invalidateTarget(grid, output);
-        ICraftingGrid craftingGrid = grid.getCache(ICraftingGrid.class);
-        setJob(craftingGrid.beginCraftingJob(getWorld(), grid, container.getActionSource(), output, null));
-        result = null;
-        ApplyGrayMod.LOGGER.info("Rebuilding AE2 crafting calculation after clearing lazy patterns for {}", output);
+        replan();
     }
-}
+}

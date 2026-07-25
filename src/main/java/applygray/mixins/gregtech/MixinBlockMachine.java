@@ -14,7 +14,6 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
-import appeng.me.helpers.AENetworkProxy;
 import org.jetbrains.annotations.NotNull;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -32,8 +31,7 @@ public abstract class MixinBlockMachine {
         if (!(tile instanceof MetaTileEntityHolder holder)) return;
         MetaTileEntity metaTileEntity = holder.getMetaTileEntity();
         if (metaTileEntity instanceof IAEManagedMetaTileEntity managed) {
-            AENetworkProxy proxy = managed.getProxy();
-            if (proxy != null) proxy.setOwner(player);
+            managed.getMainNode().setOwningPlayer(player);
         }
     }
 }

@@ -13,7 +13,6 @@ import gregtech.api.util.GTLog;
 import gregtech.common.items.MetaItems;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
 
-import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
@@ -21,10 +20,9 @@ import net.minecraft.util.ResourceLocation;
 
 import net.minecraftforge.common.util.Constants;
 
-import appeng.api.networking.IGrid;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.networking.crafting.ICraftingProviderHelper;
-import appeng.me.GridAccessException;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.networking.IGrid;
+import ae2.api.stacks.KeyCounter;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
@@ -79,12 +77,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     }
 
     @Override
-    public void provideCrafting(ICraftingProviderHelper helper) {
-        // Do not enumerate the complete RecipeMap.
-    }
-
-    @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails, InventoryCrafting inventoryCrafting) {
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         DynamicRecipePatternDetails dynamic = DynamicRecipePatternRegistry.getDynamicPattern(patternDetails);
         if (dynamic == null || !DynamicRecipePatternRegistry.owns(patternDetails, this) || !isActive()) {
             return false;
@@ -93,43 +86,22 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             ApplyGrayMod.LOGGER.warn("Rejected stale RecipeMap pattern {} at {}", dynamic.getRecipeKey(), getPos());
             return false;
         }
-        if (!applyCircuit(dynamic, inventoryCrafting)) return false;
-        return pushToBuffer(inventoryCrafting, dynamic.getRecipeKey(), dynamic.getRecipeMapName());
+        ItemStack circuit = createCircuitMetadata(dynamic);
+        if (dynamic.getCircuitConfiguration() >= 0 && circuit.isEmpty()) return false;
+        return pushToBuffer(inputHolder, dynamic.getRecipeKey(), dynamic.getRecipeMapName(), circuit);
     }
 
-    @Override
-    public int[] pushPatternMulti(ICraftingPatternDetails patternDetails, InventoryCrafting inventoryCrafting,
-                                  int maxTodo) {
-        DynamicRecipePatternDetails dynamic = DynamicRecipePatternRegistry.getDynamicPattern(patternDetails);
-        if (dynamic == null || !DynamicRecipePatternRegistry.owns(patternDetails, this) || !isActive()) {
-            return new int[]{0};
-        }
-        if (!isRecipeMapRouteAvailable(dynamic)) {
-            ApplyGrayMod.LOGGER.warn("Rejected stale RecipeMap batch pattern {} at {}", dynamic.getRecipeKey(), getPos());
-            return new int[]{0};
-        }
-        if (!applyCircuit(dynamic, inventoryCrafting)) return new int[]{0};
-        return pushPatternMultiToBuffer(inventoryCrafting, maxTodo, dynamic.getRecipeKey(), dynamic.getRecipeMapName());
-    }
-
-    private boolean applyCircuit(DynamicRecipePatternDetails detail, InventoryCrafting table) {
-        if (detail.getCircuitConfiguration() < 0) return true;
-        if (MetaItems.PROGRAMMABLE_CIRCUIT == null) return false;
+    private ItemStack createCircuitMetadata(DynamicRecipePatternDetails detail) {
+        if (detail.getCircuitConfiguration() < 0) return ItemStack.EMPTY;
+        if (MetaItems.PROGRAMMABLE_CIRCUIT == null) return ItemStack.EMPTY;
 
         ItemStack circuit = gregtech.api.recipes.ingredients.IntCircuitIngredient
                 .getIntegratedCircuit(detail.getCircuitConfiguration());
-        if (circuit.isEmpty()) return false;
+        if (circuit.isEmpty()) return ItemStack.EMPTY;
 
         ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
         ProgrammableCircuit.wrap(circuit, programmable);
-        for (int i = table.getSizeInventory() - 1; i >= 0; i--) {
-            if (table.getStackInSlot(i).isEmpty()) {
-                table.setInventorySlotContents(i, programmable);
-                return true;
-            }
-        }
-        GTLog.logger.debug("RecipeMap pattern rejected because no circuit metadata slot was available");
-        return false;
+        return programmable;
     }
 
     @Override
@@ -215,10 +187,11 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
         if (recipeMaps.length == 0) return null;
         try {
-            IGrid grid = getProxy().getGrid();
+            IGrid grid = getMainNode().getGrid();
+            if (grid == null) return null;
             return new DynamicRecipePatternRegistry.ProviderSnapshot(grid, getDynamicProviderId(),
                     dynamicEpoch.get(), recipeMaps, this);
-        } catch (GridAccessException ignored) {
+        } catch (IllegalStateException ignored) {
             return null;
         }
     }

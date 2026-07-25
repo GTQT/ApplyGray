@@ -11,10 +11,10 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraft.world.World;
 import net.minecraftforge.oredict.OreDictionary;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.storage.data.IItemList;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.api.IPanelHandler;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.screen.ModularPanel;
@@ -85,28 +85,30 @@ public class MetaTileEntityMEOreDictBus extends MetaTileEntityMEStockingBus {
 
     @Override
     protected void refreshList() {
-        IMEMonitor<IAEItemStack> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor == null) {
             clearInventory(0);
             return;
         }
 
-        IItemList<IAEItemStack> storageList = monitor.getStorageList();
-        if (storageList == null) {
+        var grid = getMainNode().getGrid();
+        if (grid == null) {
             clearInventory(0);
             return;
         }
 
         int index = 0;
         ExportOnlyAEStockingItemSlot[] inventory = getAEHandler().getInventory();
-        for (IAEItemStack stack : storageList) {
+        for (var entry : grid.getStorageService().getCachedInventory()) {
             if (index >= CONFIG_SIZE) break;
-            if (stack.getStackSize() == 0) continue;
+            if (!(entry.getKey() instanceof AEItemKey itemKey)) continue;
+            long storedAmount = entry.getLongValue();
+            if (storedAmount <= 0) continue;
 
-            stack = monitor.extractItems(stack, Actionable.SIMULATE, getActionSource());
-            if (stack == null || stack.getStackSize() == 0) continue;
+            long available = monitor.extract(itemKey, storedAmount, Actionable.SIMULATE, getActionSource());
+            if (available <= 0) continue;
 
-            ItemStack itemStack = stack.createItemStack();
+            ItemStack itemStack = itemKey.toStack(1);
             if (itemStack == null || itemStack.isEmpty()) continue;
 
             // 检查物品是否有匹配的矿辞
@@ -114,11 +116,9 @@ public class MetaTileEntityMEOreDictBus extends MetaTileEntityMEStockingBus {
 
             // Ensure that it is valid to configure with this stack
             if (autoPullTest != null && !autoPullTest.test(itemStack)) continue;
-            IAEItemStack selectedStack = stack.copy();
-            IAEItemStack configStack = selectedStack.copy().setStackSize(1);
             ExportOnlyAEStockingItemSlot slot = inventory[index];
-            slot.setConfig(configStack);
-            slot.setStack(selectedStack);
+            slot.setConfig(new GenericStack(itemKey, 1));
+            slot.setStack(new GenericStack(itemKey, available));
             index++;
         }
 

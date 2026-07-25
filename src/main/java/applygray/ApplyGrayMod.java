@@ -3,7 +3,6 @@ package applygray;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.ApplyGrayMetaTileEntities;
 import applygray.common.ApplyGrayRecipes;
-import applygray.mixins.ApplyGrayLateMixinLoadingPlugin;
 import applygray.integration.ApplyGrayIntegrationBootstrap;
 
 import net.minecraftforge.fml.common.Mod;
@@ -20,8 +19,7 @@ import org.apache.logging.log4j.Logger;
      version = ApplyGrayInternalTags.VERSION,
      dependencies = "required:forge@[14.23.5.2847,);" +
              "required-after:gregtech;" +
-             "required-after:appliedenergistics2;" +
-             "required-after:ae2fc;" +
+             "required-after:ae2;" +
              "after:jei@[4.15.0,);")
 public class ApplyGrayMod {
 
@@ -32,7 +30,7 @@ public class ApplyGrayMod {
 
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
-        LOGGER.info("Loading AE2/AE2FC integration for GregTech");
+        LOGGER.info("Loading Applied Energistics 2 Supergiant integration for GregTech");
         ApplyGrayIntegrationBootstrap.init();
         ApplyGrayMetaTileEntities.init();
     }

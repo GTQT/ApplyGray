@@ -10,22 +10,19 @@ import org.jetbrains.annotations.Nullable;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 
-import appeng.api.storage.data.IAEStack;
-import appeng.integration.modules.gregtech.CircuitHelper;
-import appeng.util.item.AEItemStack;
+import ae2.api.stacks.GenericStack;
 
 /**
- * GT 侧的 CircuitHelper 实现，提供可编程电路相关的实际逻辑。
- * 在 GT preInit 阶段通过 CircuitHelper.setInstance() 注册。
+ * Shared programmable-circuit support for Supergiant pattern import and editing.
  */
-public class GTCircuitHelper extends CircuitHelper {
+public final class GTCircuitHelper {
 
     private static final ThreadLocal<Boolean> CURRENT_JEI_INGREDIENT_NOT_CONSUMABLE =
             ThreadLocal.withInitial(() -> false);
 
-    // ThreadLocal for AE2FC recipe transfer programmable circuit injection
-    private static final ThreadLocal<EntityPlayer> AE2FC_TRANSFER_PLAYER = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> AE2FC_TRANSFER_ENABLED = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Boolean> PATTERN_TRANSFER_ENABLED = ThreadLocal.withInitial(() -> false);
+
+    private GTCircuitHelper() {}
 
     public static void setCurrentJeiIngredientNotConsumable(boolean notConsumable) {
         CURRENT_JEI_INGREDIENT_NOT_CONSUMABLE.set(notConsumable);
@@ -35,44 +32,26 @@ public class GTCircuitHelper extends CircuitHelper {
         CURRENT_JEI_INGREDIENT_NOT_CONSUMABLE.remove();
     }
 
-    /**
-     * Begin an AE2FC recipe transfer session. Called from Mixin before
-     * RecipeTransferBuilder is constructed.
-     */
-    public static void beginAe2fcTransfer(EntityPlayer player) {
-        CircuitHelper circuitHelper = CircuitHelper.getInstance();
-        boolean enabled = circuitHelper.hasToolkitInInventory(player) &&
-                circuitHelper.isProgrammableCircuitAvailable();
-        AE2FC_TRANSFER_ENABLED.set(enabled);
-        AE2FC_TRANSFER_PLAYER.set(player);
+    public static void beginPatternTransfer(@Nullable EntityPlayer player, boolean doTransfer) {
+        PATTERN_TRANSFER_ENABLED.set(doTransfer && hasToolkitInInventory(player) && isProgrammableCircuitAvailable());
     }
 
-    /**
-     * End an AE2FC recipe transfer session. Called from Mixin after
-     * the transfer packet has been sent.
-     */
-    public static void endAe2fcTransfer() {
-        AE2FC_TRANSFER_ENABLED.remove();
-        AE2FC_TRANSFER_PLAYER.remove();
+    public static void endPatternTransfer() {
+        PATTERN_TRANSFER_ENABLED.remove();
     }
 
-    /**
-     * Check if AE2FC recipe transfer programmable circuit injection is enabled.
-     */
-    public static boolean isAe2fcTransferEnabled() {
-        return Boolean.TRUE.equals(AE2FC_TRANSFER_ENABLED.get());
+    public static boolean isPatternTransferEnabled() {
+        return Boolean.TRUE.equals(PATTERN_TRANSFER_ENABLED.get());
     }
 
-    @Override
-    public boolean isProgrammableCircuit(ItemStack stack) {
+    public static boolean isProgrammableCircuit(ItemStack stack) {
         return MetaItems.PROGRAMMABLE_CIRCUIT != null
                 && stack != null
                 && !stack.isEmpty()
                 && MetaItems.PROGRAMMABLE_CIRCUIT.isItemEqual(stack);
     }
 
-    @Override
-    public boolean isIntegratedCircuit(ItemStack stack) {
+    public static boolean isIntegratedCircuit(ItemStack stack) {
         if (stack == null) {
             return false;
         }
@@ -83,15 +62,13 @@ public class GTCircuitHelper extends CircuitHelper {
     }
 
     @Nullable
-    @Override
-    public IAEStack<?> wrapItemAsProgrammable(ItemStack sourceItem) {
+    public static GenericStack wrapItemAsProgrammable(ItemStack sourceItem) {
         ItemStack wrapped = wrapItemAsProgrammableStack(sourceItem);
-        return wrapped == null ? null : toAEStack(wrapped);
+        return wrapped == null ? null : GenericStack.fromItemStack(wrapped);
     }
 
     @Nullable
-    @Override
-    public ItemStack wrapItemAsProgrammableStack(ItemStack sourceItem) {
+    public static ItemStack wrapItemAsProgrammableStack(ItemStack sourceItem) {
         if (sourceItem.isEmpty()) {
             return null;
         }
@@ -114,8 +91,7 @@ public class GTCircuitHelper extends CircuitHelper {
         return programmable;
     }
 
-    @Override
-    public boolean hasToolkitInInventory(@Nullable EntityPlayer player) {
+    public static boolean hasToolkitInInventory(@Nullable EntityPlayer player) {
         if (player == null || MetaItems.PROGRAMMING_TOOLKIT == null) {
             return false;
         }
@@ -130,24 +106,14 @@ public class GTCircuitHelper extends CircuitHelper {
     }
 
     @Nullable
-    @Override
-    public ItemStack getProgrammableCircuitStack() {
+    public static ItemStack getProgrammableCircuitStack() {
         if (MetaItems.PROGRAMMABLE_CIRCUIT == null) {
             return null;
         }
         return MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
     }
 
-    @Override
-    public boolean isProgrammableCircuitAvailable() {
+    public static boolean isProgrammableCircuitAvailable() {
         return MetaItems.PROGRAMMABLE_CIRCUIT != null;
-    }
-
-    @Nullable
-    private static IAEStack<?> toAEStack(@Nullable ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
-            return null;
-        }
-        return AEItemStack.fromItemStack(stack);
     }
 }

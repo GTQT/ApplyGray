@@ -3,14 +3,11 @@ package applygray.mixins.ae2;
 import applygray.integration.ae2.DynamicRecipePatternDetails;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
-import appeng.api.networking.IGrid;
-import appeng.api.networking.crafting.ICraftingMedium;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.me.cache.CraftingGridCache;
-import com.google.common.collect.ImmutableCollection;
-import com.google.common.collect.ImmutableList;
-import net.minecraft.world.World;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.networking.IGrid;
+import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.stacks.AEKey;
+import ae2.me.service.CraftingService;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -21,23 +18,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Adds lazy RecipeMap patterns only when AE2's crafting tree asks for an output. */
-@Mixin(value = CraftingGridCache.class, remap = false)
+/** Adds lazy RecipeMap patterns only when Supergiant's crafting service asks for an output. */
+@Mixin(value = CraftingService.class, remap = false)
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
 
     @Shadow @Final
     private IGrid grid;
 
     @Inject(method = "getCraftingFor", at = @At("RETURN"), cancellable = true)
-    private void applygray$appendLazyRecipeMapPatterns(IAEItemStack requested,
-                                                       ICraftingPatternDetails parent,
-                                                       int depth,
-                                                       World world,
-                                                       CallbackInfoReturnable<ImmutableCollection<ICraftingPatternDetails>> cir) {
-        List<ICraftingPatternDetails> dynamic = DynamicRecipePatternRegistry.findPatterns(grid, requested);
+    private void applygray$appendLazyRecipeMapPatterns(AEKey requested,
+                                                       CallbackInfoReturnable<java.util.Collection<IPatternDetails>> cir) {
+        List<IPatternDetails> dynamic = DynamicRecipePatternRegistry.findPatterns(grid, requested);
         if (dynamic.isEmpty()) return;
 
-        List<ICraftingPatternDetails> merged = new ArrayList<>(cir.getReturnValue());
+        List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue());
         merged.addAll(dynamic);
         merged.sort((left, right) -> {
             boolean leftDynamic = left instanceof DynamicRecipePatternDetails;
@@ -52,15 +46,15 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             }
             if (leftDynamic) return -1;
             if (rightDynamic) return 1;
-            return Integer.compare(right.getPriority(), left.getPriority());
+            return 0;
         });
-        cir.setReturnValue(ImmutableList.copyOf(merged));
+        cir.setReturnValue(java.util.Collections.unmodifiableList(merged));
     }
 
-    @Inject(method = "getMediums", at = @At("RETURN"), cancellable = true)
-    private void applygray$getLazyRecipeMapMedium(ICraftingPatternDetails details,
-                                                  CallbackInfoReturnable<List<ICraftingMedium>> cir) {
-        ICraftingMedium medium = DynamicRecipePatternRegistry.getMedium(details);
-        if (medium != null) cir.setReturnValue(ImmutableList.of(medium));
+    @Inject(method = "getProviders", at = @At("RETURN"), cancellable = true)
+    private void applygray$getLazyRecipeMapProvider(IPatternDetails details,
+                                                    CallbackInfoReturnable<Iterable<ICraftingProvider>> cir) {
+        ICraftingProvider provider = DynamicRecipePatternRegistry.getProvider(details);
+        if (provider != null) cir.setReturnValue(List.of(provider));
     }
 }

@@ -11,7 +11,6 @@ import gregtech.api.capability.IDistinctBusController;
 import gregtech.api.mui.GTGuiTextures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemList;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemSlot;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
@@ -25,10 +24,10 @@ import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.items.IItemHandler;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.storage.data.IItemList;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
 import com.cleanroommc.modularui.api.IPanelHandler;
 import com.cleanroommc.modularui.api.drawable.IKey;
@@ -109,18 +108,18 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
     // getStackInSlot() method, as it uses the cached items set here.
     @Override
     protected void syncME() {
-        IMEMonitor<IAEItemStack> monitor = super.getMonitor();
+        MEStorage monitor = super.getMonitor();
         if (monitor == null) return;
 
         for (ExportOnlyAEStockingItemSlot slot : this.getAEHandler().getInventory()) {
-            if (slot.getConfig() == null) {
+            GenericStack config = slot.getConfig();
+            if (config == null || !(config.what() instanceof AEItemKey)) {
                 slot.setStack(null);
             } else {
                 // Try to fill the slot
-                IAEItemStack request = slot.getConfig().copy();
-                request.setStackSize(Long.MAX_VALUE);
-                IAEItemStack result = monitor.extractItems(request, Actionable.SIMULATE, getActionSource());
-                slot.setStack(result);
+                long available = monitor.extract(config.what(), Long.MAX_VALUE, Actionable.SIMULATE,
+                        getActionSource());
+                slot.setStack(available > 0 ? new GenericStack(config.what(), available) : null);
             }
         }
     }
@@ -168,8 +167,9 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
     private void validateConfig() {
         for (var slot : this.getAEHandler().getInventory()) {
             if (slot.getConfig() != null) {
-                ItemStack configuredStack = slot.getConfig().createItemStack();
-                if (testConfiguredInOtherBus(configuredStack)) {
+                GenericStack config = slot.getConfig();
+                if (config.what() instanceof AEItemKey itemKey &&
+                        testConfiguredInOtherBus(itemKey.toStack(1))) {
                     slot.setConfig(null);
                     slot.setStock(null);
                 }
@@ -234,36 +234,36 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
      * Sets the config to the first 16 valid items found in the network.
      */
     protected void refreshList() {
-        IMEMonitor<IAEItemStack> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor == null) {
             clearInventory(0);
             return;
         }
 
-        IItemList<IAEItemStack> storageList = monitor.getStorageList();
-        if (storageList == null) {
+        var grid = getMainNode().getGrid();
+        if (grid == null) {
             clearInventory(0);
             return;
         }
 
         int index = 0;
         ExportOnlyAEStockingItemSlot[] inventory = getAEHandler().getInventory();
-        for (IAEItemStack stack : storageList) {
+        for (var entry : grid.getStorageService().getCachedInventory()) {
             if (index >= CONFIG_SIZE) break;
-            if (stack.getStackSize() < minimumStackSize) continue;
+            if (!(entry.getKey() instanceof AEItemKey itemKey)) continue;
+            long storedAmount = entry.getLongValue();
+            if (storedAmount < minimumStackSize) continue;
 
-            stack = monitor.extractItems(stack, Actionable.SIMULATE, getActionSource());
-            if (stack == null || stack.getStackSize() < minimumStackSize) continue;
+            long available = monitor.extract(itemKey, storedAmount, Actionable.SIMULATE, getActionSource());
+            if (available < minimumStackSize) continue;
 
-            ItemStack itemStack = stack.getDefinition();
+            ItemStack itemStack = itemKey.toStack(1);
             if (itemStack == null || itemStack.isEmpty()) continue;
             // Ensure that it is valid to configure with this stack
             if (autoPullTest != null && !autoPullTest.test(itemStack)) continue;
-            IAEItemStack selectedStack = stack.copy();
-            IAEItemStack configStack = selectedStack.copy().setStackSize(1);
             ExportOnlyAEStockingItemSlot slot = inventory[index];
-            slot.setConfig(configStack);
-            slot.setStack(selectedStack);
+            slot.setConfig(new GenericStack(itemKey, 1));
+            slot.setStack(new GenericStack(itemKey, available));
             index++;
         }
 
@@ -390,8 +390,8 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
 
         private final MetaTileEntityMEStockingBus holder;
 
-        public ExportOnlyAEStockingItemSlot(IAEItemStack config, IAEItemStack stock,
-                                            MetaTileEntityMEStockingBus holder) {
+        public ExportOnlyAEStockingItemSlot(GenericStack config, GenericStack stock,
+                                             MetaTileEntityMEStockingBus holder) {
             super(config, stock);
             this.holder = holder;
         }
@@ -402,39 +402,34 @@ public class MetaTileEntityMEStockingBus extends MetaTileEntityMEInputBus {
         }
 
         @Override
-        public @NotNull IConfigurableSlot<IAEItemStack> copy() {
+        public @NotNull ExportOnlyAEStockingItemSlot copy() {
             return new ExportOnlyAEStockingItemSlot(
-                    this.config == null ? null : this.config.copy(),
-                    this.stock == null ? null : this.stock.copy(),
+                    this.config == null ? null : new GenericStack(this.config.what(), this.config.amount()),
+                    this.stock == null ? null : new GenericStack(this.stock.what(), this.stock.amount()),
                     this.holder);
         }
 
         @Override
         public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) {
-            if (slot != 0 || this.stock == null || this.stock.getStackSize() <= 0) return ItemStack.EMPTY;
+            if (slot != 0 || this.stock == null || this.stock.amount() <= 0) return ItemStack.EMPTY;
 
-            if (this.config != null) {
+            if (this.config != null && this.config.what() instanceof AEItemKey itemKey) {
                 // Extract the items from the real net to either validate (simulate)
                 // or extract (modulate) when this is called
-                IMEMonitor<IAEItemStack> monitor = holder.getMonitor();
+                MEStorage monitor = holder.getMonitor();
                 if (monitor == null) return ItemStack.EMPTY;
 
                 Actionable action = simulate ? Actionable.SIMULATE : Actionable.MODULATE;
-                IAEItemStack request = config.copy();
-                request.setStackSize(amount);
-
-                IAEItemStack result = monitor.extractItems(request, action, holder.getActionSource());
-                if (result != null) {
-                    int extracted = (int) Math.min(result.getStackSize(), amount);
-                    this.stock.decStackSize(extracted); // may as well update the display here
-                    if (this.trigger != null) {
+                long extracted = monitor.extract(itemKey, amount, action, holder.getActionSource());
+                if (extracted > 0) {
+                    int extractedAmount = (int) Math.min(extracted, Integer.MAX_VALUE);
+                    if (!simulate) {
+                        decrementStock(extractedAmount);
+                    }
+                    if (!simulate && this.trigger != null) {
                         this.trigger.accept(0);
                     }
-                    if (extracted != 0) {
-                        ItemStack resultStack = this.config.createItemStack();
-                        resultStack.setCount(extracted);
-                        return resultStack;
-                    }
+                    return itemKey.toStack(extractedAmount);
                 }
             }
 

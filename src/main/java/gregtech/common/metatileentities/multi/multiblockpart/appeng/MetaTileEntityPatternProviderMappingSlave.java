@@ -22,7 +22,6 @@ import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.PacketBuffer;
@@ -34,8 +33,9 @@ import net.minecraftforge.fluids.IFluidTank;
 import net.minecraftforge.items.IItemHandlerModifiable;
 import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.implementations.ICraftingPatternItem;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.stacks.KeyCounter;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -115,7 +115,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
 
             @Override
             public boolean isItemValid(int slot, @NotNull ItemStack stack) {
-                return stack.getItem() instanceof ICraftingPatternItem;
+                return PatternDetailsHelper.isEncodedPattern(stack);
             }
 
             @Override
@@ -228,7 +228,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
     // ==================== AE2 push forwarding to master ====================
 
     @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails, InventoryCrafting inventoryCrafting) {
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive()) {
             return false;
         }
@@ -238,7 +238,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
             return false;
         }
         // Forward materials to the master buffer pool.
-        return resolvedMaster.pushToBuffer(inventoryCrafting);
+        return resolvedMaster.pushToBuffer(inputHolder, null, null);
     }
 
     @Override
@@ -337,7 +337,6 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
         if (this.master != null) {
             this.master.removeMappingSlave(this);
         }
-        removeFromGridCache();
         super.onRemoval();
         if (patternSlot != null) {
             gregtech.api.util.GTTransferUtils.dropInventoryItems(getWorld(), getPos(), patternSlot);

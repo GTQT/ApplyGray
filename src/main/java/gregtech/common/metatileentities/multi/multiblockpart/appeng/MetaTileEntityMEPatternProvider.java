@@ -28,8 +28,8 @@ import gregtech.client.renderer.texture.cube.SimpleOverlayRenderer;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.creativetab.CreativeTabs;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.network.PacketBuffer;
@@ -39,24 +39,21 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.Constants;
-import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.IFluidTank;
 import net.minecraftforge.fluids.capability.IFluidTankProperties;
 import net.minecraftforge.items.IItemHandlerModifiable;
 import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.AEApi;
-import appeng.api.config.Actionable;
-import appeng.api.implementations.ICraftingPatternItem;
-import appeng.api.networking.crafting.ICraftingPatternDetails;
-import appeng.api.networking.crafting.IMultiplePatternPushable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.tile.grid.AENetworkPowerTile;
-import appeng.util.item.AEItemStack;
+import ae2.api.config.Actionable;
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEKey;
+import ae2.api.stacks.GenericStack;
+import ae2.api.stacks.KeyCounter;
+import ae2.api.storage.MEStorage;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -89,6 +86,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -98,6 +96,7 @@ import java.util.Objects;
 
 import static gregtech.api.util.AE2PatternCompat.getFluidStack;
 import static gregtech.api.util.AE2PatternCompat.isFluidDrop;
+import static gregtech.api.util.AE2PatternCompat.toGenericStack;
 
 /**
  * 可编程样板总成 — 带缓冲区池机制。
@@ -112,7 +111,7 @@ import static gregtech.api.util.AE2PatternCompat.isFluidDrop;
  * </ul>
  */
 public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPart
-        implements IMultiplePatternPushable, IMEPatternProviderPart {
+        implements IMEPatternProviderPart {
 
     // ==================== 缓冲区池（数量由等级决定）====================
     protected final int bufferCount;
@@ -161,7 +160,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
             @Override
             public boolean isItemValid(int slot, @NotNull ItemStack stack) {
-                return stack.getItem() instanceof ICraftingPatternItem;
+                return PatternDetailsHelper.isEncodedPattern(stack);
             }
 
             @Override
@@ -239,13 +238,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     // ==================== AE2 推送与缓冲区分配 ====================
 
     @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails,
-                               net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive()) {
             return false;
         }
-        // 使用缓冲区池机制分配材料
-        return pushToBuffer(inventoryCrafting);
+        return pushToBuffer(inputHolder, null, null);
     }
 
     @Override
@@ -260,8 +257,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     }
 
     /**
-     * 从 InventoryCrafting 中提取物品和流体的签名（用于缓冲区匹配）。
-     * 签名按材料种类聚合，并保留单份样板的数量用于容量计算。
+     * 将旧的 InventoryCrafting 入口转换为按输入槽位保留的 AE 资源签名。
      */
     private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
         return extractSignature(inventoryCrafting, null, null);
@@ -269,36 +265,47 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting,
                                              @Nullable String patternKey, @Nullable String recipeMapName) {
-        List<ItemStack> itemTypes = new ArrayList<>();
-        List<FluidStack> fluidTypes = new ArrayList<>();
-        List<ItemStack> circuitStacks = new ArrayList<>();
-
+        KeyCounter[] inputHolder = new KeyCounter[inventoryCrafting.getSizeInventory()];
         for (int i = 0; i < inventoryCrafting.getSizeInventory(); i++) {
-            ItemStack stack = inventoryCrafting.getStackInSlot(i);
-            if (stack.isEmpty()) continue;
-
-            // 处理假流体物品
-            if (isFluidDrop(stack)) {
-                FluidStack fluid = getFluidStack(stack);
-                if (fluid != null) {
-                    addFluidRequirement(fluidTypes, fluid);
-                    continue;
-                }
+            inputHolder[i] = new KeyCounter();
+            GenericStack stack = toGenericStack(inventoryCrafting.getStackInSlot(i));
+            if (stack != null && stack.amount() > 0) {
+                inputHolder[i].add(stack.what(), stack.amount());
             }
+        }
+        return extractSignature(inputHolder, patternKey, recipeMapName, null);
+    }
 
-            // 处理可编程电路 — 不加入物品签名
-            if (ProgrammableCircuit.getInstanceFor(stack) != null) {
-                ItemStack circuitType = stack.copy();
-                circuitType.setCount(1);
-                circuitStacks.add(circuitType);
-                continue;
-            }
-
-            // 普通物品：按类型聚合，并保留单份样板数量
-            addItemRequirement(itemTypes, stack);
+    @Nullable
+    private BufferSignature extractSignature(KeyCounter[] inputHolder, @Nullable String patternKey,
+                                             @Nullable String recipeMapName, @Nullable ItemStack extraCircuit) {
+        if (inputHolder == null) {
+            return null;
         }
 
-        return new BufferSignature(itemTypes, fluidTypes, circuitStacks, patternKey, recipeMapName);
+        KeyCounter[] signatureInputs = BufferSignature.copyInputCounters(inputHolder);
+        if (extraCircuit != null && !extraCircuit.isEmpty()) {
+            AEItemKey circuitKey = AEItemKey.of(extraCircuit);
+            if (circuitKey == null) {
+                return null;
+            }
+            signatureInputs = Arrays.copyOf(signatureInputs, signatureInputs.length + 1);
+            signatureInputs[signatureInputs.length - 1] = new KeyCounter();
+            signatureInputs[signatureInputs.length - 1].add(circuitKey, 1);
+        }
+
+        for (KeyCounter holder : signatureInputs) {
+            for (var entry : holder) {
+                long amount = entry.getLongValue();
+                AEKey key = entry.getKey();
+                if (amount <= 0 || amount > Integer.MAX_VALUE ||
+                        !(key instanceof AEItemKey) && !(key instanceof AEFluidKey)) {
+                    return null;
+                }
+            }
+        }
+
+        return new BufferSignature(signatureInputs, patternKey, recipeMapName);
     }
 
     private static void addItemRequirement(List<ItemStack> itemTypes, ItemStack stack) {
@@ -377,53 +384,49 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     public boolean pushToBuffer(net.minecraft.inventory.InventoryCrafting inventoryCrafting,
                                 @Nullable String patternKey, @Nullable String recipeMapName) {
-        BufferSignature signature = extractSignature(inventoryCrafting, patternKey, recipeMapName);
+        KeyCounter[] inputHolder = new KeyCounter[inventoryCrafting.getSizeInventory()];
+        for (int i = 0; i < inventoryCrafting.getSizeInventory(); i++) {
+            inputHolder[i] = new KeyCounter();
+            GenericStack stack = toGenericStack(inventoryCrafting.getStackInSlot(i));
+            if (stack != null && stack.amount() > 0) {
+                inputHolder[i].add(stack.what(), stack.amount());
+            }
+        }
+        return pushToBuffer(inputHolder, patternKey, recipeMapName);
+    }
+
+    protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
+                                   @Nullable String recipeMapName) {
+        return pushToBuffer(inputHolder, patternKey, recipeMapName, null);
+    }
+
+    protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
+                                   @Nullable String recipeMapName, @Nullable ItemStack extraCircuit) {
+        BufferSignature signature = extractSignature(inputHolder, patternKey, recipeMapName, extraCircuit);
+        if (signature == null) {
+            return false;
+        }
         PatternBuffer buffer = findOrAllocateBuffer(signature);
         if (buffer == null) {
             return false;
         }
 
         // 将签名记录到缓冲区（如果是空缓冲区则首次记录）
-        if (buffer.isEmpty() && !buffer.isRecipeLocked()) {
+        boolean allocated = buffer.isEmpty() && !buffer.isRecipeLocked();
+        if (allocated) {
             buffer.setSignature(signature);
             registerBufferInSignatureMap(buffer);
         }
 
-        // 将物品和流体实际插入缓冲区（累积模式：相同签名直接增加数量）
-        for (int i = 0; i < inventoryCrafting.getSizeInventory(); i++) {
-            ItemStack stack = inventoryCrafting.getStackInSlot(i);
-            if (stack.isEmpty()) continue;
-
-            // 处理假流体物品
-            if (isFluidDrop(stack)) {
-                FluidStack fluid = getFluidStack(stack);
-                if (fluid != null) {
-                    buffer.getFluidHandler().fill(fluid, true);
-                    continue;
-                }
+        if (!canInsertKeyCounters(buffer, inputHolder)) {
+            if (allocated) {
+                buffer.clear();
+                unregisterBufferFromSignatureMap(buffer, signature);
             }
-
-            // 处理可编程电路 — 解包并设置到缓冲区的虚拟电路槽
-            if (ProgrammableCircuit.getInstanceFor(stack) != null) {
-                if (ProgrammableCircuit.hasWrappedItem(stack)) {
-                    // 有包裹物品：解包并设置为自定义电路
-                    ProgrammableCircuit.getWrappedItem(stack).ifPresent(
-                            wrappedItem -> buffer.setCustomCircuit(wrappedItem));
-                } else {
-                    // 空白可编程电路：清空缓冲区电路槽
-                    buffer.clearCircuit();
-                }
-                continue;
-            }
-
-            // 普通物品：累积插入缓冲区的物品槽
-            ItemStack toInsert = stack.copy();
-            IItemHandlerModifiable itemHandler = buffer.getItemHandler();
-            // 先尝试合并到已有相同物品的槽位
-            for (int slot = 0; slot < itemHandler.getSlots() && !toInsert.isEmpty(); slot++) {
-                toInsert = itemHandler.insertItem(slot, toInsert, false);
-            }
+            return false;
         }
+        insertKeyCounters(buffer, inputHolder);
+        applyCircuitMetadata(buffer, inputHolder, extraCircuit);
 
         // 标记缓冲区已绑定配方
         buffer.setRecipeLocked(true);
@@ -449,11 +452,95 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
      * @param maxTodo        最大允许推送的份数
      * @return [0] = 实际成功推送的份数
      */
-    @Override
-    public int[] pushPatternMulti(ICraftingPatternDetails patternDetails,
+    public int[] pushPatternMulti(IPatternDetails patternDetails,
                                    net.minecraft.inventory.InventoryCrafting table,
                                    int maxTodo) {
         return pushPatternMultiToBuffer(table, maxTodo, null, null);
+    }
+
+    private boolean canInsertKeyCounters(PatternBuffer buffer, KeyCounter[] inputHolder) {
+        KeyCounter total = new KeyCounter();
+        for (KeyCounter holder : inputHolder) {
+            total.addAll(holder);
+        }
+        for (var entry : total) {
+            long amount = entry.getLongValue();
+            if (amount <= 0 || amount > Integer.MAX_VALUE) {
+                return false;
+            }
+            AEKey key = entry.getKey();
+            if (key instanceof AEFluidKey fluidKey) {
+                if (buffer.getFluidHandler().fill(fluidKey.toStack((int) amount), false) != amount) {
+                    return false;
+                }
+                continue;
+            }
+            if (!(key instanceof AEItemKey itemKey)) {
+                return false;
+            }
+            ItemStack stack = itemKey.toStack((int) amount);
+            if (ProgrammableCircuit.getInstanceFor(stack) != null) {
+                continue;
+            }
+            ItemStack remainder = stack;
+            for (int slot = 0; slot < buffer.getItemHandler().getSlots() && !remainder.isEmpty(); slot++) {
+                remainder = buffer.getItemHandler().insertItem(slot, remainder, true);
+            }
+            if (!remainder.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void insertKeyCounters(PatternBuffer buffer, KeyCounter[] inputHolder) {
+        KeyCounter total = new KeyCounter();
+        for (KeyCounter holder : inputHolder) {
+            total.addAll(holder);
+        }
+        for (var entry : total) {
+            long amount = entry.getLongValue();
+            AEKey key = entry.getKey();
+            if (amount <= 0) {
+                continue;
+            }
+            if (key instanceof AEFluidKey fluidKey) {
+                buffer.getFluidHandler().fill(fluidKey.toStack((int) amount), true);
+                continue;
+            }
+            if (!(key instanceof AEItemKey itemKey)) {
+                continue;
+            }
+            ItemStack stack = itemKey.toStack((int) amount);
+            if (ProgrammableCircuit.getInstanceFor(stack) != null) {
+                continue;
+            }
+            for (int slot = 0; slot < buffer.getItemHandler().getSlots() && !stack.isEmpty(); slot++) {
+                stack = buffer.getItemHandler().insertItem(slot, stack, false);
+            }
+        }
+    }
+
+    private void applyCircuitMetadata(PatternBuffer buffer, KeyCounter[] inputHolder, @Nullable ItemStack extraCircuit) {
+        for (KeyCounter holder : inputHolder) {
+            for (var entry : holder) {
+                if (!(entry.getKey() instanceof AEItemKey itemKey) || entry.getLongValue() <= 0) {
+                    continue;
+                }
+                ItemStack stack = itemKey.toStack(1);
+                if (ProgrammableCircuit.getInstanceFor(stack) == null) {
+                    continue;
+                }
+                if (ProgrammableCircuit.hasWrappedItem(stack)) {
+                    ProgrammableCircuit.getWrappedItem(stack).ifPresent(buffer::setCustomCircuit);
+                } else {
+                    buffer.clearCircuit();
+                }
+            }
+        }
+        if (extraCircuit != null && !extraCircuit.isEmpty()) {
+            ProgrammableCircuit.getWrappedItem(extraCircuit).ifPresent(buffer::setCustomCircuit);
+        }
     }
 
     protected int[] pushPatternMultiToBuffer(net.minecraft.inventory.InventoryCrafting table, int maxTodo,
@@ -743,7 +830,6 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     public void onRemoval() {
         // 先尝试退还所有缓冲区物品到 AE 网络
         refundAll();
-        removeFromGridCache();
         // Notify all linked slaves and proxies that master is gone
         for (MetaTileEntityPatternProviderMappingSlave slave : new ArrayList<>(mappingSlaves)) {
             slave.onMasterRemoved();
@@ -773,52 +859,40 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
      * 退还失败的物品保留在缓冲区中，后续由 onRemoval() 掉落到地面。
      */
     public void refundAll() {
-        IMEMonitor<IAEItemStack> itemMonitor = getItemMonitor();
-        IMEMonitor<IAEFluidStack> fluidMonitor = getFluidMonitor();
+        MEStorage storage = getNetworkStorage();
+        if (storage == null) {
+            return;
+        }
 
         for (PatternBuffer buffer : bufferPool) {
             // 退还物品
-            if (itemMonitor != null) {
-                IItemHandlerModifiable itemHandler = buffer.getItemHandler();
-                for (int slot = 0; slot < itemHandler.getSlots(); slot++) {
-                    ItemStack itemStack = itemHandler.getStackInSlot(slot);
-                    if (itemStack.isEmpty()) continue;
+            IItemHandlerModifiable itemHandler = buffer.getItemHandler();
+            for (int slot = 0; slot < itemHandler.getSlots(); slot++) {
+                ItemStack itemStack = itemHandler.getStackInSlot(slot);
+                AEItemKey itemKey = AEItemKey.of(itemStack);
+                if (itemKey == null) continue;
 
-                    IAEItemStack aeStack = AEItemStack.fromItemStack(itemStack);
-                    if (aeStack == null) continue;
-
-                    IAEItemStack notInserted = itemMonitor.injectItems(aeStack, Actionable.MODULATE, getActionSource());
-                    if (notInserted != null && notInserted.getStackSize() > 0) {
-                        // 退还失败：更新剩余数量
-                        itemStack.setCount((int) notInserted.getStackSize());
-                    } else {
-                        // 全部退还成功
-                        itemHandler.setStackInSlot(slot, ItemStack.EMPTY);
-                    }
+                long inserted = storage.insert(itemKey, itemStack.getCount(), Actionable.MODULATE, getActionSource());
+                long remaining = itemStack.getCount() - inserted;
+                if (remaining <= 0) {
+                    itemHandler.setStackInSlot(slot, ItemStack.EMPTY);
+                } else {
+                    ItemStack remainder = itemStack.copy();
+                    remainder.setCount((int) remaining);
+                    itemHandler.setStackInSlot(slot, remainder);
                 }
             }
 
             // 退还流体
-            if (fluidMonitor != null) {
-                FluidTankList fluidHandler = buffer.getFluidHandler();
-                for (int tank = 0; tank < fluidHandler.getTanks(); tank++) {
-                    FluidStack fluidStack = fluidHandler.getTankAt(tank).getFluid();
-                    if (fluidStack == null || fluidStack.amount <= 0) continue;
+            FluidTankList fluidHandler = buffer.getFluidHandler();
+            for (int tank = 0; tank < fluidHandler.getTanks(); tank++) {
+                FluidStack fluidStack = fluidHandler.getTankAt(tank).getFluid();
+                AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
+                if (fluidKey == null) continue;
 
-                    IAEFluidStack aeFluid = AEApi.instance().storage()
-                            .getStorageChannel(IFluidStorageChannel.class)
-                            .createStack(fluidStack);
-                    if (aeFluid == null) continue;
-
-                    IAEFluidStack remaining = fluidMonitor.injectItems(aeFluid, Actionable.MODULATE, getActionSource());
-                    if (remaining != null && remaining.getStackSize() > 0) {
-                        // 退还部分成功
-                        fluidHandler.getTankAt(tank).drain(
-                                (int) (aeFluid.getStackSize() - remaining.getStackSize()), true);
-                    } else {
-                        // 全部退还成功
-                        fluidHandler.getTankAt(tank).drain(fluidStack.amount, true);
-                    }
+                long inserted = storage.insert(fluidKey, fluidStack.amount, Actionable.MODULATE, getActionSource());
+                if (inserted > 0) {
+                    fluidHandler.getTankAt(tank).drain((int) Math.min(inserted, Integer.MAX_VALUE), true);
                 }
             }
 
@@ -1214,16 +1288,16 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                                 .child(new TextWidget<>(IKey.str("无线代理模式")))
                                                 .childIf(isUseProxy(), () -> {
                                                     TileEntity tileEntity = this.getWorld().getTileEntity(AEProxy_pos);
-                                                    if (tileEntity instanceof AENetworkPowerTile proxy) {
+                                                    if (tileEntity != null) {
                                                         return Flow.column()
                                                                 .widthRel(1f)
-                                                                .child(new TextWidget<>(IKey.str("连接至无线网络")))
+                                                                .child(new TextWidget<>(IKey.str("已选择网络节点")))
                                                                 .child(new TextWidget<>(IKey.dynamic(() ->
-                                                                        "位置:" + proxy.getLocation()
+                                                                        "位置:" + AEProxy_pos
                                                                 )))
                                                                 .child(new TextWidget<>(IKey.dynamic(() ->
                                                                         "名称:" +
-                                                                                proxy.getBlockType().getLocalizedName()
+                                                                                tileEntity.getBlockType().getLocalizedName()
                                                                 )));
                                                     } else {
                                                         return Flow.column()
@@ -1320,35 +1394,53 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     /**
      * 缓冲区签名 — 用于判断材料是否应该进入同一个缓冲区。
-     * 比较物品/流体的类型和单份样板数量，避免材料种类相同但配方不同的样板串到同一缓冲区。
+     * 保留 Supergiant 按样板输入槽位给出的 KeyCounter[]，避免在 AE 边界丢失输入类型和数量信息。
+     * GT 的物品、流体和电路槽位需求仅作为该数组的执行层投影。
      */
     public static class BufferSignature {
-        private final List<ItemStack> itemTypes;
-        private final List<FluidStack> fluidTypes;
-        private final List<ItemStack> circuitStacks;
+        private final KeyCounter[] inputCounters;
         @Nullable
         private final String patternKey;
         @Nullable
         private final String recipeMapName;
 
-        public BufferSignature(List<ItemStack> itemTypes, List<FluidStack> fluidTypes, List<ItemStack> circuitStacks,
-                               @Nullable String patternKey, @Nullable String recipeMapName) {
-            this.itemTypes = itemTypes;
-            this.fluidTypes = fluidTypes;
-            this.circuitStacks = circuitStacks;
+        // These views are derived from inputCounters and are never serialized.
+        private transient List<ItemStack> itemTypes;
+        private transient List<FluidStack> fluidTypes;
+        private transient List<ItemStack> circuitStacks;
+
+        public BufferSignature(KeyCounter[] inputCounters, @Nullable String patternKey,
+                               @Nullable String recipeMapName) {
+            this.inputCounters = copyInputCounters(inputCounters);
             this.patternKey = patternKey;
             this.recipeMapName = recipeMapName;
         }
 
+        /**
+         * Returns a copy so callers cannot mutate the stored AE-side signature.
+         */
+        public KeyCounter[] getInputCounters() {
+            return copyInputCounters(inputCounters);
+        }
+
         public List<ItemStack> getItemTypes() {
+            if (itemTypes == null) {
+                itemTypes = Collections.unmodifiableList(deriveItemTypes(inputCounters));
+            }
             return itemTypes;
         }
 
         public List<FluidStack> getFluidTypes() {
+            if (fluidTypes == null) {
+                fluidTypes = Collections.unmodifiableList(deriveFluidTypes(inputCounters));
+            }
             return fluidTypes;
         }
 
         public List<ItemStack> getCircuitStacks() {
+            if (circuitStacks == null) {
+                circuitStacks = Collections.unmodifiableList(deriveCircuitStacks(inputCounters));
+            }
             return circuitStacks;
         }
 
@@ -1358,31 +1450,18 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         }
 
         /**
-         * 比较两个签名是否匹配（材料类型和单份样板数量完全相同）。
+         * 比较两个签名是否匹配。输入槽位的顺序必须一致，但每个 KeyCounter 内部的遍历顺序不影响结果。
          */
         public boolean matches(BufferSignature other) {
+            if (other == null) return false;
             if (!Objects.equals(this.patternKey, other.patternKey)) return false;
             if (!Objects.equals(this.recipeMapName, other.recipeMapName)) return false;
-            if (this.itemTypes.size() != other.itemTypes.size()) return false;
-            if (this.fluidTypes.size() != other.fluidTypes.size()) return false;
-            if (this.circuitStacks.size() != other.circuitStacks.size()) return false;
+            if (this.inputCounters.length != other.inputCounters.length) return false;
 
-            // 比较物品类型和单份数量
-            for (int i = 0; i < this.itemTypes.size(); i++) {
-                if (!ItemStack.areItemsEqual(this.itemTypes.get(i), other.itemTypes.get(i))) return false;
-                if (!ItemStack.areItemStackTagsEqual(this.itemTypes.get(i), other.itemTypes.get(i))) return false;
-                if (this.itemTypes.get(i).getCount() != other.itemTypes.get(i).getCount()) return false;
-            }
-
-            // 比较流体类型和单份数量
-            for (int i = 0; i < this.fluidTypes.size(); i++) {
-                if (!this.fluidTypes.get(i).isFluidEqual(other.fluidTypes.get(i))) return false;
-                if (this.fluidTypes.get(i).amount != other.fluidTypes.get(i).amount) return false;
-            }
-
-            // 比较电路
-            for (int i = 0; i < this.circuitStacks.size(); i++) {
-                if (!ItemStack.areItemStacksEqual(this.circuitStacks.get(i), other.circuitStacks.get(i))) return false;
+            for (int i = 0; i < this.inputCounters.length; i++) {
+                if (!matchesCounter(this.inputCounters[i], other.inputCounters[i])) {
+                    return false;
+                }
             }
 
             return true;
@@ -1396,25 +1475,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             int hash = 1;
             hash = 31 * hash + Objects.hashCode(patternKey);
             hash = 31 * hash + Objects.hashCode(recipeMapName);
-            for (ItemStack stack : itemTypes) {
-                hash = 31 * hash + Item.getIdFromItem(stack.getItem());
-                hash = 31 * hash + stack.getMetadata();
-                hash = 31 * hash + stack.getCount();
-                if (stack.getTagCompound() != null) {
-                    hash = 31 * hash + stack.getTagCompound().hashCode();
-                }
-            }
-            for (FluidStack fluid : fluidTypes) {
-                hash = 31 * hash + FluidRegistry.getFluidName(fluid.getFluid()).hashCode();
-                hash = 31 * hash + fluid.amount;
-            }
-            for (ItemStack circuitStack : circuitStacks) {
-                if (circuitStack.isEmpty()) continue;
-                hash = 31 * hash + Item.getIdFromItem(circuitStack.getItem());
-                hash = 31 * hash + circuitStack.getMetadata();
-                if (circuitStack.getTagCompound() != null) {
-                    hash = 31 * hash + circuitStack.getTagCompound().hashCode();
-                }
+            for (KeyCounter counter : inputCounters) {
+                hash = 31 * hash + getCounterHash(counter);
             }
             return hash;
         }
@@ -1425,25 +1487,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         public NBTTagCompound writeToNBT() {
             NBTTagCompound tag = new NBTTagCompound();
 
-            NBTTagList itemList = new NBTTagList();
-            for (ItemStack stack : itemTypes) {
-                itemList.appendTag(stack.writeToNBT(new NBTTagCompound()));
+            NBTTagList counterList = new NBTTagList();
+            for (KeyCounter counter : inputCounters) {
+                counterList.appendTag(GenericStack.writeList(toGenericStacks(counter)));
             }
-            tag.setTag("Items", itemList);
-
-            NBTTagList fluidList = new NBTTagList();
-            for (FluidStack fluid : fluidTypes) {
-                fluidList.appendTag(fluid.writeToNBT(new NBTTagCompound()));
-            }
-            tag.setTag("Fluids", fluidList);
-
-            NBTTagList circuitList = new NBTTagList();
-            for (ItemStack circuitStack : circuitStacks) {
-                circuitList.appendTag(circuitStack.writeToNBT(new NBTTagCompound()));
-            }
-            if (circuitList.tagCount() > 0) {
-                tag.setTag("Circuits", circuitList);
-            }
+            tag.setTag("InputCounters", counterList);
             if (patternKey != null) tag.setString("PatternKey", patternKey);
             if (recipeMapName != null) tag.setString("RecipeMap", recipeMapName);
 
@@ -1454,31 +1502,147 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
          * 从 NBT 反序列化签名。
          */
         public static BufferSignature readFromNBT(NBTTagCompound tag) {
-            List<ItemStack> items = new ArrayList<>();
-            NBTTagList itemList = tag.getTagList("Items", Constants.NBT.TAG_COMPOUND);
-            for (int i = 0; i < itemList.tagCount(); i++) {
-                items.add(new ItemStack(itemList.getCompoundTagAt(i)));
-            }
-
-            List<FluidStack> fluids = new ArrayList<>();
-            NBTTagList fluidList = tag.getTagList("Fluids", Constants.NBT.TAG_COMPOUND);
-            for (int i = 0; i < fluidList.tagCount(); i++) {
-                fluids.add(FluidStack.loadFluidStackFromNBT(fluidList.getCompoundTagAt(i)));
-            }
-
-            List<ItemStack> circuits = new ArrayList<>();
-            if (tag.hasKey("Circuits", Constants.NBT.TAG_LIST)) {
-                NBTTagList circuitList = tag.getTagList("Circuits", Constants.NBT.TAG_COMPOUND);
-                for (int i = 0; i < circuitList.tagCount(); i++) {
-                    circuits.add(new ItemStack(circuitList.getCompoundTagAt(i)));
-                }
-            } else if (tag.hasKey("Circuit")) {
-                circuits.add(new ItemStack(tag.getCompoundTag("Circuit")));
+            NBTTagList serializedCounters = tag.getTagList("InputCounters", Constants.NBT.TAG_LIST);
+            KeyCounter[] inputCounters = new KeyCounter[serializedCounters.tagCount()];
+            for (int i = 0; i < serializedCounters.tagCount(); i++) {
+                NBTBase serializedCounter = serializedCounters.get(i);
+                inputCounters[i] = serializedCounter instanceof NBTTagList counter
+                        ? readCounter(counter)
+                        : new KeyCounter();
             }
 
             String patternKey = tag.hasKey("PatternKey") ? tag.getString("PatternKey") : null;
             String recipeMapName = tag.hasKey("RecipeMap") ? tag.getString("RecipeMap") : null;
-            return new BufferSignature(items, fluids, circuits, patternKey, recipeMapName);
+            return new BufferSignature(inputCounters, patternKey, recipeMapName);
+        }
+
+        private static KeyCounter[] copyInputCounters(KeyCounter[] source) {
+            if (source == null || source.length == 0) {
+                return new KeyCounter[0];
+            }
+
+            KeyCounter[] copy = new KeyCounter[source.length];
+            for (int i = 0; i < source.length; i++) {
+                KeyCounter copiedCounter = new KeyCounter();
+                if (source[i] != null) {
+                    copiedCounter.addAll(source[i]);
+                    copiedCounter.removeZeros();
+                }
+                copy[i] = copiedCounter;
+            }
+            return copy;
+        }
+
+        private static boolean matchesCounter(KeyCounter left, KeyCounter right) {
+            if (left.size() != right.size()) {
+                return false;
+            }
+            for (var entry : left) {
+                if (entry.getLongValue() != right.get(entry.getKey())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int getCounterHash(KeyCounter counter) {
+            int hash = counter.size();
+            for (var entry : counter) {
+                hash += 31 * entry.getKey().hashCode() + Long.hashCode(entry.getLongValue());
+            }
+            return hash;
+        }
+
+        private static List<GenericStack> toGenericStacks(KeyCounter counter) {
+            List<GenericStack> stacks = new ArrayList<>(counter.size());
+            for (var entry : counter) {
+                if (entry.getLongValue() > 0) {
+                    stacks.add(new GenericStack(entry.getKey(), entry.getLongValue()));
+                }
+            }
+            return stacks;
+        }
+
+        private static KeyCounter readCounter(NBTTagList tag) {
+            KeyCounter counter = new KeyCounter();
+            for (GenericStack stack : GenericStack.readList(tag)) {
+                if (stack != null && stack.amount() > 0) {
+                    counter.add(stack.what(), stack.amount());
+                }
+            }
+            return counter;
+        }
+
+        private static List<ItemStack> deriveItemTypes(KeyCounter[] inputCounters) {
+            List<ItemStack> result = new ArrayList<>();
+            for (KeyCounter counter : inputCounters) {
+                for (var entry : counter) {
+                    if (!(entry.getKey() instanceof AEItemKey itemKey) || !isValidStackAmount(entry.getLongValue())) {
+                        continue;
+                    }
+                    ItemStack stack = itemKey.toStack((int) entry.getLongValue());
+                    if (ProgrammableCircuit.getInstanceFor(stack) == null) {
+                        addItemRequirement(result, stack);
+                    }
+                }
+            }
+            result.sort(BufferSignature::compareItemTypes);
+            return result;
+        }
+
+        private static List<FluidStack> deriveFluidTypes(KeyCounter[] inputCounters) {
+            List<FluidStack> result = new ArrayList<>();
+            for (KeyCounter counter : inputCounters) {
+                for (var entry : counter) {
+                    if (entry.getKey() instanceof AEFluidKey fluidKey && isValidStackAmount(entry.getLongValue())) {
+                        addFluidRequirement(result, fluidKey.toStack((int) entry.getLongValue()));
+                    }
+                }
+            }
+            result.sort(BufferSignature::compareFluidTypes);
+            return result;
+        }
+
+        private static List<ItemStack> deriveCircuitStacks(KeyCounter[] inputCounters) {
+            List<ItemStack> result = new ArrayList<>();
+            for (KeyCounter counter : inputCounters) {
+                for (var entry : counter) {
+                    if (!(entry.getKey() instanceof AEItemKey itemKey) || !isValidStackAmount(entry.getLongValue())) {
+                        continue;
+                    }
+                    ItemStack stack = itemKey.toStack((int) entry.getLongValue());
+                    if (ProgrammableCircuit.getInstanceFor(stack) != null) {
+                        ItemStack circuit = stack.copy();
+                        circuit.setCount(1);
+                        result.add(circuit);
+                    }
+                }
+            }
+            result.sort(BufferSignature::compareItemTypes);
+            return result;
+        }
+
+        private static int compareItemTypes(ItemStack left, ItemStack right) {
+            int comparison = String.valueOf(left.getItem().getRegistryName())
+                    .compareTo(String.valueOf(right.getItem().getRegistryName()));
+            if (comparison != 0) return comparison;
+
+            comparison = Integer.compare(left.getMetadata(), right.getMetadata());
+            if (comparison != 0) return comparison;
+
+            return String.valueOf(left.getTagCompound()).compareTo(String.valueOf(right.getTagCompound()));
+        }
+
+        private static int compareFluidTypes(FluidStack left, FluidStack right) {
+            int comparison = String.valueOf(left.getFluid().getName()).compareTo(right.getFluid().getName());
+            if (comparison != 0) return comparison;
+
+            return left.writeToNBT(new NBTTagCompound()).toString()
+                    .compareTo(right.writeToNBT(new NBTTagCompound()).toString());
+        }
+
+        private static boolean isValidStackAmount(long amount) {
+            return amount > 0 && amount <= Integer.MAX_VALUE;
         }
     }
 

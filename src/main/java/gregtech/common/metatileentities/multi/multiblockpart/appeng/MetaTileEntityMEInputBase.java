@@ -28,10 +28,9 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.IStorageChannel;
-import appeng.api.storage.data.IAEStack;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.api.IPanelHandler;
 import com.cleanroommc.modularui.api.drawable.IDrawable;
 import com.cleanroommc.modularui.api.drawable.IKey;
@@ -54,22 +53,20 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 
-public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AEStackType>>
-        extends MetaTileEntityAEHostableChannelPart<AEStackType>
+public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostableChannelPart
         implements IControllable, IGhostSlotConfigurable, IDataStickIntractable {
 
     public final static int CONFIG_SIZE = 16;
     public static final String WORKING_TAG = "WorkingEnabled";
     public static final String SYNC_HANDLER_NAME = "aeSync";
 
-    protected IExportOnlyAEStackList<AEStackType> aeHandler;
+    protected IExportOnlyAEStackList aeHandler;
     protected GhostCircuitItemStackHandler circuitInventory;
     protected boolean workingEnabled = true;
     protected boolean preciseMode = false;
 
-    public MetaTileEntityMEInputBase(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch,
-                                     Class<? extends IStorageChannel<AEStackType>> storageChannel) {
-        super(metaTileEntityId, tier, isExportHatch, storageChannel);
+    public MetaTileEntityMEInputBase(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch) {
+        super(metaTileEntityId, tier, isExportHatch);
     }
 
     @Override
@@ -84,9 +81,9 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
         return circuitInventory;
     }
 
-    protected abstract @NotNull IExportOnlyAEStackList<AEStackType> initializeAEHandler();
+    protected abstract @NotNull IExportOnlyAEStackList initializeAEHandler();
 
-    protected abstract @NotNull IExportOnlyAEStackList<AEStackType> getAEHandler();
+    protected abstract @NotNull IExportOnlyAEStackList getAEHandler();
 
     @Override
     public void update() {
@@ -109,38 +106,36 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
     }
 
     protected void syncME() {
-        IMEMonitor<AEStackType> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor == null) return;
 
-        for (ExportOnlyAESlot<AEStackType> slot : getAEHandler().getInventory()) {
-            AEStackType exceedStack = slot.exceedStack();
+        for (ExportOnlyAESlot slot : getAEHandler().getInventory()) {
+            GenericStack exceedStack = slot.exceedStack();
             if (exceedStack != null) {
-                long total = exceedStack.getStackSize();
-                AEStackType notInserted = monitor.injectItems(exceedStack, Actionable.MODULATE, getActionSource());
-                if (notInserted != null && notInserted.getStackSize() > 0L) {
-                    slot.decrementStock(total - notInserted.getStackSize());
-                    continue;
-                } else {
-                    slot.decrementStock(total);
-                }
+                long inserted = monitor.insert(exceedStack.what(), exceedStack.amount(), Actionable.MODULATE,
+                        getActionSource());
+                slot.decrementStock(inserted);
+                if (inserted < exceedStack.amount()) continue;
             }
 
-            AEStackType requestStack = slot.requestStack();
+            GenericStack requestStack = slot.requestStack();
             if (requestStack == null) continue;
 
             // Precise mode: only extract if network has enough stock >= config amount
             if (preciseMode) {
-                AEStackType simRequest = requestStack.copy();
-                simRequest.setStackSize(slot.getConfig() != null ? slot.getConfig().getStackSize() : requestStack.getStackSize());
-                AEStackType simResult = monitor.extractItems(simRequest, Actionable.SIMULATE, getActionSource());
-                if (simResult == null || simResult.getStackSize() < simRequest.getStackSize()) {
+                GenericStack config = slot.getConfig();
+                long requiredAmount = config != null ? config.amount() : requestStack.amount();
+                if (monitor.extract(requestStack.what(), requiredAmount, Actionable.SIMULATE,
+                        getActionSource()) < requiredAmount) {
                     continue;
                 }
             }
 
-            AEStackType extracted = monitor.extractItems(requestStack, Actionable.MODULATE, getActionSource());
-            if (extracted == null) continue;
-            slot.addStack(extracted);
+            long extracted = monitor.extract(requestStack.what(), requestStack.amount(), Actionable.MODULATE,
+                    getActionSource());
+            if (extracted > 0) {
+                slot.addStack(new GenericStack(requestStack.what(), extracted));
+            }
         }
     }
 
@@ -151,14 +146,14 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
     }
 
     protected void flushInventory() {
-        IMEMonitor<AEStackType> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor == null) return;
 
-        for (ExportOnlyAESlot<AEStackType> slot : getAEHandler().getInventory()) {
-            AEStackType stock = slot.getStock();
+        for (ExportOnlyAESlot slot : getAEHandler().getInventory()) {
+            GenericStack stock = slot.getStock();
 
             if (stock == null) continue;
-            monitor.injectItems(stock, Actionable.MODULATE, getActionSource());
+            monitor.insert(stock.what(), stock.amount(), Actionable.MODULATE, getActionSource());
         }
     }
 
@@ -167,7 +162,7 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
         return true;
     }
 
-    protected abstract @NotNull AESyncHandler<AEStackType> createAESyncHandler();
+    protected abstract @NotNull AESyncHandler createAESyncHandler();
 
     @Override
     public ModularPanel buildUI(PosGuiData guiData, PanelSyncManager panelSyncManager, UISettings settings) {
@@ -311,7 +306,7 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
     }
 
     protected ModularPanel buildMultiplierPopup(PanelSyncManager syncManager, IPanelHandler syncHandler) {
-        AESyncHandler<?> aeSyncHandler = ((PanelSyncHandler) syncHandler).getSyncManager()
+        AESyncHandler aeSyncHandler = ((PanelSyncHandler) syncHandler).getSyncManager()
                 .findSyncHandler(SYNC_HANDLER_NAME, 0, AESyncHandler.class);
         IntValue multiplier = new IntValue(2);
 
@@ -440,16 +435,14 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
         NBTTagCompound tag = new NBTTagCompound();
         NBTTagCompound configStacks = new NBTTagCompound();
 
-        ExportOnlyAESlot<AEStackType>[] inventory = getAEHandler().getInventory();
+        ExportOnlyAESlot[] inventory = getAEHandler().getInventory();
         tag.setTag("ConfigStacks", configStacks);
         for (int index = 0; index < CONFIG_SIZE; index++) {
-            ExportOnlyAESlot<AEStackType> slot = inventory[index];
-            AEStackType config = slot.getConfig();
+            ExportOnlyAESlot slot = inventory[index];
+            GenericStack config = slot.getConfig();
             if (config == null) continue;
 
-            NBTTagCompound stackNBT = new NBTTagCompound();
-            config.writeToNBT(stackNBT);
-            configStacks.setTag(Integer.toString(index), stackNBT);
+            configStacks.setTag(Integer.toString(index), GenericStack.writeTag(config));
         }
 
         tag.setByte("GhostCircuit", (byte) this.circuitInventory.getCircuitValue());
@@ -471,14 +464,14 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
 
     protected void readConfigFromTag(NBTTagCompound tag) {
         if (tag.hasKey("ConfigStacks")) {
-            ExportOnlyAESlot<AEStackType>[] inventory = getAEHandler().getInventory();
+            ExportOnlyAESlot[] inventory = getAEHandler().getInventory();
             NBTTagCompound configStacks = tag.getCompoundTag("ConfigStacks");
             for (int index = 0; index < CONFIG_SIZE; index++) {
-                AEStackType stack = null;
+                GenericStack stack = null;
                 String key = Integer.toString(index);
                 if (configStacks.hasKey(key)) {
                     NBTTagCompound configTag = configStacks.getCompoundTag(key);
-                    stack = readStackFromNBT(configTag);
+                    stack = GenericStack.readTag(configTag);
                 }
 
                 inventory[index].setConfig(stack);
@@ -494,6 +487,4 @@ public abstract class MetaTileEntityMEInputBase<AEStackType extends IAEStack<AES
         }
     }
 
-    @Nullable
-    protected abstract AEStackType readStackFromNBT(@NotNull NBTTagCompound tagCompound);
 }

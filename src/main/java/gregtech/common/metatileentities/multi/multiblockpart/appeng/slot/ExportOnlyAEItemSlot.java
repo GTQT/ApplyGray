@@ -2,20 +2,21 @@ package gregtech.common.metatileentities.multi.multiblockpart.appeng.slot;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.function.Consumer;
 
-public class ExportOnlyAEItemSlot extends ExportOnlyAESlot<IAEItemStack> implements IItemHandlerModifiable {
+public class ExportOnlyAEItemSlot extends ExportOnlyAESlot implements IItemHandlerModifiable {
 
+    @Nullable
     protected Consumer<Integer> trigger;
 
-    public ExportOnlyAEItemSlot(IAEItemStack config, IAEItemStack stock) {
+    public ExportOnlyAEItemSlot(@Nullable GenericStack config, @Nullable GenericStack stock) {
         super(config, stock);
     }
 
@@ -23,48 +24,39 @@ public class ExportOnlyAEItemSlot extends ExportOnlyAESlot<IAEItemStack> impleme
         super();
     }
 
-    public void setTrigger(Consumer<Integer> trigger) {
+    public void setTrigger(@Nullable Consumer<Integer> trigger) {
         this.trigger = trigger;
     }
 
     @Override
     public void deserializeNBT(NBTTagCompound nbt) {
-        if (nbt.hasKey(CONFIG_TAG)) {
-            NBTTagCompound tag = nbt.getCompoundTag(CONFIG_TAG);
-            // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-            if (tag.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-                this.config = AEItemStack.fromNBT(tag);
-            } else {
-                this.config = AEItemStack.fromItemStack(new ItemStack(tag));
-            }
-        }
+        this.config = readStack(nbt, CONFIG_TAG);
+        this.stock = readStack(nbt, STOCK_TAG);
+    }
 
-        if (nbt.hasKey(STOCK_TAG)) {
-            NBTTagCompound tag = nbt.getCompoundTag(STOCK_TAG);
-            // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-            if (tag.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-                this.stock = AEItemStack.fromNBT(tag);
-            } else {
-                this.stock = AEItemStack.fromItemStack(new ItemStack(tag));
-            }
-        }
+    @Nullable
+    private static GenericStack readStack(NBTTagCompound owner, String key) {
+        return owner.hasKey(key) ? GenericStack.readTag(owner.getCompoundTag(key)) : null;
     }
 
     @Override
-    public @NotNull IConfigurableSlot<IAEItemStack> copy() {
+    public @NotNull ExportOnlyAEItemSlot copy() {
         return new ExportOnlyAEItemSlot(
-                this.config == null ? null : this.config.copy(),
-                this.stock == null ? null : this.stock.copy());
+                this.config == null ? null : copy(this.config),
+                this.stock == null ? null : copy(this.stock));
     }
 
     @Override
     public void decrementStock(long amount) {
-        if (stock == null) return;
-        stock.decStackSize(amount);
+        if (stock == null) {
+            return;
+        }
+        setStack(copy(stock, Math.max(0, stock.amount() - amount)));
     }
 
     @Override
-    public void setStackInSlot(int slot, @NotNull ItemStack stack) {}
+    public void setStackInSlot(int slot, @NotNull ItemStack stack) {
+    }
 
     @Override
     public int getSlots() {
@@ -74,8 +66,8 @@ public class ExportOnlyAEItemSlot extends ExportOnlyAESlot<IAEItemStack> impleme
     @NotNull
     @Override
     public ItemStack getStackInSlot(int slot) {
-        if (slot == 0 && this.stock != null) {
-            return this.stock.getDefinition();
+        if (slot == 0 && this.stock != null && this.stock.what() instanceof AEItemKey itemKey) {
+            return itemKey.toStack(saturatingInt(this.stock.amount()));
         }
         return ItemStack.EMPTY;
     }
@@ -89,49 +81,57 @@ public class ExportOnlyAEItemSlot extends ExportOnlyAESlot<IAEItemStack> impleme
     @NotNull
     @Override
     public ItemStack extractItem(int slot, int amount, boolean simulate) {
-        if (slot == 0 && this.stock != null) {
-            int extracted = (int) Math.min(this.stock.getStackSize(), amount);
-            ItemStack result = this.stock.createItemStack();
-            result.setCount(extracted);
-            if (!simulate) {
-                this.stock.decStackSize(extracted);
-                if (this.stock.getStackSize() == 0) {
-                    this.stock = null;
-                }
-            }
-            if (this.trigger != null) {
-                this.trigger.accept(0);
-            }
-            return result;
+        if (slot != 0 || this.stock == null || !(this.stock.what() instanceof AEItemKey itemKey)) {
+            return ItemStack.EMPTY;
         }
-        return ItemStack.EMPTY;
+
+        int extracted = (int) Math.min(this.stock.amount(), amount);
+        ItemStack result = itemKey.toStack(extracted);
+        if (!simulate) {
+            long remaining = this.stock.amount() - extracted;
+            this.stock = remaining == 0 ? null : copy(this.stock, remaining);
+            notifyChanged();
+        }
+        return result;
     }
 
     @Override
-    public void addStack(IAEItemStack stack) {
-        if (this.stock == null) {
-            this.stock = stack.copy();
+    public void addStack(GenericStack stack) {
+        if (!(stack.what() instanceof AEItemKey)) {
+            return;
+        }
+        if (this.stock == null || !this.stock.what().equals(stack.what())) {
+            this.stock = copy(stack);
         } else {
-            this.stock.add(stack);
+            this.stock = new GenericStack(this.stock.what(), this.stock.amount() + stack.amount());
         }
-        this.trigger.accept(0);
+        notifyChanged();
     }
 
     @Override
-    public void setStack(IAEItemStack stack) {
+    public void setStack(@Nullable GenericStack stack) {
+        if (stack != null && !(stack.what() instanceof AEItemKey)) {
+            return;
+        }
         if (this.stock == null && stack == null) {
             return;
-        } else if (stack == null) {
-            this.stock = null;
-        } else {
-            // todo this could maybe be improved with better comparison check
-            this.stock = stack.copy();
         }
-        this.trigger.accept(0);
+        this.stock = stack == null || stack.amount() <= 0 ? null : copy(stack);
+        notifyChanged();
     }
 
     @Override
     public int getSlotLimit(int slot) {
         return Integer.MAX_VALUE;
+    }
+
+    private void notifyChanged() {
+        if (this.trigger != null) {
+            this.trigger.accept(0);
+        }
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(0, amount);
     }
 }

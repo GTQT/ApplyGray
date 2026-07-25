@@ -40,13 +40,11 @@ import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.storage.data.IAEStack;
-import appeng.fluids.util.AEFluidStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -56,7 +54,6 @@ import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
 import com.cleanroommc.modularui.utils.Alignment;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import com.cleanroommc.modularui.value.sync.BooleanSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
 import com.cleanroommc.modularui.value.sync.SyncHandler;
@@ -70,7 +67,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
+import java.util.ListIterator;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -81,8 +78,8 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
     public final static String ITEM_BUFFER_TAG = "ItemBuffer";
     public final static String FLUID_BUFFER_TAG = "FluidBuffer";
     protected boolean workingEnabled = true;
-    protected List<IAEItemStack> internalItemBuffer;
-    protected List<IAEFluidStack> internalFluidBuffer;
+    protected List<GenericStack> internalItemBuffer;
+    protected List<GenericStack> internalFluidBuffer;
 
     public MetaTileEntityMEDualExportHatch(ResourceLocation metaTileEntityId) {
         super(metaTileEntityId, 6, true);
@@ -104,29 +101,41 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
     public void update() {
         super.update();
         if (!getWorld().isRemote && workingEnabled && isOnline && shouldSyncME()) {
-            // 分别处理物品和流体缓冲
-            processBuffer(internalItemBuffer, getItemMonitor());
-            processBuffer(internalFluidBuffer, getFluidMonitor());
+            MEStorage monitor = getNetworkStorage();
+            processBuffer(internalItemBuffer, monitor);
+            processBuffer(internalFluidBuffer, monitor);
         }
     }
 
     /**
      * 通用缓冲处理逻辑，避免代码重复
      */
-    private <T extends IAEStack<T>> void processBuffer(List<T> buffer, @Nullable IMEMonitor<T> monitor) {
+    private void processBuffer(List<GenericStack> buffer, @Nullable MEStorage monitor) {
         if (buffer.isEmpty() || monitor == null) return;
 
-        Iterator<T> iterator = buffer.iterator();
+        ListIterator<GenericStack> iterator = buffer.listIterator();
         while (iterator.hasNext()) {
-            T stackInBuffer = iterator.next();
-            T notPushed = monitor.injectItems(stackInBuffer.copy(), Actionable.MODULATE, getActionSource());
+            GenericStack stackInBuffer = iterator.next();
+            long inserted = monitor.insert(stackInBuffer.what(), stackInBuffer.amount(), Actionable.MODULATE,
+                    getActionSource());
 
-            if (notPushed != null && notPushed.getStackSize() > 0) {
-                stackInBuffer.setStackSize(notPushed.getStackSize());
+            if (inserted < stackInBuffer.amount()) {
+                iterator.set(new GenericStack(stackInBuffer.what(), stackInBuffer.amount() - inserted));
             } else {
                 iterator.remove();
             }
         }
+    }
+
+    private static void appendToBuffer(List<GenericStack> buffer, GenericStack stack) {
+        for (ListIterator<GenericStack> iterator = buffer.listIterator(); iterator.hasNext();) {
+            GenericStack buffered = iterator.next();
+            if (buffered.what().equals(stack.what())) {
+                iterator.set(GenericStack.sum(buffered, stack));
+                return;
+            }
+        }
+        buffer.add(stack);
     }
 
     /**
@@ -134,8 +143,11 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
      */
     @SideOnly(Side.CLIENT)
     protected void addItemStackLine(@NotNull IRichTextBuilder<?> text,
-                                    @NotNull IAEItemStack wrappedStack) {
-        ItemStack stack = wrappedStack.getDefinition();
+                                     @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEItemKey itemKey)) {
+            return;
+        }
+        ItemStack stack = itemKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -143,15 +155,18 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
                 .tooltipAutoUpdate(true)
                 .tooltipBuilder(tooltip -> tooltip.addFromItem(stack)));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "x"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "x"));
     }
 
     /**
      * 添加流体Stack到文本显示
      */
     @SideOnly(Side.CLIENT)
-    protected void addFluidStackLine(@NotNull IRichTextBuilder<?> text, @NotNull IAEFluidStack wrappedStack) {
-        FluidStack stack = wrappedStack.getFluidStack();
+    protected void addFluidStackLine(@NotNull IRichTextBuilder<?> text, @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEFluidKey fluidKey)) {
+            return;
+        }
+        FluidStack stack = fluidKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -160,7 +175,7 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
                     FluidTooltipUtil.handleFluidTooltip(tooltip, stack);
                 }));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "L"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "L"));
     }
 
     @Override
@@ -199,17 +214,13 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
 
     @Override
     public void onRemoval() {
-        IMEMonitor<IAEItemStack> itemMonitor = getItemMonitor();
-        if (itemMonitor != null) {
-            for (IAEItemStack stack : internalItemBuffer) {
-                itemMonitor.injectItems(stack.copy(), Actionable.MODULATE, getActionSource());
+        MEStorage monitor = getNetworkStorage();
+        if (monitor != null) {
+            for (GenericStack stack : internalItemBuffer) {
+                monitor.insert(stack.what(), stack.amount(), Actionable.MODULATE, getActionSource());
             }
-        }
-
-        IMEMonitor<IAEFluidStack> fluidMonitor = getFluidMonitor();
-        if (fluidMonitor != null) {
-            for (IAEFluidStack stack : internalFluidBuffer) {
-                fluidMonitor.injectItems(stack.copy(), Actionable.MODULATE, getActionSource());
+            for (GenericStack stack : internalFluidBuffer) {
+                monitor.insert(stack.what(), stack.amount(), Actionable.MODULATE, getActionSource());
             }
         }
         super.onRemoval();
@@ -259,18 +270,18 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
         super.writeToNBT(data);
         data.setBoolean(WORKING_TAG, workingEnabled);
         NBTTagList nbtList = new NBTTagList();
-        for (IAEItemStack stack : internalItemBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalItemBuffer) {
+            if (stack.what() instanceof AEItemKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(ITEM_BUFFER_TAG, nbtList);
 
         nbtList = new NBTTagList();
-        for (IAEFluidStack stack : internalFluidBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalFluidBuffer) {
+            if (stack.what() instanceof AEFluidKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(FLUID_BUFFER_TAG, nbtList);
 
@@ -284,21 +295,17 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
             this.workingEnabled = data.getBoolean(WORKING_TAG);
         }
         for (NBTBase tag : data.getTagList(ITEM_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalItemBuffer.add(AEItemStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEItemKey) {
+                appendToBuffer(internalItemBuffer, stack);
+            }
         }
         for (NBTBase tag : data.getTagList(FLUID_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalFluidBuffer.add(AEFluidStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEFluidKey) {
+                appendToBuffer(internalFluidBuffer, stack);
+            }
         }
-    }
-
-    protected @NotNull IByteBufDeserializer<IAEFluidStack> getFluidDeserializer() {
-        return AEFluidStack::fromPacket;
-    }
-
-    protected @NotNull IByteBufDeserializer<IAEItemStack> getItemDeserializer() {
-        return AEItemStack::fromPacket;
     }
 
     @Override
@@ -368,8 +375,8 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
     protected class DualStackListSyncHandler extends SyncHandler {
 
         // 客户端缓存
-        private final ObjectArrayList<IAEItemStack> itemCache = new ObjectArrayList<>();
-        private final ObjectArrayList<IAEFluidStack> fluidCache = new ObjectArrayList<>();
+        private final ObjectArrayList<GenericStack> itemCache = new ObjectArrayList<>();
+        private final ObjectArrayList<GenericStack> fluidCache = new ObjectArrayList<>();
         // 变更追踪
         private final IntSet changedItemIndexes = new IntOpenHashSet();
         private final IntSet changedFluidIndexes = new IntOpenHashSet();
@@ -388,24 +395,19 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
 
             if (hasChanges) {
                 syncToClient(0, buf -> {
-                    try {
-                        // 写入物品数据
-                        buf.writeVarInt(itemCache.size());
-                        buf.writeVarInt(changedItemIndexes.size());
-                        for (int idx : changedItemIndexes) {
-                            buf.writeVarInt(idx);
-                            itemCache.get(idx).writeToPacket(buf);
-                        }
-                        // 写入流体数据
-                        buf.writeVarInt(fluidCache.size());
-                        buf.writeVarInt(changedFluidIndexes.size());
-                        for (int idx : changedFluidIndexes) {
-                            buf.writeVarInt(idx);
-                            fluidCache.get(idx).writeToPacket(buf);
-                        }
-                    } catch (IOException e) {
-                        // 网络同步异常，包装为运行时异常避免破坏 syncToClient 签名
-                        throw new RuntimeException("Failed to sync ME output buffer", e);
+                    // 写入物品数据
+                    buf.writeVarInt(itemCache.size());
+                    buf.writeVarInt(changedItemIndexes.size());
+                    for (int idx : changedItemIndexes) {
+                        buf.writeVarInt(idx);
+                        GenericStack.writeBuffer(itemCache.get(idx), buf);
+                    }
+                    // 写入流体数据
+                    buf.writeVarInt(fluidCache.size());
+                    buf.writeVarInt(changedFluidIndexes.size());
+                    for (int idx : changedFluidIndexes) {
+                        buf.writeVarInt(idx);
+                        GenericStack.writeBuffer(fluidCache.get(idx), buf);
                     }
                 });
                 onChange();
@@ -419,9 +421,9 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
          *
          * @return 是否有变更
          */
-        private <T extends IAEStack<T>> boolean detectBufferChanges(boolean init,
-                                                                    List<T> source,
-                                                                    List<T> cache,
+        private boolean detectBufferChanges(boolean init,
+                                                                     List<GenericStack> source,
+                                                                     List<GenericStack> cache,
                                                                     IntSet changedIndexes) {
             int sourceSize = source.size();
 
@@ -429,10 +431,10 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
 
             boolean hasChanges = false;
             for (int i = 0; i < sourceSize; i++) {
-                T newStack = source.get(i);
-                T cached = cache.get(i);
+                GenericStack newStack = source.get(i);
+                GenericStack cached = cache.get(i);
                 if (init || !newStack.equals(cached)) {
-                    T copy = newStack.copy();
+                    GenericStack copy = new GenericStack(newStack.what(), newStack.amount());
                     cache.set(i, copy);
                     changedIndexes.add(i);
                     hasChanges = true;
@@ -462,8 +464,8 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
             int itemChanges = buf.readVarInt();
             for (int i = 0; i < itemChanges; i++) {
                 int idx = buf.readVarInt();
-                IAEItemStack stack = getItemDeserializer().deserialize(buf);
-                itemCache.set(idx, stack);
+                GenericStack stack = GenericStack.readBuffer(buf);
+                if (stack != null) itemCache.set(idx, stack);
             }
 
             // 读取流体数据
@@ -472,8 +474,8 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
             int fluidChanges = buf.readVarInt();
             for (int i = 0; i < fluidChanges; i++) {
                 int idx = buf.readVarInt();
-                IAEFluidStack stack = getFluidDeserializer().deserialize(buf);
-                fluidCache.set(idx, stack);
+                GenericStack stack = GenericStack.readBuffer(buf);
+                if (stack != null) fluidCache.set(idx, stack);
             }
 
             onChange();
@@ -492,12 +494,12 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
             if (changeListener != null) changeListener.run();
         }
 
-        public void cacheForEachItem(@NotNull Consumer<IAEItemStack> consumer) {
-            for (IAEItemStack stack : itemCache) consumer.accept(stack);
+        public void cacheForEachItem(@NotNull Consumer<GenericStack> consumer) {
+            for (GenericStack stack : itemCache) consumer.accept(stack);
         }
 
-        public void cacheForEachFluid(@NotNull Consumer<IAEFluidStack> consumer) {
-            for (IAEFluidStack stack : fluidCache) consumer.accept(stack);
+        public void cacheForEachFluid(@NotNull Consumer<GenericStack> consumer) {
+            for (GenericStack stack : fluidCache) consumer.accept(stack);
         }
     }
 
@@ -533,22 +535,9 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
                 return ItemStack.EMPTY;
             }
 
-            int amount = stackToInsert.getCount();
-            for (IAEItemStack bufferedStack : internalItemBuffer) {
-                long bufferedStackSize = bufferedStack.getStackSize();
-                if (bufferedStack.equals(stackToInsert) && bufferedStackSize < Long.MAX_VALUE) {
-                    int amountToAdd = (int) Math.min(amount, Long.MAX_VALUE - bufferedStackSize);
-                    bufferedStack.incStackSize(amountToAdd);
-                    amount -= amountToAdd;
-                    if (amount < 1) break;
-                }
-            }
-
-            if (amount > 0) {
-                IAEItemStack newStack = AEItemStack.fromItemStack(stackToInsert);
-                // noinspection DataFlowIssue
-                newStack.setStackSize(amount);
-                internalItemBuffer.add(newStack);
+            GenericStack stack = GenericStack.fromItemStack(stackToInsert);
+            if (stack != null) {
+                appendToBuffer(internalItemBuffer, stack);
             }
 
             trigger();
@@ -603,21 +592,9 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
             }
 
             if (doFill) {
-                int amount = stackToInsert.amount;
-                for (IAEFluidStack bufferedStack : internalFluidBuffer) {
-                    long bufferedStackSize = bufferedStack.getStackSize();
-                    if (bufferedStack.equals(stackToInsert) && bufferedStackSize < Long.MAX_VALUE) {
-                        int amountToAdd = (int) Math.min(amount, Long.MAX_VALUE - bufferedStackSize);
-                        bufferedStack.incStackSize(amountToAdd);
-                        amount -= amountToAdd;
-                        if (amount < 1) break;
-                    }
-                }
-
-                if (amount > 0) {
-                    IAEFluidStack newStack = AEFluidStack.fromFluidStack(stackToInsert);
-                    newStack.setStackSize(amount);
-                    internalFluidBuffer.add(newStack);
+                GenericStack stack = GenericStack.fromFluidStack(stackToInsert);
+                if (stack != null) {
+                    appendToBuffer(internalFluidBuffer, stack);
                 }
 
                 this.trigger();

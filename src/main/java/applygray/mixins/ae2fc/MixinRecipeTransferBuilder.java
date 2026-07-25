@@ -6,108 +6,99 @@ import gregtech.mixins.jei.GuiIngredientAccessor;
 
 import net.minecraft.item.ItemStack;
 
-import appeng.integration.modules.gregtech.CircuitHelper;
-import com.glodblock.github.integration.jei.RecipeTransferBuilder;
-import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
+import ae2.api.stacks.GenericStack;
+import ae2.crafting.pattern.AEProcessingPattern;
+import ae2.integration.modules.hei.GenericIngredientHelper;
+import ae2.integration.modules.hei.PatternEncodingRecipeTransferHandler;
 import mezz.jei.api.gui.IGuiIngredient;
+import mezz.jei.api.gui.IGuiIngredientGroup;
 import mezz.jei.api.gui.IRecipeLayout;
 import mezz.jei.api.ingredients.IIngredientRenderer;
-import org.spongepowered.asm.mixin.Final;
+import mezz.jei.api.ingredients.VanillaTypes;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.Redirect;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Mixin for AE2FC's RecipeTransferBuilder to inject programmable circuits for
- * GT notConsumed inputs that are normally skipped by split().
- * After build() completes, this mixin scans the recipe layout for skipped
- * notConsumed ingredients and appends them as programmable circuit entries
- * into the input map.
+ * Replaces non-consumed GT item inputs with programmable circuits before Supergiant
+ * serializes HEI processing-pattern inputs.
  */
-@Mixin(value = RecipeTransferBuilder.class, remap = false)
+@Mixin(value = PatternEncodingRecipeTransferHandler.class, remap = false)
 public abstract class MixinRecipeTransferBuilder {
 
-    @Shadow
-    @Final
-    private IRecipeLayout recipe;
-
-    @Shadow
-    @Final
-    private Int2ObjectArrayMap<ItemStack[]> in;
-
-    @Inject(method = "build", at = @At("RETURN"), remap = false)
-    private void gregtech$injectProgrammableCircuits(CallbackInfoReturnable<RecipeTransferBuilder> cir) {
-        if (!GTCircuitHelper.isAe2fcTransferEnabled()) {
-            return;
+    @Redirect(
+            method = "encodeProcessingRecipe",
+            at = @At(value = "INVOKE", target =
+                    "Lae2/integration/modules/hei/PatternEncodingRecipeTransferHandler;getGenericInputs(Lmezz/jei/api/gui/IRecipeLayout;)Ljava/util/List;"),
+            remap = false)
+    private static List<List<GenericStack>> applygray$encodeNonConsumedInputs(IRecipeLayout recipeLayout) {
+        List<List<GenericStack>> inputs = new ArrayList<>(GenericIngredientHelper.getIngredients(recipeLayout, true,
+                false, AEProcessingPattern.MAX_INPUT_SLOTS));
+        if (!GTCircuitHelper.isPatternTransferEnabled()) {
+            return inputs;
         }
 
-        CircuitHelper circuitHelper = CircuitHelper.getInstance();
-        Map<Integer, ? extends IGuiIngredient<ItemStack>> ingredients =
-                this.recipe.getItemStacks().getGuiIngredients();
-
-        // Find the next available slot index after existing entries
-        int nextSlotIndex = 0;
-        for (int key : this.in.keySet()) {
-            if (key >= nextSlotIndex) {
-                nextSlotIndex = key + 1;
-            }
+        IGuiIngredientGroup<ItemStack> itemGroup = recipeLayout.getIngredientsGroup(VanillaTypes.ITEM);
+        if (itemGroup == null) {
+            return inputs;
         }
 
-        boolean wrappedCircuitAdded = false;
-        boolean hasProgrammableCircuitInput = false;
+        Map<Integer, ? extends IGuiIngredient<ItemStack>> ingredients = itemGroup.getGuiIngredients();
+        if (ingredients == null || ingredients.isEmpty()) {
+            return inputs;
+        }
 
-        for (Map.Entry<Integer, ? extends IGuiIngredient<ItemStack>> entry : ingredients.entrySet()) {
-            IGuiIngredient<ItemStack> ingredient = entry.getValue();
-            if (!ingredient.isInput()) {
+        int inputSlot = 0;
+        for (IGuiIngredient<ItemStack> ingredient : ingredients.values()) {
+            if (ingredient == null || !ingredient.isInput()) {
                 continue;
             }
 
-            ItemStack displayedItem = ingredient.getDisplayedIngredient();
-            if (displayedItem == null || displayedItem.isEmpty()) {
-                continue;
+            if (applygray$isNotConsumed(ingredient)) {
+                List<GenericStack> circuits = applygray$wrapCircuitAlternatives(ingredient);
+                if (!circuits.isEmpty()) {
+                    while (inputs.size() <= inputSlot) {
+                        inputs.add(new ArrayList<>());
+                    }
+                    inputs.set(inputSlot, circuits);
+                }
             }
+            inputSlot++;
+        }
+        return inputs;
+    }
 
-            // Check if any input already is a programmable circuit
-            if (circuitHelper.isProgrammableCircuit(displayedItem)) {
-                hasProgrammableCircuitInput = true;
-                continue;
-            }
+    private static boolean applygray$isNotConsumed(IGuiIngredient<ItemStack> ingredient) {
+        if (!(ingredient instanceof GuiIngredientAccessor<?> accessor)) {
+            return false;
+        }
+        IIngredientRenderer<?> renderer = accessor.getIngredientRenderer();
+        return renderer instanceof ItemStackTextRenderer textRenderer && textRenderer.isNotConsumed();
+    }
 
-            // Check if this ingredient is notConsumed via renderer
-            boolean notConsumed = false;
-            if (ingredient instanceof GuiIngredientAccessor) {
-                IIngredientRenderer<?> renderer =
-                        ((GuiIngredientAccessor<?>) ingredient).getIngredientRenderer();
-                notConsumed = renderer instanceof ItemStackTextRenderer
-                        && ((ItemStackTextRenderer) renderer).isNotConsumed();
-            }
-
-            if (!notConsumed) {
-                continue;
-            }
-
-            // This is a notConsumed ingredient that was skipped by split(),
-            // wrap it as a programmable circuit
-            ItemStack wrappedStack = circuitHelper.wrapItemAsProgrammableStack(displayedItem);
-            if (wrappedStack != null && !wrappedStack.isEmpty()) {
-                this.in.put(nextSlotIndex, new ItemStack[]{ wrappedStack });
-                nextSlotIndex++;
-                wrappedCircuitAdded = true;
-                hasProgrammableCircuitInput = true;
-            }
+    private static List<GenericStack> applygray$wrapCircuitAlternatives(IGuiIngredient<ItemStack> ingredient) {
+        List<GenericStack> circuits = new ArrayList<>();
+        List<ItemStack> alternatives = ingredient.getAllIngredients();
+        if (alternatives == null || alternatives.isEmpty()) {
+            ItemStack displayed = ingredient.getDisplayedIngredient();
+            alternatives = displayed == null ? List.of() : List.of(displayed);
         }
 
-        // If no circuit was wrapped and no programmable circuit was already present,
-        // add an empty programmable circuit card as a placeholder
-        if (!wrappedCircuitAdded && !hasProgrammableCircuitInput) {
-            ItemStack pcStack = circuitHelper.getProgrammableCircuitStack();
-            if (pcStack != null && !pcStack.isEmpty()) {
-                this.in.put(nextSlotIndex, new ItemStack[]{ pcStack });
+        for (ItemStack alternative : alternatives) {
+            if (alternative == null || alternative.isEmpty()) {
+                continue;
+            }
+            ItemStack circuit = GTCircuitHelper.isProgrammableCircuit(alternative) ? alternative.copy()
+                    : GTCircuitHelper.wrapItemAsProgrammableStack(alternative);
+            GenericStack genericCircuit = circuit == null ? null : GenericStack.fromItemStack(circuit);
+            if (genericCircuit != null && !circuits.contains(genericCircuit)) {
+                circuits.add(genericCircuit);
             }
         }
+        return circuits;
     }
 }

@@ -9,7 +9,7 @@ import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin.SortingIndex;
 import org.jetbrains.annotations.Nullable;
 import zone.rong.mixinbooter.IEarlyMixinLoader;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -35,7 +35,8 @@ public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMix
     }
 
     @Override
-    public void injectData(Map<String, Object> data) {}
+    public void injectData(Map<String, Object> data) {
+    }
 
     @Override
     public String getAccessTransformerClass() {
@@ -44,9 +45,7 @@ public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMix
 
     @Override
     public List<String> getMixinConfigs() {
-        List<String> configs = new ArrayList<>();
-        configs.add("mixins.applygray.core.json");
-        return configs;
+        return Collections.singletonList("mixins.applygray.default.json");
     }
 
     @Override

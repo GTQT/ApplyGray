@@ -27,9 +27,6 @@ import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.IFluidTank;
 
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.fluids.util.AEFluidStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -45,13 +42,13 @@ import org.jetbrains.annotations.Range;
 import java.util.Arrays;
 import java.util.List;
 
-public class MetaTileEntityMEInputHatch extends MetaTileEntityMEInputBase<IAEFluidStack>
+public class MetaTileEntityMEInputHatch extends MetaTileEntityMEInputBase
         implements IMultiblockAbilityPart<IFluidTank> {
 
     public static final String FLUID_BUFFER_TAG = "FluidTanks";
 
     public MetaTileEntityMEInputHatch(ResourceLocation metaTileEntityId, int tier) {
-        super(metaTileEntityId, tier, false, IFluidStorageChannel.class);
+        super(metaTileEntityId, tier, false);
     }
 
     @Override
@@ -76,7 +73,7 @@ public class MetaTileEntityMEInputHatch extends MetaTileEntityMEInputBase<IAEFlu
     }
 
     @Override
-    protected @NotNull AESyncHandler<IAEFluidStack> createAESyncHandler() {
+    protected @NotNull AESyncHandler createAESyncHandler() {
         return new AEFluidSyncHandler(getAEHandler(), this::markDirty, circuitInventory::setCircuitValue);
     }
 
@@ -198,16 +195,6 @@ public class MetaTileEntityMEInputHatch extends MetaTileEntityMEInputBase<IAEFlu
             abilityInstances.add(Arrays.asList(getAEHandler().getInventory()));
         } else if (abilityInstances.isKey(MultiblockAbility.IMPORT_ITEMS)) {
             abilityInstances.add(circuitInventory);
-        }
-    }
-
-    @Override
-    protected @Nullable IAEFluidStack readStackFromNBT(@NotNull NBTTagCompound tagCompound) {
-        // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-        if (tagCompound.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-            return AEFluidStack.fromNBT(tagCompound);
-        } else {
-            return AEFluidStack.fromFluidStack(FluidStack.loadFluidStackFromNBT(tagCompound));
         }
     }
 

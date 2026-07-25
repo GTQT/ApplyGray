@@ -26,26 +26,24 @@ import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.storage.channels.IItemStorageChannel;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
 import com.cleanroommc.modularui.api.drawable.IRichTextBuilder;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEItemStack>
+public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase
         implements IMultiblockAbilityPart<IItemHandlerModifiable> {
 
     public final static String ITEM_BUFFER_TAG = "ItemBuffer";
 
     public MetaTileEntityMEOutputBus(ResourceLocation metaTileEntityId) {
-        super(metaTileEntityId, GTValues.EV, IItemStorageChannel.class);
+        super(metaTileEntityId, GTValues.EV);
     }
 
     @Override
@@ -53,16 +51,14 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
         return new MetaTileEntityMEOutputBus(this.metaTileEntityId);
     }
 
-    @Override
-    protected @NotNull IByteBufDeserializer<IAEItemStack> getDeserializer() {
-        return AEItemStack::fromPacket;
-    }
-
     @SideOnly(Side.CLIENT)
     @Override
     protected void addStackLine(@NotNull IRichTextBuilder<?> text,
-                                @NotNull IAEItemStack wrappedStack) {
-        ItemStack stack = wrappedStack.getDefinition();
+                                @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEItemKey itemKey)) {
+            return;
+        }
+        ItemStack stack = itemKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -70,7 +66,7 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
                 .tooltipAutoUpdate(true)
                 .tooltipBuilder(tooltip -> tooltip.addFromItem(stack)));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "x"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "x"));
     }
 
     @Override
@@ -78,10 +74,10 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
         super.writeToNBT(data);
 
         NBTTagList nbtList = new NBTTagList();
-        for (IAEItemStack stack : internalBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalBuffer) {
+            if (stack.what() instanceof AEItemKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(ITEM_BUFFER_TAG, nbtList);
 
@@ -92,8 +88,10 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         for (NBTBase tag : data.getTagList(ITEM_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalBuffer.add(AEItemStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEItemKey) {
+                addToBuffer(stack);
+            }
         }
     }
 
@@ -169,22 +167,9 @@ public class MetaTileEntityMEOutputBus extends MetaTileEntityMEOutputBase<IAEIte
                 return ItemStack.EMPTY;
             }
 
-            int amount = stackToInsert.getCount();
-            for (IAEItemStack bufferedStack : internalBuffer) {
-                long bufferedStackSize = bufferedStack.getStackSize();
-                if (bufferedStack.equals(stackToInsert) && bufferedStackSize < Long.MAX_VALUE) {
-                    int amountToAdd = (int) Math.min(amount, Long.MAX_VALUE - bufferedStackSize);
-                    bufferedStack.incStackSize(amountToAdd);
-                    amount -= amountToAdd;
-                    if (amount < 1) break;
-                }
-            }
-
-            if (amount > 0) {
-                IAEItemStack newStack = AEItemStack.fromItemStack(stackToInsert);
-                // noinspection DataFlowIssue
-                newStack.setStackSize(amount);
-                internalBuffer.add(newStack);
+            GenericStack stack = GenericStack.fromItemStack(stackToInsert);
+            if (stack != null) {
+                addToBuffer(stack);
             }
 
             trigger();

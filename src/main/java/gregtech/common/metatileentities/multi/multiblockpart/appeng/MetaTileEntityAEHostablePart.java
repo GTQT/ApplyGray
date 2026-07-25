@@ -1,7 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
 import applygray.api.IAEManagedMetaTileEntity;
-
+import applygray.integration.ae2.ApplyGrayGridNodeSupport;
 import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IControllable;
@@ -19,54 +19,62 @@ import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.common.capabilities.Capability;
 
-import appeng.api.AEApi;
-import appeng.api.networking.GridFlags;
-import appeng.api.networking.security.IActionHost;
-import appeng.api.networking.security.IActionSource;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.IStorageChannel;
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.channels.IItemStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.util.AECableType;
-import appeng.api.util.AEPartLocation;
-import appeng.me.GridAccessException;
-import appeng.me.helpers.AENetworkProxy;
-import appeng.me.helpers.BaseActionSource;
-import appeng.me.helpers.IGridProxyable;
-import appeng.me.helpers.MachineSource;
+import ae2.api.config.Actionable;
+import ae2.api.networking.GridFlags;
+import ae2.api.networking.IManagedGridNode;
+import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.networking.security.IActionHost;
+import ae2.api.networking.security.IActionSource;
+import ae2.api.storage.MEStorage;
+import ae2.api.util.AECableType;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.IOException;
 import java.util.EnumSet;
 
 import static gregtech.api.capability.GregtechDataCodes.UPDATE_IO_SPEED;
 import static gregtech.api.capability.GregtechDataCodes.UPDATE_ONLINE_STATUS;
 
 public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultiblockNotifiablePart implements
-                                                                                                  IAEStatusProvider,
-                                                                                                  IControllable,
-                                                                                                  IAEManagedMetaTileEntity {
+                                                    IAEStatusProvider, IControllable, IAEManagedMetaTileEntity {
 
     public static final String REFRESH_RATE_TAG = "RefreshRate";
-    public final static String WORKING_TAG = "WorkingEnabled";
-    private boolean workingEnabled = true;
+    public static final String WORKING_TAG = "WorkingEnabled";
 
-    private AENetworkProxy aeProxy;
+    private boolean workingEnabled = true;
+    @Nullable
+    private IManagedGridNode mainNode;
     private int refreshRate = ConfigHolder.compat.ae2.updateIntervals;
     protected boolean isOnline;
-    protected boolean allowsExtraConnections = false;
-    protected boolean meStatusChanged = false;
+    protected boolean allowsExtraConnections;
+    protected boolean meStatusChanged;
 
     public MetaTileEntityAEHostablePart(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch) {
         super(metaTileEntityId, tier, isExportHatch);
     }
 
-    public AENetworkProxy getAeProxy() {
-        return aeProxy;
+    @Override
+    public @NotNull IManagedGridNode getMainNode() {
+        if (mainNode == null) {
+            mainNode = ApplyGrayGridNodeSupport.createMainNode(this)
+                    .setTagName("applygray_mte_node")
+                    .setFlags(GridFlags.REQUIRE_CHANNEL)
+                    .setIdlePowerUsage(ConfigHolder.compat.ae2.meHatchEnergyUsage)
+                    .setExposedOnSides(getConnectableSides())
+                    .setVisualRepresentation(getStackForm());
+            if (this instanceof ICraftingProvider provider) {
+                mainNode.addService(ICraftingProvider.class, provider);
+            }
+        }
+        return mainNode;
+    }
+
+    /**
+     * Transitional name for subclasses while they are moved off the old proxy API.
+     */
+    protected final @NotNull IManagedGridNode getProxy() {
+        return getMainNode();
     }
 
     @Override
@@ -78,16 +86,6 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     @Override
     public void writeInitialSyncData(PacketBuffer buf) {
         super.writeInitialSyncData(buf);
-
-        if (aeProxy != null) {
-            buf.writeBoolean(true);
-            NBTTagCompound proxy = new NBTTagCompound();
-            aeProxy.writeToNBT(proxy);
-            buf.writeCompoundTag(proxy);
-        } else {
-            buf.writeBoolean(false);
-        }
-
         buf.writeVarInt(refreshRate);
         buf.writeBoolean(isOnline);
         buf.writeBoolean(allowsExtraConnections);
@@ -97,20 +95,6 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     @Override
     public void receiveInitialSyncData(PacketBuffer buf) {
         super.receiveInitialSyncData(buf);
-
-        if (buf.readBoolean()) {
-            NBTTagCompound nbtTagCompound;
-            try {
-                nbtTagCompound = buf.readCompoundTag();
-            } catch (IOException ignored) {
-                nbtTagCompound = null;
-            }
-
-            if (aeProxy != null && nbtTagCompound != null) {
-                aeProxy.readFromNBT(nbtTagCompound);
-            }
-        }
-
         refreshRate = buf.readVarInt();
         isOnline = buf.readBoolean();
         allowsExtraConnections = buf.readBoolean();
@@ -121,9 +105,9 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     public void receiveCustomData(int dataId, PacketBuffer buf) {
         super.receiveCustomData(dataId, buf);
         if (dataId == UPDATE_ONLINE_STATUS) {
-            boolean isOnline = buf.readBoolean();
-            if (this.isOnline != isOnline) {
-                this.isOnline = isOnline;
+            boolean online = buf.readBoolean();
+            if (isOnline != online) {
+                isOnline = online;
                 scheduleRenderUpdate();
             }
         } else if (dataId == UPDATE_IO_SPEED) {
@@ -141,27 +125,23 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     }
 
     public int getRefreshRate() {
-        return this.refreshRate;
+        return refreshRate;
     }
 
     protected void setRefreshRate(int newRefreshRate) {
-        if (newRefreshRate == this.refreshRate) return;
-        if (newRefreshRate < 1) newRefreshRate = 1;
-
-        this.refreshRate = newRefreshRate;
-        if (!getWorld().isRemote) {
+        if (newRefreshRate == refreshRate) {
+            return;
+        }
+        refreshRate = Math.max(1, newRefreshRate);
+        if (getWorld() != null && !getWorld().isRemote) {
             markDirty();
             writeCustomData(UPDATE_IO_SPEED, buf -> buf.writeVarInt(refreshRate));
         }
     }
 
-    @NotNull
     @Override
-    public AECableType getCableConnectionType(@NotNull AEPartLocation part) {
-        if (part.getFacing() != frontFacing && !allowsExtraConnections) {
-            return AECableType.NONE;
-        }
-        return AECableType.SMART;
+    public @NotNull AECableType getCableConnectionType(@NotNull EnumFacing side) {
+        return side != frontFacing && !allowsExtraConnections ? AECableType.NONE : AECableType.SMART;
     }
 
     public EnumSet<EnumFacing> getConnectableSides() {
@@ -169,9 +149,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     }
 
     public void updateConnectableSides() {
-        if (aeProxy != null) {
-            aeProxy.setValidSides(getConnectableSides());
-        }
+        getMainNode().setExposedOnSides(getConnectableSides());
     }
 
     @Override
@@ -181,11 +159,10 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         updateConnectableSides();
 
         if (!getWorld().isRemote) {
-            playerIn.sendStatusMessage(new TextComponentTranslation(allowsExtraConnections ?
-                            "gregtech.machine.me.extra_connections.enabled" : "gregtech.machine.me.extra_connections.disabled"),
-                    true);
+            playerIn.sendStatusMessage(new TextComponentTranslation(allowsExtraConnections
+                    ? "gregtech.machine.me.extra_connections.enabled"
+                    : "gregtech.machine.me.extra_connections.disabled"), true);
         }
-
         return true;
     }
 
@@ -195,48 +172,36 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         updateConnectableSides();
     }
 
-    @Nullable
-    private AENetworkProxy createProxy() {
-        if (getHolder() instanceof IGridProxyable holder) {
-            AENetworkProxy proxy = new AENetworkProxy(holder, "mte_proxy", getStackForm(), true);
-            proxy.setFlags(GridFlags.REQUIRE_CHANNEL);
-            proxy.setIdlePowerUsage(ConfigHolder.compat.ae2.meHatchEnergyUsage);
-            proxy.setValidSides(getConnectableSides());
-            return proxy;
-        }
-        return null;
-    }
-
-    @Nullable
-    @Override
-    public AENetworkProxy getProxy() {
-        if (this.aeProxy == null) {
-            return this.aeProxy = this.createProxy();
-        }
-        if (!this.aeProxy.isReady() && this.getWorld() != null) {
-            this.aeProxy.onReady();
-        }
-        return this.aeProxy;
-    }
-
-
     protected IActionSource getActionSource() {
-        if (this.getHolder() instanceof IActionHost holder) {
-            return new MachineSource(holder);
-        }
+        return getHolder() instanceof IActionHost host ? IActionSource.ofMachine(host) : IActionSource.empty();
+    }
 
-        return new BaseActionSource();
+    @Nullable
+    protected MEStorage getNetworkStorage() {
+        var grid = getMainNode().getGrid();
+        return grid == null ? null : grid.getStorageService().getInventory();
     }
 
     /**
-     * Update the connection status to the ME system.
+     * The network storage is unified in Supergiant; the old item/fluid monitor names remain only while subclasses are
+     * migrated to key filters.
      */
+    @Nullable
+    protected MEStorage getItemMonitor() {
+        return getNetworkStorage();
+    }
+
+    @Nullable
+    protected MEStorage getFluidMonitor() {
+        return getNetworkStorage();
+    }
+
     public void updateMEStatus() {
         if (!getWorld().isRemote) {
-            boolean isOnline = this.aeProxy != null && this.aeProxy.isActive() && this.aeProxy.isPowered();
-            if (this.isOnline != isOnline) {
-                writeCustomData(UPDATE_ONLINE_STATUS, buf -> buf.writeBoolean(isOnline));
-                this.isOnline = isOnline;
+            boolean online = getMainNode().isActive();
+            if (isOnline != online) {
+                writeCustomData(UPDATE_ONLINE_STATUS, buf -> buf.writeBoolean(online));
+                isOnline = online;
                 meStatusChanged = true;
             } else {
                 meStatusChanged = false;
@@ -248,8 +213,8 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     public NBTTagCompound writeToNBT(NBTTagCompound data) {
         super.writeToNBT(data);
         data.setBoolean("AllowExtraConnections", allowsExtraConnections);
-        data.setInteger(REFRESH_RATE_TAG, this.refreshRate);
-        data.setBoolean(WORKING_TAG, this.workingEnabled);
+        data.setInteger(REFRESH_RATE_TAG, refreshRate);
+        data.setBoolean(WORKING_TAG, workingEnabled);
         return data;
     }
 
@@ -258,23 +223,22 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         super.readFromNBT(data);
         allowsExtraConnections = data.getBoolean("AllowExtraConnections");
         if (data.hasKey(REFRESH_RATE_TAG)) {
-            this.refreshRate = data.getInteger(REFRESH_RATE_TAG);
+            refreshRate = data.getInteger(REFRESH_RATE_TAG);
         }
         if (data.hasKey(WORKING_TAG)) {
-            this.workingEnabled = data.getBoolean(WORKING_TAG);
+            workingEnabled = data.getBoolean(WORKING_TAG);
         }
     }
 
     @Override
     public boolean isWorkingEnabled() {
-        return this.workingEnabled;
+        return workingEnabled;
     }
 
     @Override
     public void setWorkingEnabled(boolean workingEnabled) {
         this.workingEnabled = workingEnabled;
-
-        World world = this.getWorld();
+        World world = getWorld();
         if (world != null && !world.isRemote) {
             writeCustomData(GregtechDataCodes.WORKING_ENABLED, buf -> buf.writeBoolean(workingEnabled));
         }
@@ -285,46 +249,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         if (capability == GregtechTileCapabilities.CAPABILITY_CONTROLLABLE) {
             return GregtechTileCapabilities.CAPABILITY_CONTROLLABLE.cast(this);
         }
-
         return super.getCapability(capability, side);
-    }
-
-    @NotNull
-    protected IStorageChannel<IAEFluidStack> getFluidStorageChannel() {
-        return AEApi.instance().storage().getStorageChannel(IFluidStorageChannel.class);
-    }
-
-    @Nullable
-    protected IMEMonitor<IAEFluidStack> getFluidMonitor() {
-        AENetworkProxy proxy = getProxy();
-        if (proxy == null) return null;
-
-        IStorageChannel<IAEFluidStack> channel = getFluidStorageChannel();
-
-        try {
-            return proxy.getStorage().getInventory(channel);
-        } catch (GridAccessException ignored) {
-            return null;
-        }
-    }
-
-    @NotNull
-    protected IStorageChannel<IAEItemStack> getItemStorageChannel() {
-        return AEApi.instance().storage().getStorageChannel(IItemStorageChannel.class);
-    }
-
-    @Nullable
-    protected IMEMonitor<IAEItemStack> getItemMonitor() {
-        AENetworkProxy proxy = getProxy();
-        if (proxy == null) return null;
-
-        IStorageChannel<IAEItemStack> channel = getItemStorageChannel();
-
-        try {
-            return proxy.getStorage().getInventory(channel);
-        } catch (GridAccessException ignored) {
-            return null;
-        }
     }
 
     protected boolean shouldSyncME() {

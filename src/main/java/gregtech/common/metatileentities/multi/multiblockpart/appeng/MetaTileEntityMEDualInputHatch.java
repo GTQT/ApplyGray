@@ -54,13 +54,9 @@ import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.api.storage.data.IAEStack;
-import appeng.fluids.util.AEFluidStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -72,7 +68,6 @@ import com.cleanroommc.modularui.drawable.ItemDrawable;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import com.cleanroommc.modularui.value.IntValue;
 import com.cleanroommc.modularui.value.sync.IntSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
@@ -101,8 +96,8 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     private static final String REFRESH_RATE_TAG = "RefreshRate";
     private final IDrawable CONTROLLER_ICON = new ItemDrawable(Mods.AppliedEnergistics2.getItem("controller"))
             .asIcon().size(16);
-    protected IExportOnlyAEStackList<IAEItemStack> aeItemHandler;
-    protected IExportOnlyAEStackList<IAEFluidStack> aeFluidHandler;
+    protected IExportOnlyAEStackList aeItemHandler;
+    protected IExportOnlyAEStackList aeFluidHandler;
     protected GhostCircuitItemStackHandler circuitInventory;
     protected NotifiableItemStackHandler extraSlotInventory;
     protected boolean workingEnabled = true;
@@ -157,11 +152,11 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         }
     }
 
-    protected @NotNull IExportOnlyAEStackList<IAEItemStack> initializeItemAEHandler() {
+    protected @NotNull IExportOnlyAEStackList initializeItemAEHandler() {
         return new ExportOnlyAEItemList(this, CONFIG_SIZE, this.getController());
     }
 
-    protected @NotNull IExportOnlyAEStackList<IAEFluidStack> initializeFluidAEHandler() {
+    protected @NotNull IExportOnlyAEStackList initializeFluidAEHandler() {
         return new ExportOnlyAEFluidList(this, CONFIG_SIZE, this.getController());
     }
 
@@ -186,19 +181,13 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     }
 
     protected void syncME() {
-        // 同步物品通道
-        IMEMonitor<IAEItemStack> itemMonitor = getItemMonitor();
-        if (itemMonitor != null) {
-            for (ExportOnlyAESlot<IAEItemStack> slot : aeItemHandler.getInventory()) {
-                processSlot(slot, itemMonitor);
+        MEStorage monitor = getNetworkStorage();
+        if (monitor != null) {
+            for (ExportOnlyAESlot slot : aeItemHandler.getInventory()) {
+                processSlot(slot, monitor);
             }
-        }
-
-        // 同步流体通道
-        IMEMonitor<IAEFluidStack> fluidMonitor = getFluidMonitor();
-        if (fluidMonitor != null) {
-            for (ExportOnlyAESlot<IAEFluidStack> slot : aeFluidHandler.getInventory()) {
-                processSlot(slot, fluidMonitor);
+            for (ExportOnlyAESlot slot : aeFluidHandler.getInventory()) {
+                processSlot(slot, monitor);
             }
         }
     }
@@ -206,25 +195,21 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     /**
      * 通用槽位处理逻辑，避免代码重复
      */
-    @SuppressWarnings("unchecked")
-    private <T extends IAEStack<T>> void processSlot(ExportOnlyAESlot<T> slot, IMEMonitor<T> monitor) {
-        T exceedStack = slot.exceedStack();
+    private void processSlot(ExportOnlyAESlot slot, MEStorage monitor) {
+        GenericStack exceedStack = slot.exceedStack();
         if (exceedStack != null) {
-            long total = exceedStack.getStackSize();
-            T notInserted = monitor.injectItems(exceedStack, Actionable.MODULATE, getActionSource());
-            if (notInserted != null && notInserted.getStackSize() > 0L) {
-                slot.decrementStock(total - notInserted.getStackSize());
-            } else {
-                slot.decrementStock(total);
-            }
+            long inserted = monitor.insert(exceedStack.what(), exceedStack.amount(), Actionable.MODULATE,
+                    getActionSource());
+            slot.decrementStock(inserted);
         }
 
-        T requestStack = slot.requestStack();
+        GenericStack requestStack = slot.requestStack();
         if (requestStack == null) return;
 
-        T extracted = monitor.extractItems(requestStack, Actionable.MODULATE, getActionSource());
-        if (extracted != null) {
-            slot.addStack(extracted);
+        long extracted = monitor.extract(requestStack.what(), requestStack.amount(), Actionable.MODULATE,
+                getActionSource());
+        if (extracted > 0) {
+            slot.addStack(new GenericStack(requestStack.what(), extracted));
         }
     }
 
@@ -235,25 +220,15 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     }
 
     protected void flushInventory() {
-        // 回灌物品
-        IMEMonitor<IAEItemStack> itemMonitor = getItemMonitor();
-        if (itemMonitor != null) {
-            for (ExportOnlyAESlot<IAEItemStack> slot : aeItemHandler.getInventory()) {
-                IAEItemStack stock = slot.getStock();
-                if (stock != null) {
-                    itemMonitor.injectItems(stock, Actionable.MODULATE, getActionSource());
-                }
+        MEStorage monitor = getNetworkStorage();
+        if (monitor != null) {
+            for (ExportOnlyAESlot slot : aeItemHandler.getInventory()) {
+                GenericStack stock = slot.getStock();
+                if (stock != null) monitor.insert(stock.what(), stock.amount(), Actionable.MODULATE, getActionSource());
             }
-        }
-
-        // 回灌流体
-        IMEMonitor<IAEFluidStack> fluidMonitor = getFluidMonitor();
-        if (fluidMonitor != null) {
-            for (ExportOnlyAESlot<IAEFluidStack> slot : aeFluidHandler.getInventory()) {
-                IAEFluidStack stock = slot.getStock();
-                if (stock != null) {
-                    fluidMonitor.injectItems(stock, Actionable.MODULATE, getActionSource());
-                }
+            for (ExportOnlyAESlot slot : aeFluidHandler.getInventory()) {
+                GenericStack stock = slot.getStock();
+                if (stock != null) monitor.insert(stock.what(), stock.amount(), Actionable.MODULATE, getActionSource());
             }
         }
     }
@@ -263,7 +238,7 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         return true;
     }
 
-    protected @NotNull AESyncHandler<IAEItemStack> createAEItemSyncHandler() {
+    protected @NotNull AESyncHandler createAEItemSyncHandler() {
         return new AEItemSyncHandler(getItemAEHandler(), this::markDirty, circuitInventory::setCircuitValue);
     }
 
@@ -272,7 +247,7 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         return (ExportOnlyAEItemList) aeItemHandler;
     }
 
-    protected @NotNull AESyncHandler<IAEFluidStack> createAEFluidSyncHandler() {
+    protected @NotNull AESyncHandler createAEFluidSyncHandler() {
         return new AEFluidSyncHandler(getFluidAEHandler(), this::markDirty, circuitInventory::setCircuitValue);
     }
 
@@ -462,9 +437,9 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     }
 
     protected ModularPanel buildMultiplierPopup(PanelSyncManager syncManager, IPanelHandler syncHandler) {
-        AESyncHandler<IAEItemStack> itemSync = syncManager
+        AESyncHandler itemSync = syncManager
                 .findSyncHandler(SYNC_HANDLER_NAME + "item", 0, AESyncHandler.class);
-        AESyncHandler<IAEFluidStack> fluidSync = syncManager
+        AESyncHandler fluidSync = syncManager
                 .findSyncHandler(SYNC_HANDLER_NAME + "fluid", 0, AESyncHandler.class);
         IntValue multiplier = new IntValue(2);
 
@@ -647,27 +622,23 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
 
         // 保存物品配置
         NBTTagCompound itemConfigStacks = new NBTTagCompound();
-        ExportOnlyAESlot<IAEItemStack>[] itemInventory = aeItemHandler.getInventory();
+        ExportOnlyAESlot[] itemInventory = aeItemHandler.getInventory();
         for (int index = 0; index < CONFIG_SIZE; index++) {
-            ExportOnlyAESlot<IAEItemStack> slot = itemInventory[index];
-            IAEItemStack config = slot.getConfig();
+            ExportOnlyAESlot slot = itemInventory[index];
+            GenericStack config = slot.getConfig();
             if (config == null) continue;
-            NBTTagCompound stackNBT = new NBTTagCompound();
-            config.writeToNBT(stackNBT);
-            itemConfigStacks.setTag("I" + index, stackNBT); // "I" 前缀标识物品
+            itemConfigStacks.setTag("I" + index, GenericStack.writeTag(config));
         }
         tag.setTag("ItemConfigStacks", itemConfigStacks);
 
         // 保存流体配置
         NBTTagCompound fluidConfigStacks = new NBTTagCompound();
-        ExportOnlyAESlot<IAEFluidStack>[] fluidInventory = aeFluidHandler.getInventory();
+        ExportOnlyAESlot[] fluidInventory = aeFluidHandler.getInventory();
         for (int index = 0; index < CONFIG_SIZE; index++) {
-            ExportOnlyAESlot<IAEFluidStack> slot = fluidInventory[index];
-            IAEFluidStack config = slot.getConfig();
+            ExportOnlyAESlot slot = fluidInventory[index];
+            GenericStack config = slot.getConfig();
             if (config == null) continue;
-            NBTTagCompound stackNBT = new NBTTagCompound();
-            config.writeToNBT(stackNBT);
-            fluidConfigStacks.setTag("F" + index, stackNBT); // "F" 前缀标识流体
+            fluidConfigStacks.setTag("F" + index, GenericStack.writeTag(config));
         }
         tag.setTag("FluidConfigStacks", fluidConfigStacks);
 
@@ -689,14 +660,14 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     protected void readConfigFromTag(NBTTagCompound tag) {
         // 读取物品配置
         if (tag.hasKey("ItemConfigStacks")) {
-            ExportOnlyAESlot<IAEItemStack>[] itemInventory = aeItemHandler.getInventory();
+            ExportOnlyAESlot[] itemInventory = aeItemHandler.getInventory();
             NBTTagCompound itemConfigStacks = tag.getCompoundTag("ItemConfigStacks");
             for (int index = 0; index < CONFIG_SIZE; index++) {
-                IAEItemStack stack = null;
+                GenericStack stack = null;
                 String key = "I" + index;
                 if (itemConfigStacks.hasKey(key)) {
                     NBTTagCompound configTag = itemConfigStacks.getCompoundTag(key);
-                    stack = readItemStackFromNBT(configTag);
+                    stack = GenericStack.readTag(configTag);
                 }
                 itemInventory[index].setConfig(stack);
             }
@@ -704,14 +675,14 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
 
         // 读取流体配置
         if (tag.hasKey("FluidConfigStacks")) {
-            ExportOnlyAESlot<IAEFluidStack>[] fluidInventory = aeFluidHandler.getInventory();
+            ExportOnlyAESlot[] fluidInventory = aeFluidHandler.getInventory();
             NBTTagCompound fluidConfigStacks = tag.getCompoundTag("FluidConfigStacks");
             for (int index = 0; index < CONFIG_SIZE; index++) {
-                IAEFluidStack stack = null;
+                GenericStack stack = null;
                 String key = "F" + index;
                 if (fluidConfigStacks.hasKey(key)) {
                     NBTTagCompound configTag = fluidConfigStacks.getCompoundTag(key);
-                    stack = readFluidStackFromNBT(configTag);
+                    stack = GenericStack.readTag(configTag);
                 }
                 fluidInventory[index].setConfig(stack);
             }
@@ -723,36 +694,6 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         if (tag.hasKey(REFRESH_RATE_TAG)) {
             setRefreshRate(tag.getInteger(REFRESH_RATE_TAG));
         }
-    }
-
-    // ============ 抽象方法：子类实现 NBT 反序列化 ============
-
-    @Nullable
-    protected IAEItemStack readItemStackFromNBT(@NotNull NBTTagCompound tagCompound) {
-        // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-        if (tagCompound.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-            return AEItemStack.fromNBT(tagCompound);
-        } else {
-            return AEItemStack.fromItemStack(new ItemStack(tagCompound));
-        }
-    }
-
-    @Nullable
-    protected IAEFluidStack readFluidStackFromNBT(@NotNull NBTTagCompound tagCompound) {
-        // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-        if (tagCompound.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-            return AEFluidStack.fromNBT(tagCompound);
-        } else {
-            return AEFluidStack.fromFluidStack(FluidStack.loadFluidStackFromNBT(tagCompound));
-        }
-    }
-
-    protected @NotNull IByteBufDeserializer<IAEFluidStack> getFluidDeserializer() {
-        return AEFluidStack::fromPacket;
-    }
-
-    protected @NotNull IByteBufDeserializer<IAEItemStack> getItemDeserializer() {
-        return AEItemStack::fromPacket;
     }
 
     @Override

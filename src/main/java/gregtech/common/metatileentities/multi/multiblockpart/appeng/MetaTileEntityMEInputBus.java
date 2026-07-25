@@ -28,9 +28,6 @@ import net.minecraft.world.World;
 import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.storage.channels.IItemStorageChannel;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -48,7 +45,7 @@ import org.jetbrains.annotations.Range;
 
 import java.util.List;
 
-public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase<IAEItemStack>
+public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase
         implements IMultiblockAbilityPart<IItemHandlerModifiable> {
 
     public static final String ITEM_BUFFER_TAG = "ItemSlots";
@@ -56,7 +53,7 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase<IAEItemS
     protected NotifiableItemStackHandler extraSlotInventory;
 
     public MetaTileEntityMEInputBus(ResourceLocation metaTileEntityId, int tier) {
-        super(metaTileEntityId, tier, false, IItemStorageChannel.class);
+        super(metaTileEntityId, tier, false);
     }
 
     @Override
@@ -95,7 +92,7 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase<IAEItemS
     }
 
     @Override
-    protected @NotNull AESyncHandler<IAEItemStack> createAESyncHandler() {
+    protected @NotNull AESyncHandler createAESyncHandler() {
         return new AEItemSyncHandler(getAEHandler(), this::markDirty, circuitInventory::setCircuitValue);
     }
 
@@ -222,16 +219,6 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase<IAEItemS
     @Override
     public void registerAbilities(@NotNull AbilityInstances abilityInstances) {
         abilityInstances.add(this.importItems);
-    }
-
-    @Override
-    protected @Nullable IAEItemStack readStackFromNBT(@NotNull NBTTagCompound tagCompound) {
-        // Check if the Cnt tag is present. If it isn't, the config was written with the old wrapped stacks.
-        if (tagCompound.hasKey("Cnt", Constants.NBT.TAG_LONG)) {
-            return AEItemStack.fromNBT(tagCompound);
-        } else {
-            return AEItemStack.fromItemStack(new ItemStack(tagCompound));
-        }
     }
 
     @Override

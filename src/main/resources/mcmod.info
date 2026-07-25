@@ -1,12 +1,12 @@
 [{
     "modid": "${modid}",
     "name": "${modname}",
-    "description": "AE2/AE2FC integration addon for GregTech",
+    "description": "Applied Energistics 2 Supergiant integration addon for GregTech",
     "version": "${version}",
     "mcversion": "${mcversion}",
     "logoFile": "",
     "url": "",
     "authorList": [],
     "credits": "",
-    "dependencies": ["gregtech", "appliedenergistics2", "ae2fc"]
+    "dependencies": ["gregtech", "ae2"]
 }]

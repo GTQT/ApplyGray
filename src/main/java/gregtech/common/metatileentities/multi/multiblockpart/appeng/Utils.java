@@ -6,20 +6,16 @@ import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
-import appeng.api.AEApi;
-import appeng.api.config.Actionable;
-import appeng.api.networking.security.IActionSource;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.config.Actionable;
+import ae2.api.networking.security.IActionSource;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.GenericStack;
 
 import static gregtech.api.util.GTQTUtility.isFluidTankListEmpty;
 import static gregtech.api.util.GTQTUtility.isInventoryEmpty;
 
 public class Utils {
-    public static void returnItems(IMEMonitor<IAEItemStack> monitor, IItemHandlerModifiable itemHandler,
+    public static void returnItems(MEStorage monitor, IItemHandlerModifiable itemHandler,
                                    IActionSource source) {
         if (isInventoryEmpty(itemHandler)) return;
 
@@ -29,18 +25,19 @@ public class Utils {
             ItemStack itemStack = itemHandler.getStackInSlot(x);
             if (itemStack.isEmpty()) continue;
 
-            IAEItemStack iaeItemStack = AEItemStack.fromItemStack(itemStack);
+            GenericStack aeStack = GenericStack.fromItemStack(itemStack);
+            if (aeStack == null) continue;
 
-            IAEItemStack notInserted = monitor.injectItems(iaeItemStack, Actionable.MODULATE, source);
-            if (notInserted != null && notInserted.getStackSize() > 0) {
-                itemStack.setCount((int) notInserted.getStackSize());
+            long inserted = monitor.insert(aeStack.what(), aeStack.amount(), Actionable.MODULATE, source);
+            if (inserted < aeStack.amount()) {
+                itemStack.setCount((int) Math.min(Integer.MAX_VALUE, aeStack.amount() - inserted));
             } else {
                 itemHandler.setStackInSlot(x, ItemStack.EMPTY);
             }
         }
     }
 
-    public static void returnFluids(IMEMonitor<IAEFluidStack> monitor, FluidTankList fluidTankList,
+    public static void returnFluids(MEStorage monitor, FluidTankList fluidTankList,
                                     IActionSource source) {
         if (isFluidTankListEmpty(fluidTankList)) return;
 
@@ -49,15 +46,10 @@ public class Utils {
         for (int x = 0; x < fluidTankList.getTanks(); x++){
             FluidStack exportFluid = fluidTankList.getTankAt(x).getFluid();
             if (exportFluid != null) {
-                IAEFluidStack aeFluid = AEApi.instance().storage().getStorageChannel(IFluidStorageChannel.class)
-                        .createStack(exportFluid);
+                GenericStack aeFluid = GenericStack.fromFluidStack(exportFluid);
                 if (aeFluid != null) {
-                    IAEFluidStack remaining = monitor.injectItems(aeFluid, Actionable.MODULATE, source);
-                    if (remaining != null) {
-                        fluidTankList.getTankAt(x).drain((int) (aeFluid.getStackSize() - remaining.getStackSize()), true);
-                    } else {
-                        fluidTankList.getTankAt(x).drain(exportFluid.amount, true);
-                    }
+                    long inserted = monitor.insert(aeFluid.what(), aeFluid.amount(), Actionable.MODULATE, source);
+                    fluidTankList.getTankAt(x).drain((int) Math.min(inserted, Integer.MAX_VALUE), true);
                 }
             }
         }

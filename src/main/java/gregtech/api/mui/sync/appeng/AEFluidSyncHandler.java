@@ -1,7 +1,7 @@
 package gregtech.api.mui.sync.appeng;
 
-import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import applygray.api.mui.ApplyGrayByteBufAdapters;
+import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.api.util.GTUtility;
 import gregtech.api.util.JEIUtil;
@@ -14,8 +14,8 @@ import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.fluids.util.AEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.utils.serialization.IByteBufAdapter;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import mezz.jei.api.gui.IRecipeLayout;
@@ -27,7 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
 
-public class AEFluidSyncHandler extends AESyncHandler<IAEFluidStack> {
+public class AEFluidSyncHandler extends AESyncHandler {
 
     protected final ExportOnlyAEFluidList fluidList;
 
@@ -38,9 +38,8 @@ public class AEFluidSyncHandler extends AESyncHandler<IAEFluidStack> {
     }
 
     @Override
-    protected @NotNull IConfigurableSlot<IAEFluidStack> @NotNull [] initializeCache() {
-        // noinspection unchecked
-        IConfigurableSlot<IAEFluidStack>[] cache = new IConfigurableSlot[slots.length];
+    protected @NotNull IConfigurableSlot @NotNull [] initializeCache() {
+        IConfigurableSlot[] cache = new IConfigurableSlot[slots.length];
         for (int index = 0; index < slots.length; index++) {
             cache[index] = new ExportOnlyAEFluidSlot();
         }
@@ -48,21 +47,27 @@ public class AEFluidSyncHandler extends AESyncHandler<IAEFluidStack> {
     }
 
     @Override
-    protected @NotNull IByteBufAdapter<IAEFluidStack> initializeByteBufAdapter() {
-        return ApplyGrayByteBufAdapters.AE_FLUID_STACK;
+    protected @NotNull IByteBufAdapter<GenericStack> initializeByteBufAdapter() {
+        return ApplyGrayByteBufAdapters.GENERIC_STACK;
     }
 
     @Override
-    public boolean isStackValidForSlot(int index, @Nullable IAEFluidStack stack) {
-        if (stack == null) return true;
-        if (!isStocking) return true;
-        return !fluidList.hasStackInConfig(stack.getFluidStack(), true);
+    public boolean isStackValidForSlot(int index, @Nullable GenericStack stack) {
+        if (stack == null) {
+            return true;
+        }
+        if (!(stack.what() instanceof AEFluidKey fluidKey)) {
+            return false;
+        }
+        return !isStocking || !fluidList.hasStackInConfig(fluidKey.getReadOnlyStack(), true);
     }
 
     @Override
     public IRecipeTransferError receiveRecipe(@NotNull IRecipeLayout recipeLayout, boolean maxTransfer,
                                               boolean simulate) {
-        if (simulate) return null;
+        if (simulate) {
+            return null;
+        }
 
         Int2ObjectMap<FluidStack> originalFluidInputs = JEIUtil
                 .getDisplayedInputFluidStacks(recipeLayout.getFluidStacks(), false, true);
@@ -70,9 +75,8 @@ public class AEFluidSyncHandler extends AESyncHandler<IAEFluidStack> {
         GTUtility.collapseFluidList(fluidInputs);
 
         int lastSlotIndex;
-        for (lastSlotIndex = 0; lastSlotIndex < fluidInputs.size(); lastSlotIndex++) {
-            FluidStack newConfig = fluidInputs.get(lastSlotIndex);
-            setConfig(lastSlotIndex, newConfig);
+        for (lastSlotIndex = 0; lastSlotIndex < fluidInputs.size() && lastSlotIndex < slots.length; lastSlotIndex++) {
+            setConfig(lastSlotIndex, GenericStack.fromFluidStack(fluidInputs.get(lastSlotIndex)));
         }
         clearConfigFrom(lastSlotIndex);
 
@@ -86,12 +90,11 @@ public class AEFluidSyncHandler extends AESyncHandler<IAEFluidStack> {
             }
         }
         ghostCircuitConfig.accept(circuitValue);
-
         return null;
     }
 
     @SideOnly(Side.CLIENT)
     public void setConfig(int index, @Nullable FluidStack stack) {
-        setConfig(index, stack == null ? null : AEFluidStack.fromFluidStack(stack));
+        setConfig(index, stack == null ? null : GenericStack.fromFluidStack(stack));
     }
 }

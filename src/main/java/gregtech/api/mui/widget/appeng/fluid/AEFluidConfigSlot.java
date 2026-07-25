@@ -13,7 +13,8 @@ import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.FluidUtil;
 
-import appeng.api.storage.data.IAEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.api.widget.Interactable;
 import com.cleanroommc.modularui.drawable.GuiDraw;
 import com.cleanroommc.modularui.drawable.text.TextRenderer;
@@ -28,7 +29,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.function.BooleanSupplier;
 
-public class AEFluidConfigSlot extends AEConfigSlot<IAEFluidStack>
+public class AEFluidConfigSlot extends AEConfigSlot
         implements Interactable, RecipeViewerGhostIngredientSlot<FluidStack> {
 
     public AEFluidConfigSlot(boolean isStocking, int index, @NotNull BooleanSupplier isAutoPull) {
@@ -44,15 +45,14 @@ public class AEFluidConfigSlot extends AEConfigSlot<IAEFluidStack>
 
     @Override
     protected void buildTooltip(@NotNull RichTooltip tooltip) {
-        IAEFluidStack config = getSyncHandler().getConfig(index);
-        if (config != null) {
-            FluidStack stack = config.getFluidStack();
+        GenericStack config = getSyncHandler().getConfig(index);
+        if (config != null && config.what() instanceof AEFluidKey fluidKey) {
+            FluidStack stack = fluidKey.toStack(saturatingInt(config.amount()));
             tooltip.addLine(KeyUtil.fluid(stack));
             FluidTooltipUtil.fluidInfo(stack, tooltip, false, true, true);
             tooltip.addLine(FluidTooltipUtil.getFluidModNameKey(stack));
             tooltip.addLine((context, x, y, width, height, widgetTheme) -> {
-                final int color = Color.GREY.darker(2);
-                // TODO: do I need to access the text renderer like this?
+                int color = Color.GREY.darker(2);
                 codechicken.lib.gui.GuiDraw.drawRect(x, y + 3, (int) TextRenderer.SHARED.getLastActualWidth(), 2,
                         color);
             });
@@ -73,11 +73,12 @@ public class AEFluidConfigSlot extends AEConfigSlot<IAEFluidStack>
 
     @Override
     public void draw(ModularGuiContext context, WidgetThemeEntry<?> widgetTheme) {
-        IAEFluidStack config = getSyncHandler().getConfig(index);
-        if (config != null) {
-            GuiDraw.drawFluidTexture(config.getFluidStack(), 1, 1, getArea().w() - 2, getArea().h() - 2, 0);
+        GenericStack config = getSyncHandler().getConfig(index);
+        if (config != null && config.what() instanceof AEFluidKey fluidKey) {
+            GuiDraw.drawFluidTexture(fluidKey.toStack(saturatingInt(config.amount())), 1, 1, getArea().w() - 2,
+                    getArea().h() - 2, 0);
             if (!isStocking) {
-                RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(config.getStackSize(), 4),
+                RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(config.amount(), 4),
                         17d, 18d, 0xFFFFFF, true, 0.5f);
             }
         }
@@ -87,12 +88,13 @@ public class AEFluidConfigSlot extends AEConfigSlot<IAEFluidStack>
 
     @Override
     public @NotNull Result onMousePressed(int mouseButton) {
-        if (isAutoPull.getAsBoolean()) return Result.IGNORE;
+        if (isAutoPull.getAsBoolean()) {
+            return Result.IGNORE;
+        }
 
         if (mouseButton == 0) {
             ItemStack heldItem = getSyncHandler().getSyncManager().getCursorItem();
             FluidStack heldFluid = FluidUtil.getFluidContained(heldItem);
-
             if (heldFluid != null) {
                 getSyncHandler().setConfig(index, heldFluid);
                 return Result.SUCCESS;
@@ -114,13 +116,18 @@ public class AEFluidConfigSlot extends AEConfigSlot<IAEFluidStack>
 
     @Override
     public @Nullable Object getIngredient() {
-        IAEFluidStack config = getSyncHandler().getConfig(index);
-        return config == null ? null : config.getFluidStack();
+        GenericStack config = getSyncHandler().getConfig(index);
+        return config != null && config.what() instanceof AEFluidKey fluidKey
+                ? fluidKey.toStack(saturatingInt(config.amount())) : null;
     }
 
     @Override
-    protected @NotNull AEStackPreviewWidget<IAEFluidStack> createPopupDrawable() {
+    protected @NotNull AEStackPreviewWidget createPopupDrawable() {
         return new AEFluidStackPreviewWidget(() -> getSyncHandler().getConfig(index))
                 .background(GTGuiTextures.FLUID_SLOT);
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(1, amount);
     }
 }

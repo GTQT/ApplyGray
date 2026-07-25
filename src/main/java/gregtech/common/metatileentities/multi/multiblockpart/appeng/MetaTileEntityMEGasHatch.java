@@ -27,27 +27,25 @@ import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.storage.channels.IFluidStorageChannel;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.fluids.util.AEFluidStack;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
 import com.cleanroommc.modularui.api.drawable.IRichTextBuilder;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFluidStack>
+public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase
         implements IMultiblockAbilityPart<IMufflerHatch>, IMufflerHatch {
 
     public final static String FLUID_BUFFER_TAG = "FluidBuffer";
     private final int recoveryChance;
 
     public MetaTileEntityMEGasHatch(ResourceLocation metaTileEntityId, int tier) {
-        super(metaTileEntityId, tier, IFluidStorageChannel.class);
+        super(metaTileEntityId, tier);
         this.recoveryChance = Math.min((tier - 1) * 10, 100);
     }
 
@@ -56,16 +54,14 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
         return new MetaTileEntityMEGasHatch(this.metaTileEntityId, getTier());
     }
 
-    @Override
-    protected @NotNull IByteBufDeserializer<IAEFluidStack> getDeserializer() {
-        return AEFluidStack::fromPacket;
-    }
-
     @SideOnly(Side.CLIENT)
     @Override
     protected void addStackLine(@NotNull IRichTextBuilder<?> text,
-                                @NotNull IAEFluidStack wrappedStack) {
-        FluidStack stack = wrappedStack.getFluidStack();
+                                @NotNull GenericStack wrappedStack) {
+        if (!(wrappedStack.what() instanceof AEFluidKey fluidKey)) {
+            return;
+        }
+        FluidStack stack = fluidKey.toStack(1);
         text.add(new GTObjectDrawable(stack, 0)
                 .asIcon()
                 .asHoverable()
@@ -74,7 +70,7 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
                     FluidTooltipUtil.handleFluidTooltip(tooltip, stack);
                 }));
         text.space();
-        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.getStackSize(), "L"));
+        text.addLine(KeyUtil.number(TextFormatting.WHITE, wrappedStack.amount(), "L"));
     }
 
     @Override
@@ -82,10 +78,10 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
         super.writeToNBT(data);
 
         NBTTagList nbtList = new NBTTagList();
-        for (IAEFluidStack stack : internalBuffer) {
-            NBTTagCompound stackTag = new NBTTagCompound();
-            stack.writeToNBT(stackTag);
-            nbtList.appendTag(stackTag);
+        for (GenericStack stack : internalBuffer) {
+            if (stack.what() instanceof AEFluidKey) {
+                nbtList.appendTag(GenericStack.writeTag(stack));
+            }
         }
         data.setTag(FLUID_BUFFER_TAG, nbtList);
 
@@ -96,8 +92,10 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         for (NBTBase tag : data.getTagList(FLUID_BUFFER_TAG, Constants.NBT.TAG_COMPOUND)) {
-            NBTTagCompound tagCompound = (NBTTagCompound) tag;
-            internalBuffer.add(AEFluidStack.fromNBT(tagCompound));
+            GenericStack stack = GenericStack.readTag((NBTTagCompound) tag);
+            if (stack != null && stack.what() instanceof AEFluidKey) {
+                addToBuffer(stack);
+            }
         }
     }
 
@@ -143,8 +141,10 @@ public class MetaTileEntityMEGasHatch extends MetaTileEntityMEOutputBase<IAEFlui
     @Override
     public void recoverFluidsTable(FluidStack recoveryFluids) {
         if (calculateChance()) {
-            IAEFluidStack aeStack = AEFluidStack.fromFluidStack(recoveryFluids);
-            internalBuffer.add(aeStack);
+            GenericStack aeStack = GenericStack.fromFluidStack(recoveryFluids);
+            if (aeStack != null) {
+                addToBuffer(aeStack);
+            }
         }
     }
 

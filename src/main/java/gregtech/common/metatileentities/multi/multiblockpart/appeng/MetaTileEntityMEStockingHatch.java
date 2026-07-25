@@ -9,7 +9,6 @@ import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.mui.GTGuiTextures;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidList;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidSlot;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
@@ -23,10 +22,10 @@ import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.data.IAEFluidStack;
-import appeng.api.storage.data.IItemList;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
 import com.cleanroommc.modularui.api.IPanelHandler;
 import com.cleanroommc.modularui.api.drawable.IKey;
@@ -105,18 +104,18 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
 
     @Override
     protected void syncME() {
-        IMEMonitor<IAEFluidStack> monitor = super.getMonitor();
+        MEStorage monitor = super.getMonitor();
         if (monitor == null) return;
 
         for (ExportOnlyAEStockingFluidSlot slot : this.getAEHandler().getInventory()) {
-            if (slot.getConfig() == null) {
+            GenericStack config = slot.getConfig();
+            if (config == null || !(config.what() instanceof AEFluidKey)) {
                 slot.setStack(null);
             } else {
                 // Try to fill the slot
-                IAEFluidStack request = slot.getConfig().copy();
-                request.setStackSize(Long.MAX_VALUE);
-                IAEFluidStack result = monitor.extractItems(request, Actionable.SIMULATE, getActionSource());
-                slot.setStack(result);
+                long available = monitor.extract(config.what(), Long.MAX_VALUE, Actionable.SIMULATE,
+                        getActionSource());
+                slot.setStack(available > 0 ? new GenericStack(config.what(), available) : null);
             }
         }
     }
@@ -145,8 +144,9 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
     private void validateConfig() {
         for (var slot : this.getAEHandler().getInventory()) {
             if (slot.getConfig() != null) {
-                FluidStack configuredStack = slot.getConfig().getFluidStack();
-                if (testConfiguredInOtherHatch(configuredStack)) {
+                GenericStack config = slot.getConfig();
+                if (config.what() instanceof AEFluidKey fluidKey &&
+                        testConfiguredInOtherHatch(fluidKey.toStack(1))) {
                     slot.setConfig(null);
                     slot.setStock(null);
                 }
@@ -164,7 +164,8 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
             if (ability instanceof ExportOnlyAEStockingFluidSlot aeSlot) {
                 if (aeSlot.getConfig() == null) continue;
                 if (getAEHandler().ownsSlot(aeSlot)) continue;
-                if (aeSlot.getConfig().getFluid().equals(stack.getFluid())) {
+                if (aeSlot.getConfig().what() instanceof AEFluidKey fluidKey &&
+                        fluidKey.getFluid().equals(stack.getFluid())) {
                     return true;
                 }
             }
@@ -188,35 +189,35 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
     }
 
     private void refreshList() {
-        IMEMonitor<IAEFluidStack> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor == null) {
             clearInventory(0);
             return;
         }
 
-        IItemList<IAEFluidStack> storageList = monitor.getStorageList();
-        if (storageList == null) {
+        var grid = getMainNode().getGrid();
+        if (grid == null) {
             clearInventory(0);
             return;
         }
 
         int index = 0;
         ExportOnlyAEStockingFluidSlot[] inventory = getAEHandler().getInventory();
-        for (IAEFluidStack stack : storageList) {
+        for (var entry : grid.getStorageService().getCachedInventory()) {
             if (index >= CONFIG_SIZE) break;
-            if (stack.getStackSize() < minimumStackSize) continue;
+            if (!(entry.getKey() instanceof AEFluidKey fluidKey)) continue;
+            long storedAmount = entry.getLongValue();
+            if (storedAmount < minimumStackSize) continue;
 
-            stack = monitor.extractItems(stack, Actionable.SIMULATE, getActionSource());
-            if (stack == null || stack.getStackSize() < minimumStackSize) continue;
+            long available = monitor.extract(fluidKey, storedAmount, Actionable.SIMULATE, getActionSource());
+            if (available < minimumStackSize) continue;
 
-            FluidStack fluidStack = stack.getFluidStack();
+            FluidStack fluidStack = fluidKey.toStack(1);
             if (fluidStack == null) continue;
             if (autoPullTest != null && !autoPullTest.test(fluidStack)) continue;
-            IAEFluidStack selectedStack = stack.copy();
-            IAEFluidStack configStack = selectedStack.copy().setStackSize(1);
             var slot = inventory[index];
-            slot.setConfig(configStack);
-            slot.setStack(selectedStack);
+            slot.setConfig(new GenericStack(fluidKey, 1));
+            slot.setStack(new GenericStack(fluidKey, available));
             index++;
         }
 
@@ -390,8 +391,8 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
 
     public static class ExportOnlyAEStockingFluidSlot extends ExportOnlyAEFluidSlot {
 
-        public ExportOnlyAEStockingFluidSlot(MetaTileEntityMEStockingHatch holder, IAEFluidStack config,
-                                             IAEFluidStack stock, MetaTileEntity entityToNotify) {
+        public ExportOnlyAEStockingFluidSlot(MetaTileEntityMEStockingHatch holder, GenericStack config,
+                                             GenericStack stock, MetaTileEntity entityToNotify) {
             super(holder, config, stock, entityToNotify);
         }
 
@@ -405,38 +406,32 @@ public class MetaTileEntityMEStockingHatch extends MetaTileEntityMEInputHatch {
         }
 
         @Override
-        public @NotNull IConfigurableSlot<IAEFluidStack> copy() {
+        public @NotNull ExportOnlyAEStockingFluidSlot copy() {
             return new ExportOnlyAEStockingFluidSlot(
                     this.getHolder(),
-                    this.config == null ? null : this.config.copy(),
-                    this.stock == null ? null : this.stock.copy(),
+                    this.config == null ? null : new GenericStack(this.config.what(), this.config.amount()),
+                    this.stock == null ? null : new GenericStack(this.stock.what(), this.stock.amount()),
                     null);
         }
 
         @Override
         public @Nullable FluidStack drain(int maxDrain, boolean doDrain) {
-            if (this.stock == null || this.stock.getStackSize() <= 0) {
+            if (this.stock == null || this.stock.amount() <= 0) {
                 return null;
             }
 
-            if (this.config != null) {
-                IMEMonitor<IAEFluidStack> monitor = getHolder().getMonitor();
+            if (this.config != null && this.config.what() instanceof AEFluidKey fluidKey) {
+                MEStorage monitor = getHolder().getMonitor();
                 if (monitor == null) return null;
 
                 Actionable action = doDrain ? Actionable.MODULATE : Actionable.SIMULATE;
-                IAEFluidStack request = config.copy();
-                request.setStackSize(maxDrain);
-
-                IAEFluidStack result = monitor.extractItems(request, action, getHolder().getActionSource());
-                if (result != null) {
-                    int extracted = (int) Math.min(result.getStackSize(), maxDrain);
-                    this.stock.decStackSize(extracted);
-                    trigger();
-                    if (extracted != 0) {
-                        FluidStack resultStack = this.config.getFluidStack();
-                        resultStack.amount = extracted;
-                        return resultStack;
+                long extracted = monitor.extract(fluidKey, maxDrain, action, getHolder().getActionSource());
+                if (extracted > 0) {
+                    int extractedAmount = (int) Math.min(extracted, Integer.MAX_VALUE);
+                    if (doDrain) {
+                        decrementStock(extractedAmount);
                     }
+                    return fluidKey.toStack(extractedAmount);
                 }
             }
             return null;

@@ -1,24 +1,23 @@
 package gregtech.api.mui.sync.appeng;
 
-import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import applygray.api.mui.ApplyGrayByteBufAdapters;
+import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.api.util.GTUtility;
 import gregtech.api.util.JEIUtil;
+import gregtech.common.items.MetaItems;
+import gregtech.common.items.behaviors.ProgrammableCircuit;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemList;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemSlot;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
-
-import gregtech.common.items.MetaItems;
-import gregtech.common.items.behaviors.ProgrammableCircuit;
 
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.storage.data.IAEItemStack;
-import appeng.util.item.AEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.utils.serialization.IByteBufAdapter;
 import mezz.jei.api.gui.IRecipeLayout;
 import mezz.jei.api.recipe.transfer.IRecipeTransferError;
@@ -30,7 +29,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.function.IntConsumer;
 
-public class AEItemSyncHandler extends AESyncHandler<IAEItemStack> {
+public class AEItemSyncHandler extends AESyncHandler {
 
     protected final ExportOnlyAEItemList itemList;
 
@@ -41,9 +40,8 @@ public class AEItemSyncHandler extends AESyncHandler<IAEItemStack> {
     }
 
     @Override
-    protected @NotNull IConfigurableSlot<IAEItemStack> @NotNull [] initializeCache() {
-        // noinspection unchecked
-        IConfigurableSlot<IAEItemStack>[] cache = new IConfigurableSlot[slots.length];
+    protected @NotNull IConfigurableSlot @NotNull [] initializeCache() {
+        IConfigurableSlot[] cache = new IConfigurableSlot[slots.length];
         for (int index = 0; index < slots.length; index++) {
             cache[index] = new ExportOnlyAEItemSlot();
         }
@@ -51,21 +49,27 @@ public class AEItemSyncHandler extends AESyncHandler<IAEItemStack> {
     }
 
     @Override
-    protected @NotNull IByteBufAdapter<IAEItemStack> initializeByteBufAdapter() {
-        return ApplyGrayByteBufAdapters.AE_ITEM_STACK;
+    protected @NotNull IByteBufAdapter<GenericStack> initializeByteBufAdapter() {
+        return ApplyGrayByteBufAdapters.GENERIC_STACK;
     }
 
     @Override
-    public boolean isStackValidForSlot(int index, @Nullable IAEItemStack stack) {
-        if (stack == null || stack.getDefinition().isEmpty()) return true;
-        if (!isStocking) return true;
-        return !itemList.hasStackInConfig(stack.getDefinition(), true);
+    public boolean isStackValidForSlot(int index, @Nullable GenericStack stack) {
+        if (stack == null) {
+            return true;
+        }
+        if (!(stack.what() instanceof AEItemKey itemKey)) {
+            return false;
+        }
+        return !isStocking || !itemList.hasStackInConfig(itemKey.getReadOnlyStack(), true);
     }
 
     @Override
     public IRecipeTransferError receiveRecipe(@NotNull IRecipeLayout recipeLayout, boolean maxTransfer,
                                               boolean simulate) {
-        if (simulate) return null;
+        if (simulate) {
+            return null;
+        }
 
         List<ItemStack> itemInputs = new ArrayList<>(JEIUtil
                 .getDisplayedInputItemStacks(recipeLayout.getItemStacks(), false, true)
@@ -76,13 +80,14 @@ public class AEItemSyncHandler extends AESyncHandler<IAEItemStack> {
         Iterator<ItemStack> inputsIterator = itemInputs.iterator();
         while (inputsIterator.hasNext()) {
             ItemStack stack = inputsIterator.next();
-            if (stack == null) continue;
+            if (stack == null) {
+                continue;
+            }
             if (IntCircuitIngredient.isIntegratedCircuit(stack)) {
                 if (hasToolkitInInventory() && MetaItems.PROGRAMMABLE_CIRCUIT != null) {
                     int config = IntCircuitIngredient.getCircuitConfiguration(stack);
                     ItemStack circuitStack = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
-                    ItemStack intCircuit = IntCircuitIngredient.getIntegratedCircuit(config);
-                    ProgrammableCircuit.wrap(intCircuit, circuitStack);
+                    ProgrammableCircuit.wrap(IntCircuitIngredient.getIntegratedCircuit(config), circuitStack);
                     inputsIterator.remove();
                     itemInputs.add(circuitStack);
                 } else {
@@ -96,23 +101,23 @@ public class AEItemSyncHandler extends AESyncHandler<IAEItemStack> {
         ghostCircuitConfig.accept(circuitValue);
 
         int lastSlotIndex;
-        for (lastSlotIndex = 0; lastSlotIndex < itemInputs.size(); lastSlotIndex++) {
-            ItemStack newConfig = itemInputs.get(lastSlotIndex);
-            setConfig(lastSlotIndex, newConfig);
+        for (lastSlotIndex = 0; lastSlotIndex < itemInputs.size() && lastSlotIndex < slots.length; lastSlotIndex++) {
+            setConfig(lastSlotIndex, GenericStack.fromItemStack(itemInputs.get(lastSlotIndex)));
         }
         clearConfigFrom(lastSlotIndex);
-
         return null;
     }
 
     @SideOnly(Side.CLIENT)
     public void setConfig(int index, @Nullable ItemStack stack) {
-        setConfig(index, stack == null ? null : AEItemStack.fromItemStack(stack));
+        setConfig(index, stack == null || stack.isEmpty() ? null : GenericStack.fromItemStack(stack));
     }
 
     private boolean hasToolkitInInventory() {
         EntityPlayer player = getSyncManager().getPlayer();
-        if (player == null || MetaItems.PROGRAMMING_TOOLKIT == null) return false;
+        if (player == null || MetaItems.PROGRAMMING_TOOLKIT == null) {
+            return false;
+        }
 
         for (int i = 0; i < player.inventory.getSizeInventory(); i++) {
             ItemStack invStack = player.inventory.getStackInSlot(i);

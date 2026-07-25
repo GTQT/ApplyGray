@@ -18,17 +18,15 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-import appeng.api.config.Actionable;
-import appeng.api.storage.IMEMonitor;
-import appeng.api.storage.IStorageChannel;
-import appeng.api.storage.data.IAEStack;
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.api.drawable.IRichTextBuilder;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
 import com.cleanroommc.modularui.utils.Alignment;
-import com.cleanroommc.modularui.utils.serialization.IByteBufDeserializer;
 import com.cleanroommc.modularui.value.sync.BooleanSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
 import com.cleanroommc.modularui.value.sync.SyncHandler;
@@ -41,22 +39,20 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Iterator;
+import java.util.ListIterator;
 import java.util.List;
 import java.util.function.Consumer;
 
-public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AEStackType>>
-        extends MetaTileEntityAEHostableChannelPart<AEStackType>
+public abstract class MetaTileEntityMEOutputBase extends MetaTileEntityAEHostableChannelPart
         implements IControllable {
 
     public final static String WORKING_TAG = "WorkingEnabled";
 
     protected boolean workingEnabled = true;
-    protected List<AEStackType> internalBuffer;
+    protected List<GenericStack> internalBuffer;
 
-    public MetaTileEntityMEOutputBase(ResourceLocation metaTileEntityId, int tier,
-                                      Class<? extends IStorageChannel<AEStackType>> storageChannel) {
-        super(metaTileEntityId, tier, true, storageChannel);
+    public MetaTileEntityMEOutputBase(ResourceLocation metaTileEntityId, int tier) {
+        super(metaTileEntityId, tier, true);
     }
 
     @Override
@@ -71,17 +67,16 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
         if (!getWorld().isRemote && workingEnabled && isOnline && shouldSyncME()) {
             if (this.internalBuffer.isEmpty()) return;
 
-            IMEMonitor<AEStackType> monitor = getMonitor();
+            MEStorage monitor = getMonitor();
             if (monitor == null) return;
 
-            Iterator<AEStackType> internalBufferIterator = internalBuffer.iterator();
+            ListIterator<GenericStack> internalBufferIterator = internalBuffer.listIterator();
             while (internalBufferIterator.hasNext()) {
-                AEStackType stackInBuffer = internalBufferIterator.next();
-                // We have to create an AEItem/FluidStack here, or it'll cause a CCE in ItemVariantList#L35
-                AEStackType notPushedToNetwork = monitor.injectItems(stackInBuffer.copy(), Actionable.MODULATE,
+                GenericStack stackInBuffer = internalBufferIterator.next();
+                long inserted = monitor.insert(stackInBuffer.what(), stackInBuffer.amount(), Actionable.MODULATE,
                         getActionSource());
-                if (notPushedToNetwork != null && notPushedToNetwork.getStackSize() > 0L) {
-                    stackInBuffer.setStackSize(notPushedToNetwork.getStackSize());
+                if (inserted < stackInBuffer.amount()) {
+                    internalBufferIterator.set(new GenericStack(stackInBuffer.what(), stackInBuffer.amount() - inserted));
                 } else {
                     internalBufferIterator.remove();
                 }
@@ -89,11 +84,20 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
         }
     }
 
-    protected abstract @NotNull IByteBufDeserializer<AEStackType> getDeserializer();
-
     @SideOnly(Side.CLIENT)
     protected abstract void addStackLine(@NotNull IRichTextBuilder<?> text,
-                                         @NotNull AEStackType stack);
+                                         @NotNull GenericStack stack);
+
+    protected final void addToBuffer(@NotNull GenericStack stack) {
+        for (ListIterator<GenericStack> iterator = internalBuffer.listIterator(); iterator.hasNext();) {
+            GenericStack buffered = iterator.next();
+            if (buffered.what().equals(stack.what())) {
+                iterator.set(GenericStack.sum(buffered, stack));
+                return;
+            }
+        }
+        internalBuffer.add(stack);
+    }
 
     @Override
     public boolean usesMui2() {
@@ -134,10 +138,10 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
 
     @Override
     public void onRemoval() {
-        IMEMonitor<AEStackType> monitor = getMonitor();
+        MEStorage monitor = getMonitor();
         if (monitor != null) {
-            for (AEStackType stack : this.internalBuffer) {
-                monitor.injectItems(stack.copy(), Actionable.MODULATE, this.getActionSource());
+            for (GenericStack stack : this.internalBuffer) {
+                monitor.insert(stack.what(), stack.amount(), Actionable.MODULATE, this.getActionSource());
             }
         }
 
@@ -233,7 +237,7 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
 
     protected class AEStackListSyncHandler extends SyncHandler {
 
-        private final ObjectArrayList<AEStackType> cache = new ObjectArrayList<>();
+        private final ObjectArrayList<GenericStack> cache = new ObjectArrayList<>();
         private final IntSet changedIndexes = new IntOpenHashSet();
         @Nullable
         private Runnable changeListener;
@@ -247,11 +251,11 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
             }
 
             for (int index = 0; index < internalBuffer.size(); index++) {
-                AEStackType newStack = internalBuffer.get(index);
-                AEStackType cachedStack = cache.get(index);
+                GenericStack newStack = internalBuffer.get(index);
+                GenericStack cachedStack = cache.get(index);
 
-                if (init || !newStack.equals(cachedStack) || newStack.getStackSize() != cachedStack.getStackSize()) {
-                    AEStackType copy = newStack.copy();
+                if (init || !newStack.equals(cachedStack)) {
+                    GenericStack copy = new GenericStack(newStack.what(), newStack.amount());
                     changedIndexes.add(index);
                     cache.set(index, copy);
                 }
@@ -264,7 +268,7 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
 
                     for (int index : changedIndexes) {
                         buf.writeVarInt(index);
-                        cache.get(index).writeToPacket(buf);
+                        GenericStack.writeBuffer(cache.get(index), buf);
                     }
                 });
 
@@ -281,8 +285,10 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
             int changed = buf.readVarInt();
             for (int ignore = 0; ignore < changed; ignore++) {
                 int index = buf.readVarInt();
-                AEStackType newStack = getDeserializer().deserialize(buf);
-                cache.set(index, newStack);
+                GenericStack newStack = GenericStack.readBuffer(buf);
+                if (newStack != null) {
+                    cache.set(index, newStack);
+                }
             }
 
             onChange();
@@ -303,8 +309,8 @@ public abstract class MetaTileEntityMEOutputBase<AEStackType extends IAEStack<AE
             }
         }
 
-        public void cacheForEach(@NotNull Consumer<AEStackType> consumer) {
-            for (AEStackType stack : cache) {
+        public void cacheForEach(@NotNull Consumer<GenericStack> consumer) {
+            for (GenericStack stack : cache) {
                 consumer.accept(stack);
             }
         }

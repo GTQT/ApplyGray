@@ -1,21 +1,21 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng.slot;
 
-import appeng.api.storage.data.IAEStack;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-public interface IConfigurableSlot<T extends IAEStack<T>> {
+public interface IConfigurableSlot {
 
     @Nullable
-    T getConfig();
+    GenericStack getConfig();
 
     @Nullable
-    T getStock();
+    GenericStack getStock();
 
-    void setConfig(@Nullable T val);
+    void setConfig(@Nullable GenericStack val);
 
-    void setStock(@Nullable T val);
+    void setStock(@Nullable GenericStack val);
 
     @NotNull
-    IConfigurableSlot<T> copy();
+    IConfigurableSlot copy();
 }

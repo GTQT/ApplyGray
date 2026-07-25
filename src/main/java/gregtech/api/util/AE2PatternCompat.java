@@ -1,88 +1,53 @@
 package gregtech.api.util;
 
-import appeng.api.AEApi;
-import appeng.api.storage.data.IAEFluidStack;
-import com.glodblock.github.common.item.fake.FakeFluids;
-import com.glodblock.github.util.Util;
-import appeng.fluids.util.AEFluidStack;
-
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.GenericStack;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
-import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.nbt.NBTTagList;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.FluidUtil;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 
-import static appeng.helpers.ItemStackHelper.stackWriteToNBT;
-
+/** Supergiant processing-pattern conversion helpers. */
 public final class AE2PatternCompat {
 
     private AE2PatternCompat() {}
 
     public static boolean isFluidDrop(ItemStack stack) {
-        return FakeFluids.isFluidFakeItem(stack);
+        GenericStack genericStack = GenericStack.unwrapItemStack(stack);
+        return genericStack != null && genericStack.what() instanceof AEFluidKey;
     }
 
+    @Nullable
     public static FluidStack getFluidStack(ItemStack stack) {
-        return Util.getFluidFromItem(stack);
+        GenericStack genericStack = GenericStack.unwrapItemStack(stack);
+        if (genericStack == null || !(genericStack.what() instanceof AEFluidKey fluidKey)) {
+            return null;
+        }
+        return fluidKey.toStack(clampAmount(genericStack.amount()));
     }
 
     public static ItemStack toFluidDrop(FluidStack fluidStack) {
-        return FakeFluids.packFluid2Drops(fluidStack);
-    }
-
-    private static NBTTagCompound fluidStackToNBT(IAEFluidStack aeFluid) {
-        NBTTagCompound nbt = new NBTTagCompound();
-        aeFluid.writeToNBT(nbt);
-        return nbt;
+        GenericStack genericStack = GenericStack.fromFluidStack(fluidStack);
+        return GenericStack.wrapInItemStack(genericStack);
     }
 
     public static NBTBase createPatternIngredientTag(ItemStack stack) {
-        NBTTagCompound tag = new NBTTagCompound();
-
-        if (stack.isEmpty()) {
-            return tag;
-        }
-
-        if (isFluidDrop(stack)) {
-            FluidStack fluid = getFluidStack(stack);
-            if (fluid != null) {
-                IAEFluidStack aeFluid = AEFluidStack.fromFluidStack(fluid);
-                if (aeFluid != null) {
-                    return fluidStackToNBT(aeFluid);
-                }
-            }
-        }
-
-        FluidStack containedFluid = FluidUtil.getFluidContained(stack);
-        if (containedFluid != null && containedFluid.amount > 0) {
-            IAEFluidStack aeFluid = AEFluidStack.fromFluidStack(containedFluid);
-            if (aeFluid != null) {
-                aeFluid.setStackSize((long) containedFluid.amount * stack.getCount());
-                return fluidStackToNBT(aeFluid);
-            }
-        }
-
-        stackWriteToNBT(stack, tag);
-        return tag;
+        GenericStack genericStack = toGenericStack(stack);
+        return GenericStack.writeTag(genericStack);
     }
 
     public static boolean containsFluid(ItemStack[] stacks) {
         if (stacks == null) {
             return false;
         }
-
         for (ItemStack stack : stacks) {
-            if (stack == null || stack.isEmpty()) {
-                continue;
-            }
-            if (isFluidDrop(stack)) {
-                return true;
-            }
-            FluidStack containedFluid = FluidUtil.getFluidContained(stack);
-            if (containedFluid != null && containedFluid.amount > 0) {
+            GenericStack genericStack = toGenericStack(stack);
+            if (genericStack != null && genericStack.what() instanceof AEFluidKey) {
                 return true;
             }
         }
@@ -91,32 +56,52 @@ public final class AE2PatternCompat {
 
     public static ItemStack createProcessingPattern(ItemStack[] inputs, ItemStack[] outputs, boolean substitute,
                                                     boolean fluidPattern) {
-        NBTTagCompound tag = new NBTTagCompound();
-        NBTTagList inTag = new NBTTagList();
-        NBTTagList outTag = new NBTTagList();
-
-        for (ItemStack input : inputs) {
-            inTag.appendTag(createPatternIngredientTag(input));
-        }
-        for (ItemStack output : outputs) {
-            outTag.appendTag(createPatternIngredientTag(output));
-        }
-
-        tag.setTag("in", inTag);
-        tag.setTag("out", outTag);
-        tag.setBoolean("crafting", false);
-        tag.setBoolean("substitute", substitute);
-        if (fluidPattern || containsFluid(inputs) || containsFluid(outputs)) {
-            tag.setBoolean("fluidPattern", true);
-        }
-
-        Optional<ItemStack> maybePattern = AEApi.instance().definitions().items().encodedPattern().maybeStack(1);
-        if (!maybePattern.isPresent()) {
+        List<GenericStack> genericInputs = toGenericStacks(inputs);
+        List<GenericStack> genericOutputs = toGenericStacks(outputs);
+        if (genericInputs.isEmpty() || genericOutputs.isEmpty()) {
             return ItemStack.EMPTY;
         }
+        return PatternDetailsHelper.encodeProcessingPattern(genericInputs, genericOutputs);
+    }
 
-        ItemStack patternStack = maybePattern.get();
-        patternStack.setTagCompound(tag);
-        return patternStack;
+    @Nullable
+    public static GenericStack toGenericStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+
+        GenericStack wrapped = GenericStack.unwrapItemStack(stack);
+        if (wrapped != null) {
+            return wrapped;
+        }
+
+        FluidStack containedFluid = FluidUtil.getFluidContained(stack);
+        if (containedFluid != null && containedFluid.amount > 0) {
+            FluidStack total = containedFluid.copy();
+            total.amount = clampAmount((long) total.amount * stack.getCount());
+            GenericStack genericFluid = GenericStack.fromFluidStack(total);
+            if (genericFluid != null) {
+                return genericFluid;
+            }
+        }
+        return GenericStack.fromItemStack(stack);
+    }
+
+    private static List<GenericStack> toGenericStacks(ItemStack[] stacks) {
+        List<GenericStack> result = new ArrayList<>();
+        if (stacks == null) {
+            return result;
+        }
+        for (ItemStack stack : stacks) {
+            GenericStack genericStack = toGenericStack(stack);
+            if (genericStack != null) {
+                result.add(genericStack);
+            }
+        }
+        return result;
+    }
+
+    private static int clampAmount(long amount) {
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, amount));
     }
 }

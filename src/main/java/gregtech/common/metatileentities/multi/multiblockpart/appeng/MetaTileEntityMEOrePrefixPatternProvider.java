@@ -21,7 +21,6 @@ import gregtech.common.mui.widget.ScrollableTextWidget;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
@@ -35,11 +34,8 @@ import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.ItemStackHandler;
 
-import appeng.api.AEApi;
-import appeng.api.implementations.ICraftingPatternItem;
-import appeng.api.storage.data.IAEItemStack;
-import appeng.tile.grid.AENetworkPowerTile;
-import appeng.util.item.AEItemStack;
+import ae2.api.crafting.PatternDetailsHelper;
+import ae2.api.stacks.KeyCounter;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -71,7 +67,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import static gregtech.api.util.AE2PatternCompat.*;
 
@@ -88,16 +83,6 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
 
     public MetaTileEntityMEOrePrefixPatternProvider(ResourceLocation metaTileEntityId, int tier) {
         super(metaTileEntityId, tier);
-    }
-
-    private static IAEItemStack[] collectInventory(ItemStack[] slots) {
-        List<IAEItemStack> acc = new ArrayList<>();
-        for (ItemStack stack : slots) {
-            if (stack == null || stack == ItemStack.EMPTY) continue;
-            IAEItemStack aeStack = AEItemStack.fromItemStack(stack);
-            if (aeStack != null) acc.add(aeStack);
-        }
-        return acc.toArray(new IAEItemStack[0]);
     }
 
     public static String listToString(List<String> list) {
@@ -233,9 +218,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                 continue;
             }
 
-            if (pattern.getItem() instanceof ICraftingPatternItem patternItem) {
-                patternDetails.add(i, patternItem.getPatternForItem(pattern, getWorld()));
-            }
+            patternDetails.add(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
         }
     }
 
@@ -312,77 +295,12 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         // Extra item slots are local push metadata only; do not encode them into AE patterns.
 
         // 2. 无条件执行决策
-        return isFluidPattern ?
-                createFluidPattern(inputs, outputs, substitute) :
-                createStandardPattern(inputs, outputs, substitute);
+        return createProcessingPattern(inputs, outputs, substitute, isFluidPattern);
     }
 
-    // 创建流体样板 (处理模式)
     @Override
-    protected void wrapExtraInputsAsProgrammable(InventoryCrafting table) {
-        int slotLimit = Math.min(9, table.getSizeInventory());
-        for (int i = 1; i < slotLimit; i++) {
-            table.setInventorySlotContents(i, ItemStack.EMPTY);
-        }
-        for (int i = 0; i < extraInput.getSlots() && i + 1 < slotLimit; i++) {
-            ItemStack extra = extraInput.getStackInSlot(i);
-            if (extra.isEmpty()) continue;
-
-            ItemStack wrapped = wrapAsProgrammable(extra);
-            if (wrapped != null && !wrapped.isEmpty()) {
-                table.setInventorySlotContents(i + 1, wrapped);
-            }
-        }
-    }
-
-    private ItemStack createFluidPattern(ItemStack[] inputs, ItemStack[] outputs, boolean substitute) {
-        // 1. 创建流体样板
-        return createProcessingPattern(inputs, outputs, substitute, true);
-
-        // 2. 设置槽位数据
-
-    }
-
-    // 创建标准物品样板
-    private ItemStack createStandardPattern(
-            ItemStack[] inputs,
-            ItemStack[] outputs,
-            boolean substitute
-    ) {
-        // 1. 构建NBT
-        NBTTagCompound tag = new NBTTagCompound();
-        NBTTagList inTag = new NBTTagList();
-        NBTTagList outTag = new NBTTagList();
-
-        for (ItemStack i : inputs) inTag.appendTag(createItemTag(i));
-        for (ItemStack i : outputs) outTag.appendTag(createItemTag(i));
-
-        tag.setTag("in", inTag);
-        tag.setTag("out", outTag);
-        tag.setBoolean("crafting", false);  // 处理模式
-        tag.setBoolean("substitute", substitute);
-
-        // 2. 获取样板原型
-        Optional<ItemStack> maybePattern = AEApi.instance()
-                .definitions()
-                .items()
-                .encodedPattern()
-                .maybeStack(1);
-
-        if (!maybePattern.isPresent()) {
-            GTLog.logger.error("Standard pattern item not found! Is AE2 loaded?");
-            return ItemStack.EMPTY;
-        }
-
-        // 3. 注入NBT
-        ItemStack patternStack = maybePattern.get();
-        patternStack.setTagCompound(tag);
-        return patternStack;
-    }
-
-    NBTBase createItemTag(final ItemStack i) {
-        if (i == null) return new NBTTagCompound();
-        return createPatternIngredientTag(i);
+    protected KeyCounter[] withProgrammableExtraInputs(KeyCounter[] inputHolder) {
+        return appendProgrammableExtraInputs(inputHolder, extraInput);
     }
 
     @Override
@@ -1099,16 +1017,18 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                                 .childIf(useProxy, () -> {
                                                     TileEntity tileEntity = this.getWorld().getTileEntity(
                                                             AEProxy_pos);
-                                                    if (tileEntity instanceof AENetworkPowerTile proxy) {
+                                                    if (tileEntity != null) {
                                                         return Flow.column()
                                                                 .widthRel(1f)
                                                                 .child(new TextWidget<>(IKey.lang("连接至无线网络")))
                                                                 .child(new TextWidget<>(IKey.dynamic(() ->
-                                                                        "位置:" + proxy.getLocation()
+                                                                        "位置:" + AEProxy_pos.getX() + ", " +
+                                                                                AEProxy_pos.getY() + ", " +
+                                                                                AEProxy_pos.getZ()
                                                                 )))
                                                                 .child(new TextWidget<>(IKey.dynamic(() ->
                                                                         "名称:" +
-                                                                                proxy.getBlockType().getLocalizedName()
+                                                                                tileEntity.getBlockType().getLocalizedName()
                                                                 )));
                                                     } else {
                                                         return Flow.column()

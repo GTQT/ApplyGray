@@ -3,20 +3,19 @@ package gregtech.common.metatileentities.multi.multiblockpart.appeng.slot;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraftforge.common.util.INBTSerializable;
 
-import appeng.api.storage.data.IAEStack;
+import ae2.api.stacks.GenericStack;
 import org.jetbrains.annotations.Nullable;
 
-public abstract class ExportOnlyAESlot<T extends IAEStack<T>>
-        implements IConfigurableSlot<T>, INBTSerializable<NBTTagCompound> {
+public abstract class ExportOnlyAESlot implements IConfigurableSlot, INBTSerializable<NBTTagCompound> {
 
     protected final static String CONFIG_TAG = "config";
     protected final static String STOCK_TAG = "stock";
     @Nullable
-    protected T config;
+    protected GenericStack config;
     @Nullable
-    protected T stock;
+    protected GenericStack stock;
 
-    public ExportOnlyAESlot(@Nullable T config, @Nullable T stock) {
+    public ExportOnlyAESlot(@Nullable GenericStack config, @Nullable GenericStack stock) {
         this.config = config;
         this.stock = stock;
     }
@@ -26,47 +25,47 @@ public abstract class ExportOnlyAESlot<T extends IAEStack<T>>
     }
 
     @Nullable
-    public T requestStack() {
-        if (this.stock != null && !this.stock.isMeaningful()) {
+    public GenericStack requestStack() {
+        if (this.stock != null && this.stock.amount() <= 0) {
             this.stock = null;
         }
-        if (this.config == null || (this.stock != null && !this.config.equals(this.stock))) {
+        if (this.config == null || (this.stock != null && !this.config.what().matches(this.stock))) {
             return null;
         }
         if (this.stock == null) {
-            return this.config.copy();
+            return copy(this.config);
         }
-        if (this.stock.getStackSize() < this.config.getStackSize()) {
-            return this.config.copy().setStackSize(this.config.getStackSize() - this.stock.getStackSize());
+        if (this.stock.amount() < this.config.amount()) {
+            return copy(this.config, this.config.amount() - this.stock.amount());
         }
         return null;
     }
 
     @Nullable
-    public T exceedStack() {
-        if (this.stock != null && !this.stock.isMeaningful()) {
+    public GenericStack exceedStack() {
+        if (this.stock != null && this.stock.amount() <= 0) {
             this.stock = null;
         }
 
         if (this.config == null && this.stock != null) {
-            return this.stock.copy();
+            return copy(this.stock);
         }
 
         if (this.config != null && this.stock != null) {
-            if (this.config.equals(this.stock) && this.config.getStackSize() < this.stock.getStackSize()) {
-                return this.stock.copy().setStackSize(this.stock.getStackSize() - this.config.getStackSize());
+            if (this.config.what().matches(this.stock) && this.config.amount() < this.stock.amount()) {
+                return copy(this.stock, this.stock.amount() - this.config.amount());
             }
-            if (!this.config.equals(this.stock)) {
-                return this.stock.copy();
+            if (!this.config.what().matches(this.stock)) {
+                return copy(this.stock);
             }
         }
 
         return null;
     }
 
-    public abstract void addStack(T stack);
+    public abstract void addStack(GenericStack stack);
 
-    public abstract void setStack(T stack);
+    public abstract void setStack(@Nullable GenericStack stack);
 
     public abstract void decrementStock(long amount);
 
@@ -74,35 +73,39 @@ public abstract class ExportOnlyAESlot<T extends IAEStack<T>>
     public NBTTagCompound serializeNBT() {
         NBTTagCompound tag = new NBTTagCompound();
         if (this.config != null) {
-            NBTTagCompound configTag = new NBTTagCompound();
-            this.config.writeToNBT(configTag);
-            tag.setTag(CONFIG_TAG, configTag);
+            tag.setTag(CONFIG_TAG, GenericStack.writeTag(this.config));
         }
         if (this.stock != null) {
-            NBTTagCompound stockTag = new NBTTagCompound();
-            this.stock.writeToNBT(stockTag);
-            tag.setTag(STOCK_TAG, stockTag);
+            tag.setTag(STOCK_TAG, GenericStack.writeTag(this.stock));
         }
         return tag;
     }
 
     @Override
-    public @Nullable T getConfig() {
+    public @Nullable GenericStack getConfig() {
         return this.config;
     }
 
     @Override
-    public @Nullable T getStock() {
+    public @Nullable GenericStack getStock() {
         return this.stock;
     }
 
     @Override
-    public void setConfig(@Nullable T val) {
+    public void setConfig(@Nullable GenericStack val) {
         this.config = val;
     }
 
     @Override
-    public void setStock(@Nullable T val) {
+    public void setStock(@Nullable GenericStack val) {
         this.stock = val;
+    }
+
+    protected static GenericStack copy(GenericStack stack) {
+        return new GenericStack(stack.what(), stack.amount());
+    }
+
+    protected static GenericStack copy(GenericStack stack, long amount) {
+        return new GenericStack(stack.what(), amount);
     }
 }

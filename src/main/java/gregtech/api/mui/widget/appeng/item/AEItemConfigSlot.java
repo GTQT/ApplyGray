@@ -9,7 +9,8 @@ import gregtech.client.utils.RenderUtil;
 
 import net.minecraft.item.ItemStack;
 
-import appeng.api.storage.data.IAEItemStack;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
 import codechicken.lib.gui.GuiDraw;
 import com.cleanroommc.modularui.drawable.text.TextRenderer;
 import com.cleanroommc.modularui.integration.recipeviewer.RecipeViewerGhostIngredientSlot;
@@ -23,7 +24,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.function.BooleanSupplier;
 
-public class AEItemConfigSlot extends AEConfigSlot<IAEItemStack> implements RecipeViewerGhostIngredientSlot<ItemStack> {
+public class AEItemConfigSlot extends AEConfigSlot implements RecipeViewerGhostIngredientSlot<ItemStack> {
 
     public AEItemConfigSlot(boolean isStocking, int index, @NotNull BooleanSupplier isAutoPull) {
         super(isStocking, index, isAutoPull);
@@ -38,12 +39,11 @@ public class AEItemConfigSlot extends AEConfigSlot<IAEItemStack> implements Reci
 
     @Override
     protected void buildTooltip(@NotNull RichTooltip tooltip) {
-        IAEItemStack config = getSyncHandler().getConfig(index);
-        if (config != null) {
-            tooltip.addFromItem(config.getDefinition());
+        GenericStack config = getSyncHandler().getConfig(index);
+        if (config != null && config.what() instanceof AEItemKey itemKey) {
+            tooltip.addFromItem(itemKey.getReadOnlyStack());
             tooltip.addLine((context, x, y, width, height, widgetTheme) -> {
-                final int color = Color.GREY.darker(2);
-                // TODO: do I need to access the text renderer like this?
+                int color = Color.GREY.darker(2);
                 GuiDraw.drawRect(x, y + 3, (int) TextRenderer.SHARED.getLastActualWidth(), 2, color);
             });
         }
@@ -63,11 +63,11 @@ public class AEItemConfigSlot extends AEConfigSlot<IAEItemStack> implements Reci
 
     @Override
     public void draw(ModularGuiContext context, WidgetThemeEntry<?> widgetTheme) {
-        IAEItemStack config = getSyncHandler().getConfig(index);
-        if (config != null) {
-            RenderUtil.drawItemStack(config.getDefinition(), 1, 1, false);
+        GenericStack config = getSyncHandler().getConfig(index);
+        if (config != null && config.what() instanceof AEItemKey itemKey) {
+            RenderUtil.drawItemStack(itemKey.getReadOnlyStack(), 1, 1, false);
             if (!isStocking) {
-                RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(config.getStackSize(), 4),
+                RenderUtil.renderTextFixedCorner(TextFormattingUtil.formatLongToCompactString(config.amount(), 4),
                         17d, 18d, 0xFFFFFF, true, 0.5f);
             }
         }
@@ -77,11 +77,12 @@ public class AEItemConfigSlot extends AEConfigSlot<IAEItemStack> implements Reci
 
     @Override
     public @NotNull Result onMousePressed(int mouseButton) {
-        if (isAutoPull.getAsBoolean()) return Result.IGNORE;
+        if (isAutoPull.getAsBoolean()) {
+            return Result.IGNORE;
+        }
 
         if (mouseButton == 0) {
             ItemStack heldItem = getSyncHandler().getSyncManager().getCursorItem();
-
             if (!heldItem.isEmpty()) {
                 getSyncHandler().setConfig(index, heldItem);
                 return Result.SUCCESS;
@@ -103,13 +104,18 @@ public class AEItemConfigSlot extends AEConfigSlot<IAEItemStack> implements Reci
 
     @Override
     public @Nullable Object getIngredient() {
-        IAEItemStack config = getSyncHandler().getConfig(index);
-        return config == null ? null : config.createItemStack();
+        GenericStack config = getSyncHandler().getConfig(index);
+        return config != null && config.what() instanceof AEItemKey itemKey
+                ? itemKey.toStack(saturatingInt(config.amount())) : null;
     }
 
     @Override
-    protected @NotNull AEStackPreviewWidget<IAEItemStack> createPopupDrawable() {
+    protected @NotNull AEStackPreviewWidget createPopupDrawable() {
         return new AEItemStackPreviewWidget(() -> getSyncHandler().getConfig(index))
                 .background(GTGuiTextures.SLOT);
+    }
+
+    private static int saturatingInt(long amount) {
+        return amount > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(1, amount);
     }
 }

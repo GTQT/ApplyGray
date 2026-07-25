@@ -4,7 +4,6 @@ import gregtech.api.mui.GTGuiTextures;
 import gregtech.api.mui.GTGuis;
 import gregtech.api.mui.sync.appeng.AESyncHandler;
 
-import appeng.api.storage.data.IAEStack;
 import com.cleanroommc.modularui.api.IPanelHandler;
 import com.cleanroommc.modularui.api.UpOrDown;
 import com.cleanroommc.modularui.api.drawable.IDrawable;
@@ -23,14 +22,12 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.function.BooleanSupplier;
 
-public abstract class AEConfigSlot<T extends IAEStack<T>> extends Widget<AEConfigSlot<T>>
+public abstract class AEConfigSlot extends Widget<AEConfigSlot>
         implements RecipeViewerIngredientProvider, Interactable {
 
     protected final boolean isStocking;
     protected final int index;
     protected final BooleanSupplier isAutoPull;
-
-    private static final int SYNC_CONFIG_AMOUNT = 20;
 
     private static final IDrawable normalBackground = IDrawable.of(GTGuiTextures.SLOT, GTGuiTextures.CONFIG_ARROW_DARK);
     private static final IDrawable autoPullBackground = IDrawable.of(GTGuiTextures.SLOT_DARK,
@@ -65,15 +62,14 @@ public abstract class AEConfigSlot<T extends IAEStack<T>> extends Widget<AEConfi
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Override
-    public @NotNull AESyncHandler<T> getSyncHandler() {
-        return (AESyncHandler<T>) super.getSyncHandler();
+    public @NotNull AESyncHandler getSyncHandler() {
+        return (AESyncHandler) super.getSyncHandler();
     }
 
     @Override
     public boolean isValidSyncHandler(SyncHandler syncHandler) {
-        return syncHandler instanceof AESyncHandler<?>;
+        return syncHandler instanceof AESyncHandler;
     }
 
     @Override
@@ -125,10 +121,7 @@ public abstract class AEConfigSlot<T extends IAEStack<T>> extends Widget<AEConfi
 
         if (newStackSize > 0) {
             long finalNewStackSize = newStackSize;
-            getSyncHandler().syncToServer(SYNC_CONFIG_AMOUNT, buf -> {
-                buf.writeInt(this.index);
-                buf.writeLong(finalNewStackSize);
-            });
+            getSyncHandler().setConfigAmount(this.index, finalNewStackSize);
             return true;
         }
 
@@ -154,10 +147,7 @@ public abstract class AEConfigSlot<T extends IAEStack<T>> extends Widget<AEConfi
                                     .setDefaultNumber(1)
                                     .value(new LongValue.Dynamic(
                                             () -> getSyncHandler().getConfigAmount(index),
-                                            newAmount -> getSyncHandler().syncToServer(SYNC_CONFIG_AMOUNT, buf -> {
-                                                buf.writeInt(this.index);
-                                                buf.writeLong(newAmount);
-                                            })))
+                                            newAmount -> getSyncHandler().setConfigAmount(this.index, newAmount)))
                                     .size(100, 10)
                                     .left(18 + 5 * 2)
                                     // alignY didn't work :whar:
@@ -183,5 +173,5 @@ public abstract class AEConfigSlot<T extends IAEStack<T>> extends Widget<AEConfi
         this.onSelect = onSelect;
     }
 
-    protected abstract @NotNull AEStackPreviewWidget<T> createPopupDrawable();
+    protected abstract @NotNull AEStackPreviewWidget createPopupDrawable();
 }

@@ -1,339 +1,287 @@
-// ApplyGray - AE2/AE2FC integration addon for GregTech
-
-import com.gtnewhorizons.retrofuturagradle.util.Distribution
-
 plugins {
     id 'java'
     id 'java-library'
-    id 'eclipse'
-    id 'org.jetbrains.gradle.plugin.idea-ext' version '1.1.8'
-    id 'com.gtnewhorizons.retrofuturagradle' version '1.4.0'
+    id 'maven-publish'
+    id 'signing'
+    id 'org.jetbrains.gradle.plugin.idea-ext' version '1.4.1'
+    id 'com.gradleup.shadow' version '9.4.0'
+    id 'xyz.wagyourtail.unimined' version '1.4.23-kappa'
+    id 'net.kyori.blossom' version '2.2.0'
+    id 'com.diffplug.spotless' version '8.4.0'
 }
 
-// Project properties from gradle.properties
-checkPropertyExists("modName")
-checkPropertyExists("modId")
-checkPropertyExists("modGroup")
-checkPropertyExists("minecraftVersion")
-checkPropertyExists("usesMixins")
-checkPropertyExists("mixinsPackage")
-checkPropertyExists("coreModClass")
-checkPropertyExists("containsMixinsAndOrCoreModOnly")
+private String gitOutput(List<String> args, String fallback) {
+    try {
+        def process = new ProcessBuilder(['git'] + args)
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        def stdout = process.inputStream.getText('UTF-8').trim()
+        if (process.waitFor() == 0 && !stdout.isEmpty()) {
+            return stdout
+        }
+    } catch (Exception ignored) {
+        // Source archives and environments without Git use the declared fallback.
+    }
+    return fallback
+}
 
-propertyDefaultIfUnset("modVersion", "")
-propertyDefaultIfUnset("includeMCVersionJar", false)
-propertyDefaultIfUnset("modArchivesBaseName", project.modId)
-propertyDefaultIfUnset("developmentEnvironmentUserName", "Developer")
-propertyDefaultIfUnset("additionalJavaArguments", "")
-propertyDefaultIfUnset("enableJava17RunTasks", false)
-propertyDefaultIfUnset("generateGradleTokenClass", "")
-propertyDefaultIfUnset("gradleTokenModId", "")
-propertyDefaultIfUnset("gradleTokenModName", "")
-propertyDefaultIfUnset("gradleTokenVersion", "")
-propertyDefaultIfUnset("includeWellKnownRepositories", true)
-propertyDefaultIfUnset("includeCommonDevEnvMods", true)
-propertyDefaultIfUnset("stripForgeRequirements", false)
-propertyDefaultIfUnset("forceEnableMixins", false)
-propertyDefaultIfUnset("mixinConfigRefmap", "mixins.${project.modId}.refmap.json")
-propertyDefaultIfUnset("generateMixinConfig", true)
-propertyDefaultIfUnset("mixinProviderSpec", "zone.rong:mixinbooter:10.6")
-propertyDefaultIfUnset("enableModernJavaSyntax", false)
-propertyDefaultIfUnset("noPublishedSources", false)
+private String defaultModVersion() {
+    def previousTag = gitOutput(['describe', '--tags', '--abbrev=0', '--exclude=dev'], '0.0.0')
+    if (previousTag.startsWith('v')) {
+        previousTag = previousTag.substring(1)
+    }
+    return "${previousTag}+${gitOutput(['rev-parse', '--short', 'HEAD'], 'unknown')}"
+}
 
-final String modGroupPath = modGroup.toString().replace('.' as char, '/' as char)
+def requiredProperty = { String name ->
+    def value = project.findProperty(name)?.toString()
+    if (value == null || value.trim().isEmpty()) {
+        throw new GradleException("Property ${name} must be defined")
+    }
+    return value
+}
 
-// Configure Java
+def propertyOrDefault = { String name, String defaultValue ->
+    def value = project.findProperty(name)?.toString()
+    return value == null || value.trim().isEmpty() ? defaultValue : value
+}
+
+if (!gradle.startParameter.projectProperties.containsKey('mod_version')) {
+    project.setProperty('mod_version', defaultModVersion())
+}
+
+def modVersion = requiredProperty('mod_version')
+def rootPackage = requiredProperty('root_package')
+def modId = requiredProperty('mod_id')
+def modName = requiredProperty('mod_name')
+def minecraftUsername = propertyOrDefault('minecraft_username', 'Developer')
+def enableShadow = propertyOrDefault('enable_shadow', 'false').toBoolean()
+def isCoremod = propertyOrDefault('is_coremod', 'false').toBoolean()
+def coremodIncludesMod = propertyOrDefault('coremod_includes_mod', 'false').toBoolean()
+def coremodPluginClassName = propertyOrDefault('coremod_plugin_class_name', '')
+
+if (isCoremod && coremodPluginClassName.trim().isEmpty()) {
+    throw new GradleException('coremod_plugin_class_name must be set when is_coremod is true')
+}
+
+version = modVersion
+group = rootPackage
+
+base {
+    archivesName = modId
+}
+
 java {
     toolchain {
-        if (enableModernJavaSyntax.toBoolean()) {
-            languageVersion.set(JavaLanguageVersion.of(17))
-        } else {
-            languageVersion.set(JavaLanguageVersion.of(8))
-        }
-        vendor.set(JvmVendorSpec.AZUL)
+        languageVersion = JavaLanguageVersion.of(25)
     }
-    if (!noPublishedSources.toBoolean()) {
+    if (propertyOrDefault('generate_sources_jar', 'true').toBoolean()) {
         withSourcesJar()
     }
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-
-    if (enableModernJavaSyntax.toBoolean()) {
-        if (it.name in ['compileMcLauncherJava', 'compilePatchedMcJava']) {
-            return
-        }
-        sourceCompatibility = 17
-        options.release.set(8)
-        javaCompiler.set(javaToolchains.compilerFor {
-            languageVersion.set(JavaLanguageVersion.of(17))
-            vendor.set(JvmVendorSpec.AZUL)
-        })
-    }
-}
-
-// Mod version
-if (!modVersion) {
-    modVersion = '1.0.0'
-}
-
-if (includeMCVersionJar.toBoolean()) {
-    version = "${minecraftVersion}-${modVersion}"
-} else {
-    version = modVersion
-}
-
-group = modGroup
-base {
-    archivesName = modArchivesBaseName
-}
-
-// Configure Minecraft
-minecraft {
-    mcVersion = minecraftVersion
-    username = developmentEnvironmentUserName.toString()
-    useDependencyAccessTransformers = true
-
-    if (gradleTokenModId) {
-        injectedTags.put gradleTokenModId, modId
-    }
-    if (gradleTokenModName) {
-        injectedTags.put gradleTokenModName, modName
-    }
-    if (gradleTokenVersion) {
-        injectedTags.put gradleTokenVersion, modVersion
-    }
-
-    extraRunJvmArguments.add("-ea:${modGroup}")
-    if (usesMixins.toBoolean()) {
-        extraRunJvmArguments.addAll([
-            '-Dmixin.hotSwap=true',
-            '-Dmixin.checks.interfaces=true',
-            '-Dmixin.debug.export=true'
-        ])
-    }
-}
-
-if (coreModClass) {
-    for (runTask in ['runClient', 'runServer']) {
-        tasks.named(runTask).configure {
-            extraJvmArgs.add("-Dfml.coreMods.load=${modGroup}.${coreModClass}")
-        }
-    }
-}
-
-if (generateGradleTokenClass) {
-    tasks.injectTags.outputClassName.set(generateGradleTokenClass)
-}
-
-// Repositories
-repositories.configureEach { repo ->
-    if (repo instanceof UrlArtifactRepository) {
-        if (repo.getUrl() != null && repo.getUrl().getScheme() == "http" && !repo.allowInsecureProtocol) {
-            repo.allowInsecureProtocol = true
-        }
+    if (propertyOrDefault('generate_javadocs_jar', 'true').toBoolean()) {
+        withJavadocJar()
     }
 }
 
 repositories {
-    if (includeWellKnownRepositories.toBoolean() || includeCommonDevEnvMods.toBoolean()) {
-        exclusiveContent {
-            forRepository {
-                maven {
-                    name = 'Curse Maven'
-                    url = 'https://www.cursemaven.com'
-                }
-            }
-            filter {
-                includeGroup 'curse.maven'
-            }
-        }
-        exclusiveContent {
-            forRepository {
-                maven {
-                    name = 'Modrinth'
-                    url = 'https://api.modrinth.com/maven'
-                }
-            }
-            filter {
-                includeGroup 'maven.modrinth'
-            }
-        }
-        maven {
-            name 'Cleanroom Maven'
-            url 'https://maven.cleanroommc.com'
-        }
-        maven {
-            name 'BlameJared Maven'
-            url 'https://maven.blamejared.com'
-        }
-        maven {
-            name 'GTNH Maven'
-            url 'https://nexus.gtnewhorizons.com/repository/public/'
-        }
-        maven {
-            name 'GTCEu Maven'
-            url 'https://maven.gtceu.com'
-        }
+    flatDir {
+        dirs('libs')
     }
+    maven {
+        url = 'https://maven.cleanroommc.com'
+    }
+    maven {
+        url = 'https://cursemaven.com'
+    }
+    maven {
+        url = 'https://maven.blamejared.com/'
+    }
+    maven {
+        url = 'https://repo.spongepowered.org/maven'
+    }
+    maven {
+        url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
+    }
+    mavenCentral()
     mavenLocal()
 }
 
-// Dependencies
 configurations {
-    embed
-    implementation.extendsFrom(embed)
-
-    create("runtimeOnlyNonPublishable") {
-        description = "Runtime only dependencies that are not published alongside the jar"
-        canBeConsumed = false
-        canBeResolved = false
-    }
-    create("devOnlyNonPublishable") {
-        description = "Runtime and compiletime dependencies that are not published alongside the jar"
-        canBeConsumed = false
-        canBeResolved = false
-    }
-
-    compileOnly.extendsFrom(devOnlyNonPublishable)
-    runtimeOnlyNonPublishable.extendsFrom(devOnlyNonPublishable)
-    runtimeClasspath.extendsFrom(runtimeOnlyNonPublishable)
+    contain
+    implementation.extendsFrom(contain)
+    modCompileOnly
+    compileOnly.extendsFrom(modCompileOnly)
+    modRuntimeOnly
+    runtimeOnly.extendsFrom(modRuntimeOnly)
 }
 
-dependencies {
-    if (usesMixins.toBoolean()) {
-        annotationProcessor 'org.ow2.asm:asm-debug-all:5.2'
-        annotationProcessor 'com.google.guava:guava:30.0-jre'
-        annotationProcessor 'com.google.code.gson:gson:2.8.9'
+String remapTaskName = enableShadow ? 'remapShadowJar' : 'remapJar'
 
-        def activeMixinProviderSpec = modUtils.enableMixins(mixinProviderSpec, mixinConfigRefmap)
-        api(activeMixinProviderSpec) {
-            transitive = false
+unimined.minecraft {
+    version '1.12.2'
+
+    mappings {
+        mcp('stable', '39-1.12')
+    }
+
+    cleanroom {
+        loader '0.5.14-alpha'
+        runs.auth.username = minecraftUsername
+        runs.all {
+            systemProperty('crl.dev.mixin', 'mixins.applygray.mod.json')
+            systemProperty('mixin.debug.export', 'true')
+            if (isCoremod) {
+                systemProperty('fml.coreMods.load', coremodPluginClassName)
+            }
+            def extraArgs = propertyOrDefault('extra_jvm_args', '')
+            if (!extraArgs.trim().isEmpty()) {
+                jvmArgs += extraArgs.split { '\\s+' }.toList()
+            }
         }
-        annotationProcessor(activeMixinProviderSpec) {
-            transitive = false
+    }
+
+    defaultRemapJar = false
+
+    remap(tasks.named(enableShadow ? 'shadowJar' : 'jar').get()) {
+        mixinRemap {
+            enableBaseMixin()
+            enableMixinExtra()
+            disableRefmap()
         }
     }
 
-    if (enableModernJavaSyntax.toBoolean()) {
-        annotationProcessor 'com.github.bsideup.jabel:jabel-javac-plugin:1.0.1'
-        compileOnly('com.github.bsideup.jabel:jabel-javac-plugin:1.0.1') {
-            transitive = false
-        }
-        annotationProcessor 'net.java.dev.jna:jna-platform:5.13.0'
-        patchedMinecraft 'me.eigenraven.java8unsupported:java-8-unsupported-shim:1.0.0'
-    }
-
-    compileOnlyApi 'org.jetbrains:annotations:24.1.0'
-    annotationProcessor 'org.jetbrains:annotations:24.1.0'
-
-    // Compile against the matching local fork without publishing it with ApplyGray.
-    devOnlyNonPublishable files('libs/gregtech-dev.jar')
-
-    // AE2 and AE2FC dependencies
-    implementation rfg.deobf(files("libs/appliedenergistics2-v1.0.5-gtqt.jar"))
-    implementation rfg.deobf(files("libs/ae2fc-2.7.10-unofficial.jar"))
-
-    // Common dev env mods
-    if (includeCommonDevEnvMods.toBoolean()) {
-        implementation 'mezz.jei:jei_1.12.2:4.16.1.302'
-        implementation rfg.deobf('curse.maven:top-245211:2667280')
+    mods {
+        remap(configurations.modCompileOnly)
+        remap(configurations.modRuntimeOnly)
     }
 }
 
-// Apply custom dependencies
-if (getFile('dependencies.gradle').exists()) {
-    apply from: 'dependencies.gradle'
-}
+apply from: 'dependencies.gradle'
 
-// Resource processing
-processResources {
-    inputs.property 'version', modVersion
-    inputs.property 'mcversion', minecraftVersion
-
-    filesMatching('mcmod.info') { fcd ->
-        fcd.expand(
-                'version': modVersion,
-                'mcversion': minecraftVersion,
-                'modid': modId,
-                'modname': modName
-        )
+def generatedTagsSourceDir = layout.buildDirectory.dir('generated/sources/tags/java')
+def generateTagsSource = tasks.register('generateTagsSource') {
+    def outputFile = generatedTagsSourceDir.map {
+        it.file("${rootPackage.replace('.', '/')}/ApplyGrayInternalTags.java")
     }
-}
 
-// Generate assets
-tasks.register('generateAssets') {
-    group = 'ApplyGray Build'
-    description = 'Generates pack.mcmeta and mcmod.info if needed'
+    inputs.property('mod_id', modId)
+    inputs.property('mod_name', modName)
+    inputs.property('mod_version', modVersion)
+    outputs.file(outputFile)
+
     doLast {
-        def packMcmetaFile = getFile('src/main/resources/pack.mcmeta')
-        if (!packMcmetaFile.exists()) {
-            packMcmetaFile.text = """{
-  "pack": {
-    "pack_format": 3,
-    "description": "${modName} Resource Pack"
-  }
+        def file = outputFile.get().asFile
+        file.parentFile.mkdirs()
+        file.text = """package ${rootPackage};
+
+public final class ApplyGrayInternalTags {
+
+    public static final String MOD_ID = \"${modId}\";
+    public static final String MOD_NAME = \"${modName}\";
+    public static final String VERSION = \"${modVersion}\";
+
+    private ApplyGrayInternalTags() {
+    }
 }
 """
-        }
-
-        def mcmodInfoFile = getFile('src/main/resources/mcmod.info')
-        if (!mcmodInfoFile.exists()) {
-            mcmodInfoFile.text = """[{
-    "modid": "\${modid}",
-    "name": "\${modname}",
-    "description": "AE2/AE2FC integration addon for GregTech",
-    "version": "\${version}",
-    "mcversion": "\${mcversion}",
-    "logoFile": "",
-    "url": "",
-    "authorList": [],
-    "credits": "",
-    "dependencies": ["gregtech"]
-}]
-"""
-        }
     }
 }
 
-tasks.named('processResources').configure {
-    dependsOn('generateAssets')
+sourceSets.main.java.srcDir(generatedTagsSourceDir)
+
+def resourceProperties = [
+    modid      : modId,
+    modname    : modName,
+    version    : modVersion,
+    mcversion  : '1.12.2',
+    mod_id     : modId,
+    mod_name   : modName,
+    mod_version: modVersion
+]
+
+processResources {
+    inputs.properties(resourceProperties)
+    filesMatching(['mcmod.info', 'pack.mcmeta']) {
+        expand(resourceProperties)
+    }
+}
+
+if (!enableShadow) {
+    shadowJar.enabled = false
+}
+
+tasks.named('compileJava').configure {
+    dependsOn(generateTagsSource)
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.named('sourcesJar').configure {
+    dependsOn(generateTagsSource)
 }
 
 jar {
+    archiveClassifier = 'dev'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    if (configurations.contain.size() > 0) {
+        into('/') {
+            from configurations.contain
+        }
+    }
     manifest {
-        attributes(getManifestAttributes())
+        def manifestAttributes = [
+            'ModType'     : 'CRL',
+            'MixinConfigs': 'mixins.applygray.mod.json'
+        ]
+        if (isCoremod) {
+            manifestAttributes['FMLCorePlugin'] = coremodPluginClassName
+            if (coremodIncludesMod) {
+                manifestAttributes['FMLCorePluginContainsFMLMod'] = true
+            }
+        }
+        attributes(manifestAttributes)
+    }
+    finalizedBy(tasks.named(remapTaskName).get())
+}
+
+shadowJar {
+    configurations = [project.configurations.shadow]
+    archiveClassifier = 'shadow'
+}
+
+tasks.named(remapTaskName).configure {
+    doFirst {
+        logging.captureStandardOutput(LogLevel.INFO)
+    }
+    doLast {
+        logging.captureStandardOutput(LogLevel.QUIET)
     }
 }
 
-def getManifestAttributes() {
-    def attributes = [:]
-    if (coreModClass) {
-        attributes['FMLCorePlugin'] = "${modGroup}.${coreModClass}"
-    }
-    if (!containsMixinsAndOrCoreModOnly.toBoolean() && (usesMixins.toBoolean() || coreModClass)) {
-        attributes['FMLCorePluginContainsFMLMod'] = true
-    }
-    if (usesMixins.toBoolean()) {
-        attributes['ForceLoadAsMod'] = !containsMixinsAndOrCoreModOnly.toBoolean()
-    }
-    return attributes
+tasks.named('compileTestJava').configure {
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_25
 }
 
-// Helpers
-def getFile(String relativePath) {
-    return new File(projectDir, relativePath)
-}
-
-def checkPropertyExists(String propertyName) {
-    if (!project.hasProperty(propertyName)) {
-        throw new GradleException("This project requires a property \"" + propertyName + "\"! Please add it to \"gradle.properties\".")
+test {
+    useJUnitPlatform()
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    })
+    if (propertyOrDefault('show_testing_output', 'false').toBoolean()) {
+        testLogging {
+            showStandardStreams = true
+        }
     }
 }
 
-def propertyDefaultIfUnset(String propertyName, defaultValue) {
-    if (!project.hasProperty(propertyName) || project.property(propertyName) == "") {
-        project.ext.setProperty(propertyName, defaultValue)
-    }
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.docEncoding = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:deprecation', '-Xlint:unchecked']
 }

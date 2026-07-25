@@ -1,6 +1,6 @@
 package gregtech.api.mui.widget.appeng;
 
-import appeng.api.storage.data.IAEStack;
+import ae2.api.stacks.GenericStack;
 import com.cleanroommc.modularui.integration.recipeviewer.RecipeViewerIngredientProvider;
 import com.cleanroommc.modularui.screen.RichTooltip;
 import com.cleanroommc.modularui.screen.viewport.ModularGuiContext;
@@ -11,13 +11,13 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.function.Supplier;
 
-public abstract class AEStackPreviewWidget<T extends IAEStack<T>> extends Widget<AEStackPreviewWidget<T>>
+public abstract class AEStackPreviewWidget extends Widget<AEStackPreviewWidget>
         implements RecipeViewerIngredientProvider {
 
     @NotNull
-    protected final Supplier<T> stackToDraw;
+    protected final Supplier<GenericStack> stackToDraw;
 
-    public AEStackPreviewWidget(@NotNull Supplier<T> stackToDraw) {
+    public AEStackPreviewWidget(@NotNull Supplier<GenericStack> stackToDraw) {
         this.stackToDraw = stackToDraw;
         tooltipAutoUpdate(true);
         tooltipBuilder(this::buildTooltip);
@@ -30,5 +30,5 @@ public abstract class AEStackPreviewWidget<T extends IAEStack<T>> extends Widget
         draw(stackToDraw.get(), 1, 1, getArea().w() - 2, getArea().h() - 2);
     }
 
-    public abstract void draw(@Nullable T stackToDraw, int x, int y, int width, int height);
+    public abstract void draw(@Nullable GenericStack stackToDraw, int x, int y, int width, int height);
 }
