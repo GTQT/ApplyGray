@@ -1,7 +1,7 @@
 package applygray.integration.ae2;
 
-/** Server-side action exposed by the AE2 crafting confirmation container. */
+/** Requests ApplyGray's independent optimal RecipeMap rebuild from an AE2 crafting confirmation container. */
 public interface IRecipePatternRebuildable {
 
-    void applygray$clearCurrentPlanPatternsAndRecalculate();
+    void applygray$rebuildOptimalRecipePlan();
 }

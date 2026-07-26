@@ -28,6 +28,6 @@ public abstract class MixinGuiCraftConfirmLazyRecipeMap {
             new TabButton(Icon.ADVANCED_MEMORY_CARD_REFRESH,
                 new TextComponentTranslation("applygray.gui.rebuild_recipe_patterns"),
                 () -> ((IRecipePatternRebuildable) (Object) container)
-                    .applygray$clearCurrentPlanPatternsAndRecalculate()));
+                    .applygray$rebuildOptimalRecipePlan()));
     }
 }

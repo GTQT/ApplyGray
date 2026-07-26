@@ -121,6 +121,7 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                 }
             } finally {
                 DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
+                DynamicRecipePatternRegistry.finishCraftingCalculationSession();
             }
         });
     }

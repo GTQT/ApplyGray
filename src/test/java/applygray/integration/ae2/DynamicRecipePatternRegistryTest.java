@@ -9,6 +9,7 @@ import gregtech.api.recipes.ingredients.GTRecipeFluidInput;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.recipes.ingredients.GTRecipeItemInput;
 import gregtech.api.recipes.properties.RecipePropertyStorageImpl;
+import gregtech.api.GTValues;
 import gregtech.api.GregTechAPI;
 import gregtech.api.modules.IModuleManager;
 
@@ -34,6 +35,7 @@ import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -135,6 +137,104 @@ class DynamicRecipePatternRegistryTest {
                 "equal input counts should prefer more output");
         assertTrue(DynamicRecipePatternRegistry.compareInputOutputEfficiency(1, 1, 2, 2) < 0,
                 "equal efficiency should prefer fewer total inputs");
+    }
+
+    @Test
+    void ranksDustAndFluidInputsBeforeIngotsAndRecycling() {
+        assertTrue(DynamicRecipePatternRegistry.compareCandidateRoutePriority(
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.DUST_OR_FLUID_INPUT,
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.INGOT_INPUT) < 0,
+                "dust and fluid routes must rank before ingot routes");
+        assertTrue(DynamicRecipePatternRegistry.compareCandidateRoutePriority(
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.INGOT_INPUT,
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL) < 0,
+                "ingot routes must rank before general routes");
+        assertTrue(DynamicRecipePatternRegistry.compareCandidateRoutePriority(
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.MATERIAL_FORM_CHANGE,
+                        DynamicRecipePatternRegistry.CandidateRoutePriority.RECYCLING) < 0,
+                "recycling must remain the final fallback");
+    }
+
+    @Test
+    void recognizesDustIngotAndRecyclingRouteMarkers() {
+        assertTrue(DynamicRecipePatternRegistry.isDustPrefix("dust"));
+        assertTrue(DynamicRecipePatternRegistry.isDustPrefix("dustTiny"));
+        assertTrue(DynamicRecipePatternRegistry.isIngotPrefix("ingot"));
+        assertTrue(DynamicRecipePatternRegistry.isIngotPrefix("ingotHot"));
+        assertFalse(DynamicRecipePatternRegistry.isIngotPrefix("screw"));
+        assertTrue(DynamicRecipePatternRegistry.isRecyclingRecipeCategoryName("extractor_recycling"));
+        assertFalse(DynamicRecipePatternRegistry.isRecyclingRecipeCategoryName("alloy_blast"));
+    }
+
+    @Test
+    void measuresUnifiedItemsByContainedMaterialInsteadOfStackCount() {
+        assertEquals(GTValues.M * 9,
+                DynamicRecipePatternRegistry.estimateItemRawMaterialCost(GTValues.M, 9),
+                "nine dusts must contain the same material amount as one dense plate");
+        assertEquals(GTValues.M * 9,
+                DynamicRecipePatternRegistry.estimateItemRawMaterialCost(GTValues.M * 9, 1),
+                "a dense plate must contribute all nine material units to its recipe cost");
+    }
+
+    @Test
+    void rebuildInvalidationClearsRecipeOutputIndexes() throws ReflectiveOperationException {
+        Class<?> gridState = Class.forName("applygray.integration.ae2.DynamicRecipePatternRegistry$GridState");
+        var constructor = gridState.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object state = constructor.newInstance();
+
+        @SuppressWarnings("unchecked")
+        Map<Object, Object> outputIndexes = (Map<Object, Object>) readField(state, "recipeOutputIndexes");
+        @SuppressWarnings("unchecked")
+        Map<Object, Object> targetPatterns = (Map<Object, Object>) readField(state, "patternsByTarget");
+        @SuppressWarnings("unchecked")
+        Map<Object, Object> registeredPatterns = (Map<Object, Object>) readField(state, "patternsByRecipe");
+        outputIndexes.put("test", "test");
+        targetPatterns.put("unselected_target", List.of("unselected_pattern"));
+        registeredPatterns.put("unselected_pattern", "unselected_pattern");
+
+        Method invalidate = gridState.getDeclaredMethod("invalidatePlanPatternsAndRecipeOutputIndexes",
+                Collection.class);
+        invalidate.setAccessible(true);
+        assertEquals(0, (int) invalidate.invoke(state, List.of()));
+        assertTrue(outputIndexes.isEmpty());
+        assertEquals(1, targetPatterns.size(), "rebuild must not remove an unselected dynamic target cache");
+        assertEquals(1, registeredPatterns.size(), "rebuild must not remove an unselected dynamic pattern");
+        assertTrue(((Number) readField(state, "pendingFullRecipeOutputIndexEpoch")).longValue() > 0,
+                "the next calculation must eagerly rebuild every active RecipeMap output index");
+
+        Method ensureFullRebuild = gridState.getDeclaredMethod("ensureFullRecipeOutputIndexRebuild");
+        ensureFullRebuild.setAccessible(true);
+        assertFalse((boolean) ensureFullRebuild.invoke(state),
+                "a non-calculation thread must not consume ApplyGray's pending optimal rebuild");
+        assertTrue(((Number) readField(state, "pendingFullRecipeOutputIndexEpoch")).longValue() > 0,
+                "the pending optimal rebuild must remain for the calculation started by ApplyGray");
+    }
+
+    @Test
+    void keepsOptimalRebuildSessionUntilTheCraftingTaskEnds() throws ReflectiveOperationException {
+        Field activeOptimalRebuild = DynamicRecipePatternRegistry.class.getDeclaredField("ACTIVE_OPTIMAL_REBUILD");
+        activeOptimalRebuild.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        ThreadLocal<Object> session = (ThreadLocal<Object>) activeOptimalRebuild.get(null);
+
+        Class<?> context = Class.forName(
+                "applygray.integration.ae2.DynamicRecipePatternRegistry$OptimalRebuildContext");
+        var constructor = context.getDeclaredConstructor(int.class, int.class, long.class, long.class);
+        constructor.setAccessible(true);
+        Object expected = constructor.newInstance(1, 2, 3L, System.nanoTime());
+
+        session.set(expected);
+        try {
+            DynamicRecipePatternRegistry.leaveCraftingCalculation(null);
+            assertSame(expected, session.get(),
+                    "a failed attempt must preserve optimal rebuild state for its recovery calculation");
+
+            DynamicRecipePatternRegistry.finishCraftingCalculationSession();
+            assertNull(session.get(), "the state must be released after the outer crafting task finishes");
+        } finally {
+            session.remove();
+        }
     }
 
     @Test
