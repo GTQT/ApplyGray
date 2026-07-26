@@ -67,10 +67,7 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             if (leftDynamic && rightDynamic) {
                 DynamicRecipePatternDetails l = (DynamicRecipePatternDetails) left;
                 DynamicRecipePatternDetails r = (DynamicRecipePatternDetails) right;
-                int raw = Long.compare(l.getRawMaterialCost(), r.getRawMaterialCost());
-                if (raw != 0) return raw;
-                int steps = Integer.compare(l.getStepCost(), r.getStepCost());
-                return steps != 0 ? steps : l.getRecipeKey().compareTo(r.getRecipeKey());
+                return DynamicRecipePatternRegistry.compareDynamicPatternPriority(requested, l, r);
             }
             if (leftDynamic) return -1;
             if (rightDynamic) return 1;

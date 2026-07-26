@@ -29,11 +29,11 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -225,6 +225,19 @@ public final class DynamicRecipePatternRegistry {
         return true;
     }
 
+    /** Orders virtual patterns by the input required per requested net output. */
+    public static int compareDynamicPatternPriority(AEKey requested, DynamicRecipePatternDetails left,
+                                                    DynamicRecipePatternDetails right) {
+        long leftOutput = requested == null ? 0 : left.getNetOutputAmount(requested);
+        long rightOutput = requested == null ? 0 : right.getNetOutputAmount(requested);
+        int efficiency = compareInputOutputEfficiency(left.getRawMaterialCost(), leftOutput,
+                right.getRawMaterialCost(), rightOutput);
+        if (efficiency != 0) return efficiency;
+
+        int steps = Integer.compare(left.getStepCost(), right.getStepCost());
+        return steps != 0 ? steps : left.getRecipeKey().compareTo(right.getRecipeKey());
+    }
+
     static boolean isOreBackedDust(String prefixName, boolean materialHasOreProperty) {
         return materialHasOreProperty && ("dust".equals(prefixName) || "dustSmall".equals(prefixName) ||
                 "dustTiny".equals(prefixName) || "dustImpure".equals(prefixName) || "dustPure".equals(prefixName));
@@ -366,28 +379,27 @@ public final class DynamicRecipePatternRegistry {
                         if (!recipeProduces(recipe, target)) continue;
                         EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
+                        long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
+                                encoded.alternatives, encoded.outputs);
+                        if (netOutput <= 0) continue;
                         // This ranking only affects pattern preference. A recursive full-recipe scan here can hold
                         // up the crafting calculation for minutes on large RecipeMaps.
-                        Cost cost = Cost.fallback(recipe);
+                        Cost cost = Cost.fallback(recipe, netOutput);
                         candidates.add(new PatternCandidate(source, recipeMap, recipe, encoded, cost));
                     }
                 }
             }
 
-            candidates.sort(Comparator
-                    .comparingLong((PatternCandidate candidate) -> candidate.cost.rawMaterials)
-                    .thenComparingInt(candidate -> candidate.cost.steps)
-                    .thenComparing(candidate -> candidate.recipeKey));
+            candidates.sort((left, right) -> {
+                int comparison = left.cost.compareTo(right.cost);
+                return comparison != 0 ? comparison : left.recipeKey.compareTo(right.recipeKey);
+            });
 
             List<DynamicRecipePatternDetails> result = new ArrayList<>();
             for (PatternCandidate candidate : candidates) {
                 DynamicRecipePatternDetails detail = candidate.source.provider
                         .getCachedDynamicPattern(candidate.recipeKey);
                 if (detail == null) {
-                    if (!DynamicRecipePatternDetails.hasNetOutput(target, candidate.encoded.inputs,
-                            candidate.encoded.alternatives, candidate.encoded.outputs)) {
-                        continue;
-                    }
                     detail = new DynamicRecipePatternDetails(candidate.recipeKey,
                             candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
                             candidate.encoded.alternatives, candidate.encoded.outputs,
@@ -722,6 +734,34 @@ public final class DynamicRecipePatternRegistry {
         return false;
     }
 
+    /**
+     * Lower input per net output wins. Equal efficiencies prefer fewer total inputs, then more net output.
+     */
+    static int compareInputOutputEfficiency(long leftInput, long leftOutput,
+                                            long rightInput, long rightOutput) {
+        boolean leftProduces = leftOutput > 0;
+        boolean rightProduces = rightOutput > 0;
+        if (leftProduces != rightProduces) return leftProduces ? -1 : 1;
+        if (leftProduces) {
+            int perUnit = compareInputPerOutput(leftInput, leftOutput, rightInput, rightOutput);
+            if (perUnit != 0) return perUnit;
+        }
+
+        int input = Long.compare(leftInput, rightInput);
+        return input != 0 ? input : Long.compare(rightOutput, leftOutput);
+    }
+
+    private static int compareInputPerOutput(long leftInput, long leftOutput,
+                                             long rightInput, long rightOutput) {
+        try {
+            return Long.compare(Math.multiplyExact(leftInput, rightOutput),
+                    Math.multiplyExact(rightInput, leftOutput));
+        } catch (ArithmeticException ignored) {
+            return BigInteger.valueOf(leftInput).multiply(BigInteger.valueOf(rightOutput)).compareTo(
+                    BigInteger.valueOf(rightInput).multiply(BigInteger.valueOf(leftOutput)));
+        }
+    }
+
     private static long estimateFluidRawMaterialCost(FluidStack fluid, int amount) {
         int millibucketsPerUnit = isMoltenMaterialFluid(fluid) ?
                 GTValues.L : STANDARD_FLUID_MILLIBUCKETS_PER_UNIT;
@@ -770,15 +810,17 @@ public final class DynamicRecipePatternRegistry {
     }
 
     private static final class Cost implements Comparable<Cost> {
-        private long rawMaterials;
-        private int steps;
+        private final long rawMaterials;
+        private final long netOutput;
+        private final int steps;
 
-        private Cost(long rawMaterials, int steps) {
+        private Cost(long rawMaterials, long netOutput, int steps) {
             this.rawMaterials = rawMaterials;
+            this.netOutput = netOutput;
             this.steps = steps;
         }
 
-        private static Cost fallback(Recipe recipe) {
+        private static Cost fallback(Recipe recipe, long netOutput) {
             long raw = 0;
             for (GTRecipeInput input : recipe.getInputs()) {
                 if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
@@ -790,13 +832,14 @@ public final class DynamicRecipePatternRegistry {
                 FluidStack fluid = input.getInputFluidStack();
                 if (fluid != null) raw += estimateFluidRawMaterialCost(fluid, input.getAmount());
             }
-            return new Cost(raw, 1);
+            return new Cost(raw, netOutput, 1);
         }
 
         @Override
         public int compareTo(Cost other) {
-            int rawCompare = Long.compare(rawMaterials, other.rawMaterials);
-            return rawCompare != 0 ? rawCompare : Integer.compare(steps, other.steps);
+            int efficiency = compareInputOutputEfficiency(rawMaterials, netOutput,
+                    other.rawMaterials, other.netOutput);
+            return efficiency != 0 ? efficiency : Integer.compare(steps, other.steps);
         }
     }
 }

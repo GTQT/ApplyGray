@@ -123,6 +123,16 @@ class DynamicRecipePatternRegistryTest {
     }
 
     @Test
+    void prefersLowerInputPerNetOutputWhenRankingDynamicPatterns() {
+        assertTrue(DynamicRecipePatternRegistry.compareInputOutputEfficiency(3, 3, 2, 1) < 0,
+                "three inputs for three outputs should beat two inputs for one output");
+        assertTrue(DynamicRecipePatternRegistry.compareInputOutputEfficiency(2, 2, 2, 1) < 0,
+                "equal input counts should prefer more output");
+        assertTrue(DynamicRecipePatternRegistry.compareInputOutputEfficiency(1, 1, 2, 2) < 0,
+                "equal efficiency should prefer fewer total inputs");
+    }
+
+    @Test
     void rejectsARequestedOutputThatThePatternAlsoConsumes() {
         Item itemA = testItem("net_output_consumed_a");
         Item itemB = testItem("net_output_consumed_b");
@@ -144,6 +154,8 @@ class DynamicRecipePatternRegistryTest {
         List<GenericStack> outputs = List.of(stack(itemA, 2));
 
         assertTrue(DynamicRecipePatternDetails.hasNetOutput(key(itemA), inputs, alternatives, outputs));
+        assertEquals(1, DynamicRecipePatternDetails.getNetOutputAmount(key(itemA), inputs, alternatives,
+                outputs));
     }
 
     @Test

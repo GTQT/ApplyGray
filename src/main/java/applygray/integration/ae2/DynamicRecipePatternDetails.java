@@ -91,15 +91,25 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
      * planning.</p>
      */
     public boolean netProduces(AEKey requested) {
-        return hasNetOutput(requested, inputs, outputs);
+        return getNetOutputAmount(requested) > 0;
+    }
+
+    /** Returns the requested key's output amount after subtracting every possible matching input. */
+    public long getNetOutputAmount(AEKey requested) {
+        return getNetOutputAmount(requested, inputs, outputs);
     }
 
     static boolean hasNetOutput(AEKey requested, List<GenericStack> primaryInputs,
                                 List<List<GenericStack>> alternatives, List<GenericStack> outputs) {
-        return hasNetOutput(requested, createInputs(primaryInputs, alternatives), outputs);
+        return getNetOutputAmount(requested, primaryInputs, alternatives, outputs) > 0;
     }
 
-    private static boolean hasNetOutput(AEKey requested, Input[] inputs, List<GenericStack> outputs) {
+    static long getNetOutputAmount(AEKey requested, List<GenericStack> primaryInputs,
+                                   List<List<GenericStack>> alternatives, List<GenericStack> outputs) {
+        return getNetOutputAmount(requested, createInputs(primaryInputs, alternatives), outputs);
+    }
+
+    private static long getNetOutputAmount(AEKey requested, Input[] inputs, List<GenericStack> outputs) {
         long netOutput = 0;
         for (GenericStack output : outputs) {
             if (requested.matches(output)) {
@@ -115,7 +125,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
                 }
             }
         }
-        return netOutput > 0;
+        return netOutput;
     }
 
     public NBTTagCompound writeToNBT() {
