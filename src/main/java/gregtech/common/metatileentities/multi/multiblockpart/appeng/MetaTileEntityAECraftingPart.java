@@ -28,6 +28,7 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
@@ -614,14 +615,16 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     @Override
     public PatternContainerGroup getTerminalGroup() {
         AEItemKey icon = AEItemKey.of(getStackForm());
-        return new PatternContainerGroup(icon, new TextComponentString(getTerminalDisplayName()), List.of());
+        return new PatternContainerGroup(icon, getTerminalDisplayName(), List.of());
     }
 
-    private String getTerminalDisplayName() {
-        if (getController() != null && getShowName().equals(getMetaFullName())) {
-            return getController().getMetaFullName();
+    private ITextComponent getTerminalDisplayName() {
+        String showName = getShowName();
+        if (showName.equals(getMetaFullName())) {
+            String translationKey = getController() == null ? showName : getController().getMetaFullName();
+            return new TextComponentTranslation(translationKey);
         }
-        return getShowName();
+        return new TextComponentString(showName);
     }
 
     private void onTerminalPatternInventoryChanged() {

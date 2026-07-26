@@ -8,7 +8,7 @@ import ae2.api.implementations.blockentities.PatternContainerGroup;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.text.TextComponentString;
+import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -32,6 +32,6 @@ public abstract class MixinPatternContainerGroup {
         if (metaTileEntity instanceof MetaTileEntityMultiblockPart part && part.getController() != null) {
             name = part.getController().getMetaFullName();
         }
-        cir.setReturnValue(new PatternContainerGroup(group.icon(), new TextComponentString(name), group.tooltip()));
+        cir.setReturnValue(new PatternContainerGroup(group.icon(), new TextComponentTranslation(name), group.tooltip()));
     }
 }
