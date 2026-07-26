@@ -139,7 +139,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         this.patternSlotCount = tier * tier;
         this.patternGridRowSize = tier;
         this.bufferCount = tier <= GTValues.EV ? 12 : tier <= GTValues.UV ? 24 : 36;
-        patternDetails = new ArrayList<>(Collections.nCopies(bufferCount, null));
+        patternDetails = new ArrayList<>(Collections.nCopies(patternSlotCount, null));
         initializeInventory();
     }
 

@@ -71,10 +71,10 @@ dependencies {
     modRuntimeOnly('com.cleanroommc:modularui:3.1.6') {
         transitive = false
     }
-    modCompileOnly('com.cleanroommc:groovyscript:1.2.0-hotfix1') {
+    modCompileOnly('com.cleanroommc:groovyscript:1.4.3') {
         transitive = false
     }
-    modRuntimeOnly('com.cleanroommc:groovyscript:1.2.0-hotfix1') {
+    modRuntimeOnly('com.cleanroommc:groovyscript:1.4.3') {
         transitive = false
     }
     modCompileOnly 'mezz:jei:4.31.2'
