@@ -19,6 +19,7 @@ import net.minecraftforge.fluids.FluidStack;
 
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,6 +29,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -177,6 +179,21 @@ class DynamicRecipePatternRegistryTest {
         assertFalse(DynamicRecipePatternRegistry.isOreBackedDust("dust", false));
     }
 
+    @Test
+    void indexesRecipesByTheirDeterministicOutputs() throws ReflectiveOperationException {
+        Item matchingInput = testItem("indexed_matching_input");
+        Item matchingOutput = testItem("indexed_matching_output");
+        Item unrelatedInput = testItem("indexed_unrelated_input");
+        Item unrelatedOutput = testItem("indexed_unrelated_output");
+        Recipe matching = createSingleItemRecipe(matchingInput, matchingOutput);
+        Recipe unrelated = createSingleItemRecipe(unrelatedInput, unrelatedOutput);
+
+        Object outputIndex = createOutputIndex(List.of(matching, unrelated));
+
+        assertEquals(List.of(matching), getIndexedRecipes(outputIndex, key(matchingOutput)));
+        assertTrue(getIndexedRecipes(outputIndex, key(unrelatedInput)).isEmpty());
+    }
+
     private static Recipe createUhvWetwareMainframeRecipe() {
         int[] itemAmounts = {2, 2, 32, 32, 32, 32, 32, 64, 32, 16, 8};
         List<GTRecipeInput> itemInputs = new ArrayList<>(itemAmounts.length);
@@ -201,6 +218,13 @@ class DynamicRecipePatternRegistryTest {
         return new Item().setRegistryName("applygray_test", name);
     }
 
+    private static Recipe createSingleItemRecipe(Item input, Item output) {
+        return new Recipe(List.of(new GTRecipeItemInput(new ItemStack(input))),
+                List.of(new ItemStack(output)), ChancedOutputList.<ItemStack, ChancedItemOutput>empty(),
+                List.of(), List.of(), ChancedOutputList.<FluidStack, ChancedFluidOutput>empty(),
+                List.of(new ItemStack(input)), 20, 1, false, false, new RecipePropertyStorageImpl(), null);
+    }
+
     private static GenericStack stack(Item item, int amount) {
         GenericStack stack = GenericStack.fromItemStack(new ItemStack(item, amount));
         assertNotNull(stack);
@@ -218,6 +242,22 @@ class DynamicRecipePatternRegistryTest {
                 DynamicRecipePatternRegistry.ProviderSnapshot.class, Recipe.class);
         method.setAccessible(true);
         return method.invoke(null, null, recipe);
+    }
+
+    private static Object createOutputIndex(Collection<Recipe> recipes) throws ReflectiveOperationException {
+        Class<?> outputIndex = Class.forName(
+                "applygray.integration.ae2.DynamicRecipePatternRegistry$RecipeOutputIndex");
+        Method method = outputIndex.getDeclaredMethod("create", Collection.class);
+        method.setAccessible(true);
+        return method.invoke(null, recipes);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Recipe> getIndexedRecipes(Object outputIndex, AEItemKey target)
+            throws ReflectiveOperationException {
+        Method method = outputIndex.getClass().getDeclaredMethod("getRecipes", AEKey.class);
+        method.setAccessible(true);
+        return (List<Recipe>) method.invoke(outputIndex, target);
     }
 
     private static Object prioritize(ItemStack[] choices) throws ReflectiveOperationException {

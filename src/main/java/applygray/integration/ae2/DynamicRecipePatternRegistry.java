@@ -36,11 +36,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -50,7 +52,16 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class DynamicRecipePatternRegistry {
 
     private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
-    private static final int PATTERN_SCAN_PAUSE_INTERVAL = 8;
+    /**
+     * A RecipeMap can have hundreds of valid variants for one common output. Giving all of them to AE2 makes every
+     * recursive branch fan out, which is worse than selecting a bounded set of the best direct candidates.
+     */
+    private static final int MAX_PATTERNS_PER_TARGET = 8;
+    /**
+     * Limits the work for a pathological common output even before candidates have been encoded. The output index is
+     * ordered by RecipeMap registration order, so this is deliberately much larger than the exposed pattern limit.
+     */
+    private static final int MAX_RECIPES_PER_TARGET = 512;
     private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
@@ -297,6 +308,11 @@ public final class DynamicRecipePatternRegistry {
         private final Map<AEKey, List<DynamicRecipePatternDetails>> patternsByTarget = new ConcurrentHashMap<>();
         private final Map<String, DynamicRecipePatternDetails> patternsByRecipe = new ConcurrentHashMap<>();
         private final Map<AEKey, Set<String>> rejectedRecipeKeysByTarget = new ConcurrentHashMap<>();
+        /**
+         * Resolves a requested output to its producing recipes without rescanning every RecipeMap for every node in a
+         * recursive crafting calculation. It is cleared whenever the set of providers changes.
+         */
+        private final Map<RecipeMap<?>, RecipeOutputIndex> recipeOutputIndexes = new ConcurrentHashMap<>();
         // Retired dynamic details must remain resolvable while an already-submitted CPU still holds them.
         // Weak keys release the association once no plan or CPU references the old detail anymore.
         private final Map<IPatternDetails, ICraftingProvider> providersByPattern =
@@ -358,6 +374,7 @@ public final class DynamicRecipePatternRegistry {
                 long startedAt = System.nanoTime();
                 List<DynamicRecipePatternDetails> generated = createPatterns(target);
                 if (Thread.currentThread().isInterrupted()) {
+                    abortCancelledCalculation();
                     return Collections.emptyList();
                 }
                 long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
@@ -376,8 +393,7 @@ public final class DynamicRecipePatternRegistry {
             }
             List<IPatternDetails> available = new ArrayList<>(existing.size());
             for (int index = 0; index < existing.size(); index++) {
-                if ((index & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
-                        !cooperateWithCraftingCalculation()) {
+                if (!cooperateWithCraftingCalculation()) {
                     return Collections.emptyList();
                 }
                 DynamicRecipePatternDetails detail = existing.get(index);
@@ -389,40 +405,53 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
-            List<PatternCandidate> candidates = new ArrayList<>();
+            List<PatternCandidate> candidates = new ArrayList<>(MAX_PATTERNS_PER_TARGET);
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
-            int scannedRecipes = 0;
+            Set<String> seenRecipeKeys = new HashSet<>();
+            int inspectedRecipes = 0;
+            boolean cappedRecipeScan = false;
+
+            scan:
             for (ProviderSnapshot source : sources) {
                 KeyCounter storedItems = getStoredItems(source);
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
-                    for (Recipe recipe : recipeMap.getRecipeList()) {
-                        if ((scannedRecipes++ & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
-                                !cooperateWithCraftingCalculation()) {
+                    RecipeOutputIndex outputIndex = getRecipeOutputIndex(recipeMap);
+                    if (outputIndex == null) {
+                        return Collections.emptyList();
+                    }
+                    for (Recipe recipe : outputIndex.getRecipes(target)) {
+                        if (!cooperateWithCraftingCalculation()) {
                             return Collections.emptyList();
                         }
-                        if (!recipeProduces(recipe, target)) continue;
+                        if (inspectedRecipes++ >= MAX_RECIPES_PER_TARGET) {
+                            cappedRecipeScan = true;
+                            break scan;
+                        }
                         EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
                         long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
                                 encoded.alternatives, encoded.outputs);
                         if (netOutput <= 0) continue;
-                        // This ranking only affects pattern preference. A recursive full-recipe scan here can hold
-                        // up the crafting calculation for minutes on large RecipeMaps.
+                        // This ranking only affects pattern preference. Avoiding recursive cost evaluation keeps
+                        // large RecipeMaps from turning one lookup into a full dependency scan.
                         Cost cost = Cost.fallback(recipe, netOutput);
-                        candidates.add(new PatternCandidate(source, recipeMap, recipe, encoded, cost));
+                        PatternCandidate candidate = new PatternCandidate(source, recipeMap, recipe, encoded, cost);
+                        if (!seenRecipeKeys.add(candidate.recipeKey)) continue;
+                        if (isRejectedFor(target, candidate.recipeKey)) continue;
+                        keepBestCandidate(candidates, candidate);
                     }
                 }
             }
 
-            candidates.sort((left, right) -> {
-                int comparison = left.cost.compareTo(right.cost);
-                return comparison != 0 ? comparison : left.recipeKey.compareTo(right.recipeKey);
-            });
+            if (cappedRecipeScan) {
+                ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup for {} stopped after {} recipe candidates " +
+                                "to keep the crafting calculation bounded",
+                        target, MAX_RECIPES_PER_TARGET);
+            }
 
-            List<DynamicRecipePatternDetails> result = new ArrayList<>();
+            List<DynamicRecipePatternDetails> result = new ArrayList<>(candidates.size());
             for (int index = 0; index < candidates.size(); index++) {
-                if ((index & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
-                        !cooperateWithCraftingCalculation()) {
+                if (!cooperateWithCraftingCalculation()) {
                     return Collections.emptyList();
                 }
                 PatternCandidate candidate = candidates.get(index);
@@ -454,9 +483,59 @@ public final class DynamicRecipePatternRegistry {
             return Collections.unmodifiableList(result);
         }
 
+        private RecipeOutputIndex getRecipeOutputIndex(RecipeMap<?> recipeMap) {
+            Collection<Recipe> recipes = recipeMap.getRecipeList();
+            int recipeCount = recipes.size();
+            RecipeOutputIndex existing = recipeOutputIndexes.get(recipeMap);
+            if (existing != null && existing.recipeCount == recipeCount) {
+                return existing;
+            }
+
+            long startedAt = System.nanoTime();
+            RecipeOutputIndex indexed = RecipeOutputIndex.create(recipes);
+            if (indexed == null) {
+                return null;
+            }
+
+            RecipeOutputIndex current = recipeOutputIndexes.putIfAbsent(recipeMap, indexed);
+            RecipeOutputIndex result = current != null && current.recipeCount == recipeCount ? current : indexed;
+            if (current != null && current.recipeCount != recipeCount) {
+                recipeOutputIndexes.replace(recipeMap, current, indexed);
+                result = indexed;
+            }
+
+            long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
+            if (elapsedMillis >= 1_000L) {
+                ApplyGrayMod.LOGGER.warn("Indexed {} deterministic outputs from {} recipes in RecipeMap {} in {} ms",
+                        result.outputCount, result.recipeCount, recipeMap.getUnlocalizedName(), elapsedMillis);
+            }
+            return result;
+        }
+
+        private static void keepBestCandidate(List<PatternCandidate> candidates, PatternCandidate candidate) {
+            int insertionIndex = 0;
+            while (insertionIndex < candidates.size() &&
+                    compareCandidates(candidates.get(insertionIndex), candidate) <= 0) {
+                insertionIndex++;
+            }
+            if (insertionIndex >= MAX_PATTERNS_PER_TARGET) {
+                return;
+            }
+
+            candidates.add(insertionIndex, candidate);
+            if (candidates.size() > MAX_PATTERNS_PER_TARGET) {
+                candidates.remove(candidates.size() - 1);
+            }
+        }
+
+        private static int compareCandidates(PatternCandidate left, PatternCandidate right) {
+            int comparison = left.cost.compareTo(right.cost);
+            return comparison != 0 ? comparison : left.recipeKey.compareTo(right.recipeKey);
+        }
+
         private static boolean cooperateWithCraftingCalculation() {
             if (Thread.currentThread().isInterrupted()) {
-                return false;
+                return abortCancelledCalculation();
             }
 
             CraftingCalculation calculation = ACTIVE_CRAFTING_CALCULATION.get();
@@ -465,11 +544,18 @@ public final class DynamicRecipePatternRegistry {
             }
             try {
                 pausable.applygray$handlePausing();
-                return !Thread.currentThread().isInterrupted();
+                return !Thread.currentThread().isInterrupted() || abortCancelledCalculation();
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
-                return false;
+                return abortCancelledCalculation();
             }
+        }
+
+        private static boolean abortCancelledCalculation() {
+            if (ACTIVE_CRAFTING_CALCULATION.get() != null) {
+                throw new CancellationException("Lazy RecipeMap pattern lookup cancelled");
+            }
+            return false;
         }
 
         private synchronized int invalidatePlanPatterns(Collection<? extends IPatternDetails> patterns) {
@@ -588,36 +674,77 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private boolean isRejectedFor(AEKey target, DynamicRecipePatternDetails detail) {
+            return isRejectedFor(target, detail.getRecipeKey());
+        }
+
+        private boolean isRejectedFor(AEKey target, String recipeKey) {
             Set<String> rejected = rejectedRecipeKeysByTarget.get(target);
-            return rejected != null && rejected.contains(detail.getRecipeKey());
+            return rejected != null && rejected.contains(recipeKey);
         }
 
         private void clearGenerated() {
             patternsByTarget.clear();
             patternsByRecipe.clear();
             rejectedRecipeKeysByTarget.clear();
+            recipeOutputIndexes.clear();
             providersByPattern.clear();
         }
     }
 
-    private static boolean recipeProduces(Recipe recipe, AEKey target) {
-        if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
-                !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) {
-            return false;
+    /**
+     * Immutable, deterministic-output index for one RecipeMap. It is intentionally built only on the crafting worker
+     * and yields through the active calculation after every recipe, so initial indexing cannot monopolize a tick.
+     */
+    private static final class RecipeOutputIndex {
+
+        private final int recipeCount;
+        private final int outputCount;
+        private final Map<AEKey, List<Recipe>> recipesByOutput;
+
+        private RecipeOutputIndex(int recipeCount, Map<AEKey, List<Recipe>> recipesByOutput) {
+            this.recipeCount = recipeCount;
+            this.outputCount = recipesByOutput.size();
+            this.recipesByOutput = recipesByOutput;
         }
-        for (ItemStack output : recipe.getOutputs()) {
-            AEItemKey outputKey = AEItemKey.of(output);
-            if (target.equals(outputKey)) {
-                return true;
+
+        private static RecipeOutputIndex create(Collection<Recipe> recipes) {
+            Map<AEKey, List<Recipe>> mutableIndex = new HashMap<>();
+            for (Recipe recipe : recipes) {
+                if (!GridState.cooperateWithCraftingCalculation()) {
+                    return null;
+                }
+                if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
+                        !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) {
+                    continue;
+                }
+
+                for (ItemStack output : recipe.getOutputs()) {
+                    addRecipe(mutableIndex, AEItemKey.of(output), recipe);
+                }
+                for (FluidStack output : recipe.getFluidOutputs()) {
+                    addRecipe(mutableIndex, AEFluidKey.of(output), recipe);
+                }
+            }
+
+            Map<AEKey, List<Recipe>> immutableIndex = new HashMap<>(mutableIndex.size());
+            for (Map.Entry<AEKey, List<Recipe>> entry : mutableIndex.entrySet()) {
+                immutableIndex.put(entry.getKey(), Collections.unmodifiableList(entry.getValue()));
+            }
+            return new RecipeOutputIndex(recipes.size(), Collections.unmodifiableMap(immutableIndex));
+        }
+
+        private static void addRecipe(Map<AEKey, List<Recipe>> index, AEKey output, Recipe recipe) {
+            if (output == null) return;
+            List<Recipe> producingRecipes = index.computeIfAbsent(output, ignored -> new ArrayList<>());
+            if (producingRecipes.isEmpty() || producingRecipes.get(producingRecipes.size() - 1) != recipe) {
+                producingRecipes.add(recipe);
             }
         }
-        for (FluidStack output : recipe.getFluidOutputs()) {
-            AEFluidKey outputKey = AEFluidKey.of(output);
-            if (target.equals(outputKey)) {
-                return true;
-            }
+
+        private List<Recipe> getRecipes(AEKey target) {
+            List<Recipe> recipes = recipesByOutput.get(target);
+            return recipes == null ? Collections.emptyList() : recipes;
         }
-        return false;
     }
 
     private static KeyCounter getStoredItems(ProviderSnapshot source) {

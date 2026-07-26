@@ -15,12 +15,19 @@
     "supergiant.MixinContainerCraftConfirmLazyRecipeMap",
     "supergiant.MixinAETrack",
     "supergiant.MixinPatternContainerGroup",
+    "supergiant.InvokerAEBaseContainer",
+    "supergiant.AccessorPatternAccessSupport",
+    "supergiant.AccessorPatternAccessSupportContainerTracker",
+    "supergiant.MixinContainerPatternAccessTermRecipeMapClear",
+    "supergiant.MixinContainerPEATermRecipeMapClear",
     "supergiantfc.MixinUtil",
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],
   "client": [
     "supergiant.InvokerAEBaseGui",
     "supergiant.MixinRecipeTransferHandler",
+    "supergiant.MixinPatternAccessDisplaySupport",
+    "supergiant.MixinAbstractPatternAccessTermRecipeMapClear",
     "supergiant.MixinGuiCraftConfirmLazyRecipeMap",
     "supergiantfc.MixinRecipeTransferBuilder",
     "supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"

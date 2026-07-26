@@ -18,12 +18,16 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.TextComponentTranslation;
 
 import net.minecraftforge.common.util.Constants;
 
 import ae2.api.crafting.IPatternDetails;
+import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.api.networking.IGrid;
 import ae2.api.networking.IGridNodeListener;
+import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.KeyCounter;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.factory.PosGuiData;
@@ -37,7 +41,6 @@ import com.cleanroommc.modularui.widgets.layout.Flow;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -50,6 +53,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
     private static final int MAX_PERSISTED_PATTERNS = 1024;
+    public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
     private final AtomicLong dynamicEpoch = new AtomicLong();
     private final ConcurrentMap<String, DynamicRecipePatternDetails> cachedPatterns = new ConcurrentHashMap<>();
@@ -84,22 +88,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     }
 
     /**
-     * Cached virtual patterns are mounted through AE2's normal provider API after a restart.
+     * Dynamic details are injected by {@link DynamicRecipePatternRegistry} only for the output currently being
+     * calculated. Mounting the whole persisted cache through AE2's regular provider API turns every old candidate
+     * into a branch of every later calculation and can make recursive planning unbounded.
      */
     @Override
     public List<? extends IPatternDetails> getAvailablePatterns() {
-        if (!isActive()) {
-            return Collections.emptyList();
-        }
-
-        List<DynamicRecipePatternDetails> available = new ArrayList<>();
-        for (DynamicRecipePatternDetails detail : cachedPatterns.values()) {
-            if (isRecipeMapRouteAvailable(detail)) {
-                available.add(detail);
-            }
-        }
-        available.sort(Comparator.comparing(DynamicRecipePatternDetails::getRecipeKey));
-        return available;
+        return Collections.emptyList();
     }
 
     @Override
@@ -198,16 +193,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public DynamicRecipePatternDetails cacheDynamicPattern(DynamicRecipePatternDetails detail) {
         DynamicRecipePatternDetails existing = cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
         if (existing == null) {
-            patternCacheRefreshPending = true;
             return detail;
         }
         return existing;
     }
 
     public void removeCachedDynamicPattern(String recipeKey) {
-        if (cachedPatterns.remove(recipeKey) != null) {
-            patternCacheRefreshPending = true;
-        }
+        cachedPatterns.remove(recipeKey);
     }
 
     public void clearCachedPatterns() {
@@ -224,7 +216,35 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         clearCachedPatterns();
         markDirty();
         patternCacheRefreshPending = requestPatternUpdate();
+        if (cachedPatternCount > 0) {
+            ApplyGrayMod.LOGGER.info("Cleared {} dynamic RecipeMap patterns at {}", cachedPatternCount, getPos());
+        }
         return cachedPatternCount;
+    }
+
+    @Override
+    public PatternContainerGroup getTerminalGroup() {
+        List<ITextComponent> tooltip = new ArrayList<>();
+        tooltip.add(new TextComponentTranslation(TERMINAL_GROUP_TOOLTIP_KEY));
+        if (getWorld() != null) {
+            tooltip.add(new TextComponentTranslation("applygray.gui.pattern_access.location",
+                    getPos().getX(), getPos().getY(), getPos().getZ(), getWorld().provider.getDimension()));
+        }
+        return new PatternContainerGroup(AEItemKey.of(getStackForm()), getTerminalRecipeMapName(), tooltip);
+    }
+
+    private ITextComponent getTerminalRecipeMapName() {
+        RecipeMap<?>[] recipeMaps = getExposedRecipeMaps();
+        if (recipeMaps.length == 0) {
+            return new TextComponentTranslation(getMetaFullName());
+        }
+
+        ITextComponent name = new TextComponentTranslation(recipeMaps[0].getTranslationKey());
+        for (int i = 1; i < recipeMaps.length; i++) {
+            name.appendText(", ");
+            name.appendSibling(new TextComponentTranslation(recipeMaps[i].getTranslationKey()));
+        }
+        return name;
     }
 
     @Override
@@ -328,6 +348,10 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         return "按 AE 请求懒生成样板\n配方表: " + recipeMaps[0].getLocalizedName() +
                 (recipeMaps.length > 1 ? " 等 " + recipeMaps.length + " 张" : "") +
                 "\n缓冲区: " + getBufferCount() + " 个";
+    }
+
+    public RecipeMap<?>[] getExposedRecipeMaps() {
+        return getExposedRecipeMaps(getController());
     }
 
     private RecipeMap<?>[] getExposedRecipeMaps(MultiblockControllerBase controller) {
