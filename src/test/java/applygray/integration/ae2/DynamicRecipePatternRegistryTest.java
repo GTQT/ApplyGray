@@ -2,6 +2,7 @@ package applygray.integration.ae2;
 
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.chance.output.ChancedOutputList;
+import gregtech.api.recipes.chance.output.ChancedOutputLogic;
 import gregtech.api.recipes.chance.output.impl.ChancedFluidOutput;
 import gregtech.api.recipes.chance.output.impl.ChancedItemOutput;
 import gregtech.api.recipes.ingredients.GTRecipeFluidInput;
@@ -14,8 +15,10 @@ import gregtech.api.modules.IModuleManager;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.init.Bootstrap;
+import net.minecraft.init.Items;
 import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEFluidKey;
@@ -180,6 +183,52 @@ class DynamicRecipePatternRegistryTest {
     }
 
     @Test
+    void treatsEveryOrePrefixAsAnExternalInput() {
+        assertTrue(DynamicRecipePatternRegistry.isOreInputPrefix("ore"));
+        assertTrue(DynamicRecipePatternRegistry.isOreInputPrefix("oreNetherrack"));
+        assertTrue(DynamicRecipePatternRegistry.isOreInputPrefix("oreBlackgranite"));
+        assertTrue(DynamicRecipePatternRegistry.isOreInputPrefix("rawOre"));
+        assertTrue(DynamicRecipePatternRegistry.isOreInputPrefix("rawOreCopper"));
+        assertFalse(DynamicRecipePatternRegistry.isOreInputPrefix("dust"));
+        assertFalse(DynamicRecipePatternRegistry.isOreInputPrefix("crushed"));
+    }
+
+    @Test
+    void doesNotEncodeRecipesThatConsumeOreInputs() throws ReflectiveOperationException {
+        Item ore = Items.DIAMOND;
+        Item dust = Items.REDSTONE;
+        OreDictionary.registerOre("oreDynamicPatternTest", new ItemStack(ore));
+
+        assertNull(encode(createSingleItemRecipe(ore, dust)));
+    }
+
+    @Test
+    void doesNotEncodeRecipesWithAnOreInputAlternative() throws ReflectiveOperationException {
+        Item ore = Items.EMERALD;
+        Item nonOreAlternative = Items.IRON_INGOT;
+        Item dust = Items.REDSTONE;
+        OreDictionary.registerOre("oreDynamicPatternAlternativeTest", new ItemStack(ore));
+
+        assertNull(encode(createAlternativeItemRecipe(nonOreAlternative, ore, dust)));
+    }
+
+    @Test
+    void exposesOnlyThePrimaryOutputOfRecipesWithDeterministicByproducts() {
+        GenericStack mainOutput = stack(Items.GOLD_INGOT, 1);
+        GenericStack byproduct = stack(Items.REDSTONE, 1);
+        List<GenericStack> outputs = List.of(mainOutput, byproduct);
+
+        assertEquals(List.of(mainOutput),
+                DynamicRecipePatternRegistry.selectPrimaryPatternOutputs(key(Items.GOLD_INGOT), outputs));
+        assertTrue(DynamicRecipePatternRegistry.selectPrimaryPatternOutputs(key(Items.REDSTONE), outputs).isEmpty());
+    }
+
+    @Test
+    void doesNotEncodeRecipesWithChancedOutputs() throws ReflectiveOperationException {
+        assertNull(encode(createChancedOutputRecipe(Items.IRON_INGOT, Items.GOLD_INGOT, Items.REDSTONE)));
+    }
+
+    @Test
     void indexesRecipesByTheirDeterministicOutputs() throws ReflectiveOperationException {
         Item matchingInput = testItem("indexed_matching_input");
         Item matchingOutput = testItem("indexed_matching_output");
@@ -221,6 +270,21 @@ class DynamicRecipePatternRegistryTest {
     private static Recipe createSingleItemRecipe(Item input, Item output) {
         return new Recipe(List.of(new GTRecipeItemInput(new ItemStack(input))),
                 List.of(new ItemStack(output)), ChancedOutputList.<ItemStack, ChancedItemOutput>empty(),
+                List.of(), List.of(), ChancedOutputList.<FluidStack, ChancedFluidOutput>empty(),
+                List.of(new ItemStack(input)), 20, 1, false, false, new RecipePropertyStorageImpl(), null);
+    }
+
+    private static Recipe createAlternativeItemRecipe(Item firstInput, Item secondInput, Item output) {
+        return new Recipe(List.of(new GTRecipeItemInput(new ItemStack(firstInput), new ItemStack(secondInput))),
+                List.of(new ItemStack(output)), ChancedOutputList.<ItemStack, ChancedItemOutput>empty(),
+                List.of(), List.of(), ChancedOutputList.<FluidStack, ChancedFluidOutput>empty(),
+                List.of(new ItemStack(firstInput)), 20, 1, false, false, new RecipePropertyStorageImpl(), null);
+    }
+
+    private static Recipe createChancedOutputRecipe(Item input, Item mainOutput, Item chancedOutput) {
+        return new Recipe(List.of(new GTRecipeItemInput(new ItemStack(input))), List.of(new ItemStack(mainOutput)),
+                new ChancedOutputList<>(ChancedOutputLogic.OR,
+                        List.of(new ChancedItemOutput(new ItemStack(chancedOutput), 5000, 0))),
                 List.of(), List.of(), ChancedOutputList.<FluidStack, ChancedFluidOutput>empty(),
                 List.of(new ItemStack(input)), 20, 1, false, false, new RecipePropertyStorageImpl(), null);
     }

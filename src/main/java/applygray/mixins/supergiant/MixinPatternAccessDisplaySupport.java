@@ -14,7 +14,7 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 
-/** Identifies the client entry belonging to one zero-slot RecipeMap pattern provider. */
+/** Identifies zero-slot RecipeMap provider groups in the pattern access terminal. */
 @Mixin(targets = "ae2.client.gui.me.patternaccess.PatternAccessDisplaySupport", remap = false)
 public abstract class MixinPatternAccessDisplaySupport implements RecipeMapPatternAccessDisplay {
 
@@ -29,7 +29,7 @@ public abstract class MixinPatternAccessDisplaySupport implements RecipeMapPatte
 
         long inventoryId = NO_PROVIDER;
         for (PatternContainerEntry entry : byGroup.get(group)) {
-            if (entry.getInventory().size() != 0 || inventoryId != NO_PROVIDER) {
+            if (entry.getInventory().size() != 0) {
                 return NO_PROVIDER;
             }
             inventoryId = entry.getServerId();

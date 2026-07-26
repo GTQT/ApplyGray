@@ -20,6 +20,7 @@ import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEnti
 
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.networking.IGrid;
@@ -267,9 +268,46 @@ public final class DynamicRecipePatternRegistry {
         return steps != 0 ? steps : left.getRecipeKey().compareTo(right.getRecipeKey());
     }
 
+    /** Exposes the first deterministic recipe output only, leaving all later outputs out of AE2's pattern result. */
+    static List<GenericStack> selectPrimaryPatternOutputs(AEKey requested, List<GenericStack> recipeOutputs) {
+        if (requested == null || recipeOutputs.isEmpty()) {
+            return Collections.emptyList();
+        }
+        GenericStack primaryOutput = recipeOutputs.get(0);
+        return requested.matches(primaryOutput) ? Collections.singletonList(primaryOutput) :
+                Collections.emptyList();
+    }
+
+    static boolean isOreInputPrefix(String prefixName) {
+        return prefixName.startsWith("ore") || prefixName.startsWith("rawOre");
+    }
+
     static boolean isOreBackedDust(String prefixName, boolean materialHasOreProperty) {
         return materialHasOreProperty && ("dust".equals(prefixName) || "dustSmall".equals(prefixName) ||
                 "dustTiny".equals(prefixName) || "dustImpure".equals(prefixName) || "dustPure".equals(prefixName));
+    }
+
+    private static boolean isExternalOreInput(AEKey target) {
+        return target instanceof AEItemKey itemKey && isExternalOreInput(itemKey.toStack());
+    }
+
+    private static boolean isExternalOreInput(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        for (int oreDictionaryId : OreDictionary.getOreIDs(stack)) {
+            if (isOreInputPrefix(OreDictionary.getOreName(oreDictionaryId))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsExternalOreInput(ItemStack[] choices) {
+        for (ItemStack choice : choices) {
+            if (isExternalOreInput(choice)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isOreBackedDust(AEKey target) {
@@ -365,6 +403,11 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<IPatternDetails> findPatterns(AEKey target) {
+            // Ores are external resources. A parent recipe may consume them, but the lazy generator must never
+            // attempt to make an ore itself through another RecipeMap pattern.
+            if (isExternalOreInput(target)) {
+                return Collections.emptyList();
+            }
             if (!cooperateWithCraftingCalculation()) {
                 return Collections.emptyList();
             }
@@ -429,6 +472,9 @@ public final class DynamicRecipePatternRegistry {
                         }
                         EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
+                        List<GenericStack> patternOutputs = selectPrimaryPatternOutputs(target, encoded.outputs);
+                        if (patternOutputs.isEmpty()) continue;
+                        encoded = encoded.withOutputs(patternOutputs);
                         long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
                                 encoded.alternatives, encoded.outputs);
                         if (netOutput <= 0) continue;
@@ -457,6 +503,10 @@ public final class DynamicRecipePatternRegistry {
                 PatternCandidate candidate = candidates.get(index);
                 DynamicRecipePatternDetails detail = candidate.source.provider
                         .getCachedDynamicPattern(candidate.recipeKey);
+                if (detail != null && !detail.getOutputs().equals(candidate.encoded.outputs)) {
+                    candidate.source.provider.removeCachedDynamicPattern(candidate.recipeKey);
+                    detail = null;
+                }
                 if (detail == null) {
                     detail = new DynamicRecipePatternDetails(candidate.recipeKey,
                             candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
@@ -794,6 +844,7 @@ public final class DynamicRecipePatternRegistry {
 
             ItemStack[] choices = input.getInputStacks();
             if (choices.length == 0) return null;
+            if (containsExternalOreInput(choices)) return null;
             List<GenericStack> options = new ArrayList<>();
             for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
                 ItemStack option = choice.copy();
@@ -844,6 +895,7 @@ public final class DynamicRecipePatternRegistry {
 
         ItemStack[] choices = input.getInputStacks();
         if (choices == null || choices.length == 0) return null;
+        if (containsExternalOreInput(choices)) return null;
 
         List<GenericStack> programmableOptions = new ArrayList<>();
         for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
@@ -963,6 +1015,11 @@ public final class DynamicRecipePatternRegistry {
             this.outputs = outputs;
             this.circuitConfiguration = circuitConfiguration;
             this.programmableNonConsumableInputs = programmableNonConsumableInputs;
+        }
+
+        private EncodedRecipe withOutputs(List<GenericStack> patternOutputs) {
+            return new EncodedRecipe(inputs, alternatives, patternOutputs, circuitConfiguration,
+                    programmableNonConsumableInputs);
         }
     }
 

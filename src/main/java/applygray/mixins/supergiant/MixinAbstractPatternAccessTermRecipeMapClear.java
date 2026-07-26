@@ -15,8 +15,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -52,8 +52,8 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
     private void applygray$beginRecipeMapClearButtons(int offsetX, int offsetY, int mouseX, int mouseY,
                                                       CallbackInfo ci) {
         applygray$clearButtons.clear();
-        applygray$localMouseX = mouseX;
-        applygray$localMouseY = mouseY;
+        applygray$localMouseX = mouseX - offsetX;
+        applygray$localMouseY = mouseY - offsetY;
         applygray$guiLeft = offsetX;
         applygray$guiTop = offsetY;
     }
@@ -80,9 +80,9 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
         applygray$clearButtons.add(new ClearButton(inventoryId, x, y, rowIndex));
     }
 
-    @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
-    private void applygray$clearRecipeMapPatterns(int mouseX, int mouseY, int mouseButton, CallbackInfo ci)
-            throws IOException {
+    @Inject(method = "handlePatternAccessExtraMouseClicked", at = @At("HEAD"), cancellable = true)
+    private void applygray$clearRecipeMapPatterns(int mouseX, int mouseY, int mouseButton,
+                                                   CallbackInfoReturnable<Boolean> cir) {
         if (mouseButton != 0 && mouseButton != 1) {
             return;
         }
@@ -96,7 +96,7 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
             if (clickedClearButton || rightClickedGroupHeader) {
                 RecipeMapPatternAccessActions.send(((InvokerAEBaseGui) (Object) this).applygray$getContainer(),
                         button.inventoryId());
-                ci.cancel();
+                cir.setReturnValue(true);
                 return;
             }
         }
