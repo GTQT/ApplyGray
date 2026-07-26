@@ -29,6 +29,7 @@ import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
 import com.cleanroommc.modularui.utils.Color;
+import com.cleanroommc.modularui.value.sync.IntSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
 import com.cleanroommc.modularui.value.sync.StringSyncValue;
 import com.cleanroommc.modularui.value.sync.SyncHandlers;
@@ -149,10 +150,11 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                     MetaTileEntity mte = igtte.getMetaTileEntity();
                     if (mte instanceof MetaTileEntityAECraftingPart patternProvider && !patternProvider.isHideInfo()) {
                         ItemStackHandler itemHandler = patternProvider.getPatternSlot();
-                        int slots = itemHandler.getSlots();
-                        int rowSize = patternProvider.getTier();
+                        int rowSize = itemHandler == null ? 0 : patternProvider.getTier();
                         num++;
-                        guiSyncManager.registerSlotGroup("pattern_slots" + num, slots);
+                        if (itemHandler != null) {
+                            guiSyncManager.registerSlotGroup("pattern_slots" + num, itemHandler.getSlots());
+                        }
 
                         List<IWidget> textWidgets = new ArrayList<>();
 
@@ -160,6 +162,24 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                                 " X:" + pos.getX() + " Y:" + pos.getY() + " Z:" + pos.getZ();
 
                         if (patternProvider.getShowName().contains(searchText)) add = true;
+
+                        if (patternProvider instanceof MetaTileEntityMERecipeMapPatternProvider recipeMapProvider) {
+                            IntSyncValue clearPatternAction = new IntSyncValue(
+                                    () -> 0,
+                                    value -> {
+                                        if (value > 0) recipeMapProvider.clearDynamicPatterns();
+                                    });
+                            guiSyncManager.syncValue("clear_dynamic_patterns_" + num, clearPatternAction);
+                            textWidgets.add(new ButtonWidget<>()
+                                    .size(18, 18)
+                                    .background(GTGuiTextures.BUTTON_CLEAR_GRID)
+                                    .disableHoverBackground()
+                                    .onMousePressed(mouseButton -> {
+                                        clearPatternAction.setIntValue(clearPatternAction.getIntValue() + 1);
+                                        return true;
+                                    })
+                                    .tooltip(tooltip -> tooltip.addLine(IKey.str("清理该总成的动态样板"))));
+                        }
 
                         textWidgets.add(new ButtonWidget<>()
                                 .size(18, 18)
@@ -209,7 +229,7 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                         if (add) {
                             list.add(textWidgets);
 
-                            for (int i = 0; i < rowSize; i++) {
+                            for (int i = 0; itemHandler != null && i < rowSize; i++) {
                                 // 创建新行
                                 List<IWidget> rowWidgets = new ArrayList<>();
                                 for (int j = 0; j < rowSize; j++) {
@@ -281,6 +301,10 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
             IGrid grid = getMainNode().getGrid();
             if (grid == null) return;
             for (MetaTileEntityMEPatternProvider provider : grid.getMachines(MetaTileEntityMEPatternProvider.class)) {
+                pos.add(provider.getPos());
+            }
+            for (MetaTileEntityMERecipeMapPatternProvider provider :
+                    grid.getMachines(MetaTileEntityMERecipeMapPatternProvider.class)) {
                 pos.add(provider.getPos());
             }
             for (MetaTileEntityPatternProviderMappingSlave provider :

@@ -25,6 +25,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
@@ -32,7 +33,7 @@ import java.util.concurrent.Future;
 @Mixin(value = CraftingService.class, remap = false)
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
 
-    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 4;
+    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 1;
 
     @Shadow @Final
     private IGrid grid;
@@ -88,6 +89,9 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
         return executor.submit(() -> {
             try {
                 for (int recoveryAttempt = 0; ; recoveryAttempt++) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new InterruptedException();
+                    }
                     DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
                     try {
                         if (recoveryAttempt == 0) {
@@ -96,6 +100,10 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                         return new CraftingCalculation(world, grid, simRequester, new GenericStack(what, amount),
                                 strategy).run();
                     } catch (RuntimeException failure) {
+                        if (wasCancelled(failure)) {
+                            Thread.currentThread().interrupt();
+                            throw failure;
+                        }
                         boolean cleanedRecursivePatterns =
                                 DynamicRecipePatternRegistry.consumeRecursiveCycleRecovery();
                         if (!cleanedRecursivePatterns ||
@@ -108,6 +116,15 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                 DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
             }
         });
+    }
+
+    private static boolean wasCancelled(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof InterruptedException || cause instanceof CancellationException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Inject(method = "getProviders", at = @At("RETURN"), cancellable = true)

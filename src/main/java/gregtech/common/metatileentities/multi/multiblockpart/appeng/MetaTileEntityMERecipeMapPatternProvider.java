@@ -8,6 +8,7 @@ import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.capability.IMultipleRecipeMaps;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
+import gregtech.api.mui.GTGuiTextures;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.api.util.GTLog;
 import gregtech.common.items.MetaItems;
@@ -28,7 +29,9 @@ import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
+import com.cleanroommc.modularui.value.sync.IntSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
+import com.cleanroommc.modularui.widgets.ButtonWidget;
 import com.cleanroommc.modularui.widgets.TextWidget;
 import com.cleanroommc.modularui.widgets.layout.Flow;
 
@@ -212,6 +215,18 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         patternCacheRefreshPending = true;
     }
 
+    /** Clears this provider's persisted cache and invalidates its dynamic AE pattern registrations. */
+    public int clearDynamicPatterns() {
+        if (getWorld() == null || getWorld().isRemote) return 0;
+
+        int cachedPatternCount = cachedPatterns.size();
+        DynamicRecipePatternRegistry.clearProviderPatterns(this);
+        clearCachedPatterns();
+        markDirty();
+        patternCacheRefreshPending = requestPatternUpdate();
+        return cachedPatternCount;
+    }
+
     @Override
     public void onRemoval() {
         DynamicRecipePatternRegistry.unregister(this);
@@ -276,8 +291,26 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
 
     @Override
     public ModularPanel buildUI(PosGuiData guiData, PanelSyncManager guiSyncManager, UISettings settings) {
+        IntSyncValue clearPatternAction = new IntSyncValue(
+                () -> 0,
+                value -> {
+                    if (value > 0) clearDynamicPatterns();
+                });
+        guiSyncManager.syncValue("clear_dynamic_patterns", clearPatternAction);
+
         return gregtech.api.mui.GTGuis.createPanel(this, 176, 166)
                 .child(IKey.lang(getMetaFullName()).asWidget().pos(7, 7))
+                .child(new ButtonWidget<>()
+                        .size(18)
+                        .right(7)
+                        .top(5)
+                        .background(GTGuiTextures.BUTTON_CLEAR_GRID)
+                        .disableHoverBackground()
+                        .onMousePressed(mouseButton -> {
+                            clearPatternAction.setIntValue(clearPatternAction.getIntValue() + 1);
+                            return true;
+                        })
+                        .tooltip(tooltip -> tooltip.addLine(IKey.str("清理当前总成的动态样板"))))
                 .child(Flow.column()
                         .pos(7, 28)
                         .width(162)

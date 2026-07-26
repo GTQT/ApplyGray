@@ -42,6 +42,16 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
         }
         if (requestIndex < 0 || requestIndex >= processStack.size()) return;
 
+        // The last process is the edge that closes the recursion. Prefer leaving an ore-backed dust at that edge
+        // as an external input so the restarted calculation can take its normal ore-processing route.
+        int lastProcessIndex = Math.min(requestStack.size(), processStack.size()) - 1;
+        for (int index = lastProcessIndex; index >= requestIndex; index--) {
+            if (DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(index),
+                    processStack.get(index).getDetails()) > 0) {
+                return;
+            }
+        }
+
         List<IPatternDetails> cyclePatterns = new ArrayList<>(processStack.size() - requestIndex);
         for (int index = requestIndex; index < processStack.size(); index++) {
             cyclePatterns.add(processStack.get(index).getDetails());

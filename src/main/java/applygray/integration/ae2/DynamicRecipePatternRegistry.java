@@ -5,11 +5,14 @@ import applygray.ApplyGrayMod;
 import gregtech.api.GTValues;
 import gregtech.api.fluids.store.FluidStorageKeys;
 import gregtech.api.unification.FluidUnifier;
+import gregtech.api.unification.OreDictUnifier;
 import gregtech.api.unification.material.Material;
+import gregtech.api.unification.material.properties.PropertyKey;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
+import gregtech.api.unification.stack.UnificationEntry;
 import gregtech.common.items.MetaItems;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
@@ -24,6 +27,7 @@ import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
+import ae2.api.stacks.KeyCounter;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -125,6 +129,20 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
+     * Invalidates generated patterns from one provider without removing its ownership bindings for in-flight CPUs.
+     *
+     * @return the number of currently registered patterns removed from the provider
+     */
+    public static int clearProviderPatterns(MetaTileEntityMERecipeMapPatternProvider provider) {
+        String providerId = provider.getDynamicProviderId();
+        IGrid grid = PROVIDER_GRIDS.get(providerId);
+        if (grid == null) return 0;
+
+        GridState state = GRIDS.get(grid);
+        return state == null ? 0 : state.clearProviderPatterns(providerId);
+    }
+
+    /**
      * Rejects dynamic patterns that participated in a recursive chain without a positive net output.
      *
      * <p>The rejection is scoped to the requested key. The same recipe can still be useful when it is selected to
@@ -136,6 +154,27 @@ public final class DynamicRecipePatternRegistry {
         int removed = 0;
         for (GridState state : GRIDS.values()) {
             removed += state.rejectRecursiveCycle(target, patterns);
+        }
+        if (removed > 0) {
+            RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
+        }
+        return removed;
+    }
+
+    /**
+     * Breaks a non-productive recursive chain at a dust that has an ore form.
+     *
+     * <p>Only the selected pattern is rejected, and only while producing {@code target}. The next calculation can
+     * then satisfy the dust through an ore-processing chain or report the dust as a missing external input.</p>
+     *
+     * @return the number of dynamic patterns removed from the matching grid
+     */
+    public static int rejectRecursiveCycleAtOreDust(AEKey target, IPatternDetails pattern) {
+        if (!isOreBackedDust(target) || pattern == null) return 0;
+
+        int removed = 0;
+        for (GridState state : GRIDS.values()) {
+            removed += state.rejectRecursiveCycleAtOreDust(target, pattern);
         }
         if (removed > 0) {
             RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
@@ -169,6 +208,18 @@ public final class DynamicRecipePatternRegistry {
             if (state.isRejectedFor(target, dynamic)) return false;
         }
         return true;
+    }
+
+    static boolean isOreBackedDust(String prefixName, boolean materialHasOreProperty) {
+        return materialHasOreProperty && ("dust".equals(prefixName) || "dustSmall".equals(prefixName) ||
+                "dustTiny".equals(prefixName) || "dustImpure".equals(prefixName) || "dustPure".equals(prefixName));
+    }
+
+    private static boolean isOreBackedDust(AEKey target) {
+        if (!(target instanceof AEItemKey itemKey)) return false;
+        UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
+        return entry != null && isOreBackedDust(entry.orePrefix.name(),
+                entry.material != null && entry.material.hasProperty(PropertyKey.ORE));
     }
 
     public static final class ProviderSnapshot {
@@ -291,13 +342,14 @@ public final class DynamicRecipePatternRegistry {
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
             int scannedRecipes = 0;
             for (ProviderSnapshot source : sources) {
+                KeyCounter storedItems = getStoredItems(source);
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
                     for (Recipe recipe : recipeMap.getRecipeList()) {
                         if ((scannedRecipes++ & 63) == 0 && Thread.currentThread().isInterrupted()) {
                             return Collections.emptyList();
                         }
                         if (!recipeProduces(recipe, target)) continue;
-                        EncodedRecipe encoded = encodeRecipe(source, recipe);
+                        EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
                         // This ranking only affects pattern preference. A recursive full-recipe scan here can hold
                         // up the crafting calculation for minutes on large RecipeMaps.
@@ -368,10 +420,45 @@ public final class DynamicRecipePatternRegistry {
             }
             if (removedPatterns.isEmpty()) return 0;
 
+            removePatternsFromTargetCache(removedPatterns);
+            return removedPatterns.size();
+        }
+
+        private synchronized int clearProviderPatterns(String providerId) {
+            String recipeKeyPrefix = providerId + ':';
+            Set<DynamicRecipePatternDetails> removedPatterns = new HashSet<>();
+            for (Map.Entry<String, DynamicRecipePatternDetails> entry : patternsByRecipe.entrySet()) {
+                if (!entry.getKey().startsWith(recipeKeyPrefix)) continue;
+                if (patternsByRecipe.remove(entry.getKey(), entry.getValue())) {
+                    removedPatterns.add(entry.getValue());
+                }
+            }
+
+            Set<AEKey> targetsWithClearedRejections = new HashSet<>();
+            for (Map.Entry<AEKey, Set<String>> entry : rejectedRecipeKeysByTarget.entrySet()) {
+                Set<String> rejectedRecipeKeys = entry.getValue();
+                if (rejectedRecipeKeys.removeIf(recipeKey -> recipeKey.startsWith(recipeKeyPrefix))) {
+                    targetsWithClearedRejections.add(entry.getKey());
+                }
+                if (rejectedRecipeKeys.isEmpty()) {
+                    rejectedRecipeKeysByTarget.remove(entry.getKey(), rejectedRecipeKeys);
+                }
+            }
+
+            for (AEKey target : targetsWithClearedRejections) {
+                patternsByTarget.remove(target);
+            }
+            if (removedPatterns.isEmpty()) return 0;
+
+            removePatternsFromTargetCache(removedPatterns);
+            return removedPatterns.size();
+        }
+
+        private void removePatternsFromTargetCache(Set<DynamicRecipePatternDetails> patterns) {
             List<AEKey> affectedTargets = new ArrayList<>();
             for (Map.Entry<AEKey, List<DynamicRecipePatternDetails>> entry : patternsByTarget.entrySet()) {
                 for (DynamicRecipePatternDetails detail : entry.getValue()) {
-                    if (removedPatterns.contains(detail)) {
+                    if (patterns.contains(detail)) {
                         affectedTargets.add(entry.getKey());
                         break;
                     }
@@ -380,7 +467,6 @@ public final class DynamicRecipePatternRegistry {
             for (AEKey target : affectedTargets) {
                 patternsByTarget.remove(target);
             }
-            return removedPatterns.size();
         }
 
         private synchronized int rejectRecursiveCycle(AEKey target,
@@ -404,6 +490,25 @@ public final class DynamicRecipePatternRegistry {
             if (removed > 0) {
                 ApplyGrayMod.LOGGER.info("Discarded {} lazy RecipeMap patterns from a non-productive recursive " +
                         "cycle for {}", removed, target);
+            }
+            return removed;
+        }
+
+        private synchronized int rejectRecursiveCycleAtOreDust(AEKey target, IPatternDetails pattern) {
+            DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
+            if (dynamic == null || !dynamic.netProduces(target) ||
+                    patternsByRecipe.get(dynamic.getRecipeKey()) != dynamic) {
+                return 0;
+            }
+
+            Set<String> rejected = rejectedRecipeKeysByTarget.computeIfAbsent(target,
+                    ignored -> ConcurrentHashMap.newKeySet());
+            if (!rejected.add(dynamic.getRecipeKey())) return 0;
+
+            int removed = invalidatePlanPatterns(Collections.singleton(dynamic));
+            if (removed > 0) {
+                ApplyGrayMod.LOGGER.info("Stopped a non-productive lazy RecipeMap cycle at ore-backed dust {} by " +
+                        "discarding {} for that output", target, dynamic.getRecipeKey());
             }
             return removed;
         }
@@ -445,9 +550,18 @@ public final class DynamicRecipePatternRegistry {
         return false;
     }
 
+    private static KeyCounter getStoredItems(ProviderSnapshot source) {
+        return source == null ? null : source.grid.getStorageService().getCachedInventory();
+    }
+
     private static EncodedRecipe encodeRecipe(ProviderSnapshot source, Recipe recipe) {
+        return encodeRecipe(recipe, getStoredItems(source));
+    }
+
+    private static EncodedRecipe encodeRecipe(Recipe recipe, KeyCounter storedItems) {
         if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
                 !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) return null;
+        if (producesGeneralCircuitBoard(recipe)) return null;
 
         List<GenericStack> inputs = new ArrayList<>();
         List<List<GenericStack>> alternatives = new ArrayList<>();
@@ -462,7 +576,7 @@ public final class DynamicRecipePatternRegistry {
                 continue;
             }
             if (input.isNonConsumable()) {
-                List<GenericStack> programmableOptions = encodeNonConsumableItem(input);
+                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems);
                 if (programmableOptions == null) return null;
                 inputs.add(programmableOptions.get(0));
                 alternatives.add(programmableOptions);
@@ -484,7 +598,7 @@ public final class DynamicRecipePatternRegistry {
             ItemStack[] choices = input.getInputStacks();
             if (choices.length == 0) return null;
             List<GenericStack> options = new ArrayList<>();
-            for (ItemStack choice : prioritizeGeneralCircuitBoards(choices)) {
+            for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
                 ItemStack option = choice.copy();
                 option.setCount(input.getAmount());
                 GenericStack genericOption = GenericStack.fromItemStack(option);
@@ -525,7 +639,7 @@ public final class DynamicRecipePatternRegistry {
      * Converts one non-consumable item requirement into the corresponding programmable circuit.
      * Non-consumable fluids and multi-count item requirements have no equivalent virtual circuit representation.
      */
-    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input) {
+    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input, KeyCounter storedItems) {
         if (input.getInputFluidStack() != null || input.getAmount() != 1 ||
                 MetaItems.PROGRAMMABLE_CIRCUIT == null) {
             return null;
@@ -535,7 +649,7 @@ public final class DynamicRecipePatternRegistry {
         if (choices == null || choices.length == 0) return null;
 
         List<GenericStack> programmableOptions = new ArrayList<>();
-        for (ItemStack choice : prioritizeGeneralCircuitBoards(choices)) {
+        for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
             ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
             if (programmable.isEmpty()) return null;
             ProgrammableCircuit.wrap(choice, programmable);
@@ -546,24 +660,55 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Dynamic patterns use the first alternative as their default AE input. Prefer the universal circuit board
-     * variants when a RecipeMap input accepts one, while retaining every other valid alternative.
+     * Dynamic patterns use the first alternative as their default AE input. Universal circuit boards always come
+     * first; remaining candidates prefer materials already present in the provider's AE network.
      */
     private static List<ItemStack> prioritizeGeneralCircuitBoards(ItemStack[] choices) {
-        List<ItemStack> generalCircuitBoards = new ArrayList<>(choices.length);
-        List<ItemStack> otherChoices = new ArrayList<>(choices.length);
+        return prioritizeItemChoices(choices, null);
+    }
+
+    private static List<ItemStack> prioritizeItemChoices(ItemStack[] choices, KeyCounter storedItems) {
+        List<ItemStack> storedGeneralCircuitBoards = new ArrayList<>(choices.length);
+        List<ItemStack> storedOtherChoices = new ArrayList<>(choices.length);
+        List<ItemStack> missingGeneralCircuitBoards = new ArrayList<>(choices.length);
+        List<ItemStack> missingOtherChoices = new ArrayList<>(choices.length);
         for (ItemStack choice : choices) {
             if (choice == null || choice.isEmpty()) continue;
-            (isGeneralCircuitBoard(choice) ? generalCircuitBoards : otherChoices).add(choice);
+            if (isStoredItem(choice, storedItems)) {
+                (isGeneralCircuitBoard(choice) ? storedGeneralCircuitBoards : storedOtherChoices).add(choice);
+            } else {
+                (isGeneralCircuitBoard(choice) ? missingGeneralCircuitBoards : missingOtherChoices).add(choice);
+            }
         }
-        generalCircuitBoards.addAll(otherChoices);
-        return generalCircuitBoards;
+        List<ItemStack> orderedChoices = new ArrayList<>(choices.length);
+        orderedChoices.addAll(storedGeneralCircuitBoards);
+        orderedChoices.addAll(missingGeneralCircuitBoards);
+        orderedChoices.addAll(storedOtherChoices);
+        orderedChoices.addAll(missingOtherChoices);
+        return orderedChoices;
+    }
+
+    private static boolean isStoredItem(ItemStack stack, KeyCounter storedItems) {
+        if (storedItems == null) return false;
+        AEItemKey itemKey = AEItemKey.of(stack);
+        return itemKey != null && storedItems.get(itemKey) > 0;
     }
 
     private static boolean isGeneralCircuitBoard(ItemStack stack) {
         String translationKey = stack.getTranslationKey();
         return translationKey.startsWith(GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX) ||
                 translationKey.startsWith("item." + GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX);
+    }
+
+    /**
+     * General circuit boards are the default fallback input for virtual patterns, so their conversion recipes
+     * must not themselves become virtual patterns.
+     */
+    private static boolean producesGeneralCircuitBoard(Recipe recipe) {
+        for (ItemStack output : recipe.getOutputs()) {
+            if (isGeneralCircuitBoard(output)) return true;
+        }
+        return false;
     }
 
     private static long estimateFluidRawMaterialCost(FluidStack fluid, int amount) {

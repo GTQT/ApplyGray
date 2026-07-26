@@ -20,6 +20,7 @@ import net.minecraftforge.fluids.FluidStack;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.GenericStack;
+import ae2.api.stacks.KeyCounter;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +33,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -83,6 +85,44 @@ class DynamicRecipePatternRegistryTest {
     }
 
     @Test
+    void keepsGeneralCircuitBoardsAheadOfStoredAlternativeMaterials() throws ReflectiveOperationException {
+        Item generalCircuitBoard = new Item().setTranslationKey("metaitem.general_circuit.lv")
+                .setRegistryName("applygray_test", "stored_priority_general_circuit_board");
+        Item storedAlternative = testItem("stored_priority_alternative");
+        Item missingAlternative = testItem("missing_priority_alternative");
+        ItemStack generalCircuitBoardStack = new ItemStack(generalCircuitBoard);
+        ItemStack storedAlternativeStack = new ItemStack(storedAlternative);
+        ItemStack missingAlternativeStack = new ItemStack(missingAlternative);
+        KeyCounter storedItems = new KeyCounter();
+        storedItems.add(key(storedAlternative), 1);
+
+        @SuppressWarnings("unchecked")
+        List<ItemStack> orderedChoices = (List<ItemStack>) prioritize(new ItemStack[]{
+                missingAlternativeStack, storedAlternativeStack, generalCircuitBoardStack
+        }, storedItems);
+
+        assertSame(generalCircuitBoardStack, orderedChoices.get(0));
+        assertSame(storedAlternativeStack, orderedChoices.get(1));
+        assertSame(missingAlternativeStack, orderedChoices.get(2));
+    }
+
+    @Test
+    void doesNotEncodeCircuitToGeneralCircuitBoardRecipes() throws ReflectiveOperationException {
+        Item circuit = new Item().setTranslationKey("metaitem.circuit.lv")
+                .setRegistryName("applygray_test", "circuit_to_general_input");
+        Item generalCircuitBoard = new Item().setTranslationKey("metaitem.general_circuit.lv")
+                .setRegistryName("applygray_test", "circuit_to_general_output");
+        Item mufflerDust = testItem("circuit_to_general_muffler_dust");
+        Recipe recipe = new Recipe(List.of(new GTRecipeItemInput(new ItemStack(circuit))),
+                List.of(new ItemStack(generalCircuitBoard)), ChancedOutputList.<ItemStack,
+                ChancedItemOutput>empty(), List.of(), List.of(), ChancedOutputList.<FluidStack,
+                ChancedFluidOutput>empty(), List.of(new ItemStack(mufflerDust)), 20, 1, false, false,
+                new RecipePropertyStorageImpl(), null);
+
+        assertNull(encode(recipe));
+    }
+
+    @Test
     void rejectsARequestedOutputThatThePatternAlsoConsumes() {
         Item itemA = testItem("net_output_consumed_a");
         Item itemB = testItem("net_output_consumed_b");
@@ -115,6 +155,14 @@ class DynamicRecipePatternRegistryTest {
         List<GenericStack> outputs = List.of(stack(itemA, 1));
 
         assertFalse(DynamicRecipePatternDetails.hasNetOutput(key(itemA), inputs, alternatives, outputs));
+    }
+
+    @Test
+    void identifiesOreBackedDustsAsRecursiveCycleBoundaries() {
+        assertTrue(DynamicRecipePatternRegistry.isOreBackedDust("dust", true));
+        assertTrue(DynamicRecipePatternRegistry.isOreBackedDust("dustPure", true));
+        assertFalse(DynamicRecipePatternRegistry.isOreBackedDust("ingot", true));
+        assertFalse(DynamicRecipePatternRegistry.isOreBackedDust("dust", false));
     }
 
     private static Recipe createUhvWetwareMainframeRecipe() {
@@ -165,6 +213,13 @@ class DynamicRecipePatternRegistryTest {
                 ItemStack[].class);
         method.setAccessible(true);
         return method.invoke(null, (Object) choices);
+    }
+
+    private static Object prioritize(ItemStack[] choices, KeyCounter storedItems) throws ReflectiveOperationException {
+        Method method = DynamicRecipePatternRegistry.class.getDeclaredMethod("prioritizeItemChoices",
+                ItemStack[].class, KeyCounter.class);
+        method.setAccessible(true);
+        return method.invoke(null, choices, storedItems);
     }
 
     private static Object readField(Object target, String fieldName) throws ReflectiveOperationException {
