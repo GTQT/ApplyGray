@@ -3,6 +3,7 @@ package applygray.mixins.supergiant;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
 import ae2.api.crafting.IPatternDetails;
+import ae2.api.networking.crafting.ICraftingPlan;
 import ae2.api.stacks.AEKey;
 import ae2.crafting.CraftingCalculation;
 import ae2.crafting.CraftingTreeProcess;
@@ -11,6 +12,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
@@ -27,6 +29,16 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
 
     @Shadow @Final
     private List<CraftingTreeProcess> processStack;
+
+    @Inject(method = "run", at = @At("HEAD"))
+    private void applygray$enterLazyRecipeMapCalculation(CallbackInfoReturnable<ICraftingPlan> cir) {
+        DynamicRecipePatternRegistry.enterCraftingCalculation((CraftingCalculation) (Object) this);
+    }
+
+    @Inject(method = "finish", at = @At("HEAD"))
+    private void applygray$leaveLazyRecipeMapCalculation(CallbackInfo ci) {
+        DynamicRecipePatternRegistry.leaveCraftingCalculation((CraftingCalculation) (Object) this);
+    }
 
     @Inject(method = "cycleHasNetOutput", at = @At("RETURN"))
     private void applygray$discardNonProductiveLazyRecipeMapCycle(AEKey requested,

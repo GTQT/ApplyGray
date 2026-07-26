@@ -8,6 +8,7 @@
   "refmap": "mixins.applygray.refmap.json",
   "mixins": [
     "supergiant.AccessorExecutingCraftingJob",
+    "supergiant.InvokerCraftingCalculation",
     "supergiant.MixinCraftingCPUCluster",
     "supergiant.MixinCraftingCalculationLazyRecipeMap",
     "supergiant.MixinCraftingGridCacheLazyRecipeMap",

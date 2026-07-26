@@ -1,6 +1,7 @@
 package applygray.integration.ae2;
 
 import applygray.ApplyGrayMod;
+import applygray.mixins.supergiant.InvokerCraftingCalculation;
 
 import gregtech.api.GTValues;
 import gregtech.api.fluids.store.FluidStorageKeys;
@@ -28,6 +29,7 @@ import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
+import ae2.crafting.CraftingCalculation;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -48,13 +50,29 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class DynamicRecipePatternRegistry {
 
     private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
+    private static final int PATTERN_SCAN_PAUSE_INTERVAL = 8;
     private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
     private static final ThreadLocal<Boolean> RECURSIVE_CYCLE_RECOVERY_REQUIRED = new ThreadLocal<>();
+    private static final ThreadLocal<CraftingCalculation> ACTIVE_CRAFTING_CALCULATION = new ThreadLocal<>();
 
     private DynamicRecipePatternRegistry() {}
+
+    /** Marks the calculation currently performing a lazy pattern lookup on this thread. */
+    public static void enterCraftingCalculation(CraftingCalculation calculation) {
+        if (calculation != null) {
+            ACTIVE_CRAFTING_CALCULATION.set(calculation);
+        }
+    }
+
+    /** Removes the current calculation's cooperative lookup context. */
+    public static void leaveCraftingCalculation(CraftingCalculation calculation) {
+        if (ACTIVE_CRAFTING_CALCULATION.get() == calculation) {
+            ACTIVE_CRAFTING_CALCULATION.remove();
+        }
+    }
 
     public static void refreshProvider(MetaTileEntityMERecipeMapPatternProvider provider) {
         ProviderSnapshot snapshot = provider.createDynamicSnapshot();
@@ -331,7 +349,7 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<IPatternDetails> findPatterns(AEKey target) {
-            if (Thread.currentThread().isInterrupted()) {
+            if (!cooperateWithCraftingCalculation()) {
                 return Collections.emptyList();
             }
 
@@ -357,7 +375,12 @@ public final class DynamicRecipePatternRegistry {
                 }
             }
             List<IPatternDetails> available = new ArrayList<>(existing.size());
-            for (DynamicRecipePatternDetails detail : existing) {
+            for (int index = 0; index < existing.size(); index++) {
+                if ((index & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
+                        !cooperateWithCraftingCalculation()) {
+                    return Collections.emptyList();
+                }
+                DynamicRecipePatternDetails detail = existing.get(index);
                 if (isPatternAvailableFor(target, detail)) {
                     available.add(detail);
                 }
@@ -373,7 +396,8 @@ public final class DynamicRecipePatternRegistry {
                 KeyCounter storedItems = getStoredItems(source);
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
                     for (Recipe recipe : recipeMap.getRecipeList()) {
-                        if ((scannedRecipes++ & 63) == 0 && Thread.currentThread().isInterrupted()) {
+                        if ((scannedRecipes++ & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
+                                !cooperateWithCraftingCalculation()) {
                             return Collections.emptyList();
                         }
                         if (!recipeProduces(recipe, target)) continue;
@@ -396,7 +420,12 @@ public final class DynamicRecipePatternRegistry {
             });
 
             List<DynamicRecipePatternDetails> result = new ArrayList<>();
-            for (PatternCandidate candidate : candidates) {
+            for (int index = 0; index < candidates.size(); index++) {
+                if ((index & (PATTERN_SCAN_PAUSE_INTERVAL - 1)) == 0 &&
+                        !cooperateWithCraftingCalculation()) {
+                    return Collections.emptyList();
+                }
+                PatternCandidate candidate = candidates.get(index);
                 DynamicRecipePatternDetails detail = candidate.source.provider
                         .getCachedDynamicPattern(candidate.recipeKey);
                 if (detail == null) {
@@ -423,6 +452,24 @@ public final class DynamicRecipePatternRegistry {
                 result.add(detail);
             }
             return Collections.unmodifiableList(result);
+        }
+
+        private static boolean cooperateWithCraftingCalculation() {
+            if (Thread.currentThread().isInterrupted()) {
+                return false;
+            }
+
+            CraftingCalculation calculation = ACTIVE_CRAFTING_CALCULATION.get();
+            if (!(calculation instanceof InvokerCraftingCalculation pausable)) {
+                return true;
+            }
+            try {
+                pausable.applygray$handlePausing();
+                return !Thread.currentThread().isInterrupted();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
 
         private synchronized int invalidatePlanPatterns(Collection<? extends IPatternDetails> patterns) {
