@@ -1,5 +1,6 @@
 package applygray.mixins.supergiant;
 
+import applygray.ApplyGrayMod;
 import applygray.integration.ae2.DynamicRecipePatternDetails;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
@@ -33,7 +34,7 @@ import java.util.concurrent.Future;
 @Mixin(value = CraftingService.class, remap = false)
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
 
-    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 1;
+    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 4;
 
     @Shadow @Final
     private IGrid grid;
@@ -106,10 +107,17 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                         }
                         boolean cleanedRecursivePatterns =
                                 DynamicRecipePatternRegistry.consumeRecursiveCycleRecovery();
-                        if (!cleanedRecursivePatterns ||
-                                recoveryAttempt >= MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS) {
+                        if (!cleanedRecursivePatterns) {
                             throw failure;
                         }
+                        if (recoveryAttempt >= MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS) {
+                            ApplyGrayMod.LOGGER.warn("Stopped recursive lazy RecipeMap recovery for {} after {} " +
+                                            "retries", what, MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS);
+                            throw failure;
+                        }
+                        ApplyGrayMod.LOGGER.info("Retrying lazy RecipeMap crafting calculation for {} after " +
+                                        "recursive pattern cleanup ({}/{})", what, recoveryAttempt + 1,
+                                MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS);
                     }
                 }
             } finally {

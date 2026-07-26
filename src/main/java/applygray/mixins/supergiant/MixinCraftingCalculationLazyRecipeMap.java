@@ -52,6 +52,13 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
             }
         }
 
+        int removedByOutput = 0;
+        for (int index = requestIndex; index <= lastProcessIndex; index++) {
+            removedByOutput += DynamicRecipePatternRegistry.rejectRecursiveCycleAtOutput(requestStack.get(index),
+                    processStack.get(index).getDetails());
+        }
+        if (removedByOutput > 0) return;
+
         List<IPatternDetails> cyclePatterns = new ArrayList<>(processStack.size() - requestIndex);
         for (int index = requestIndex; index < processStack.size(); index++) {
             cyclePatterns.add(processStack.get(index).getDetails());

@@ -171,13 +171,28 @@ public final class DynamicRecipePatternRegistry {
      */
     public static int rejectRecursiveCycleAtOreDust(AEKey target, IPatternDetails pattern) {
         if (!isOreBackedDust(target) || pattern == null) return 0;
+        return rejectRecursiveCycleAtOutput(target, pattern);
+    }
 
+    /**
+     * Rejects one selected dynamic pattern for the output it was producing in a non-productive recursive chain.
+     *
+     * <p>Unlike {@link #rejectRecursiveCycle(AEKey, Collection)}, this preserves the association between each
+     * pattern and its own requested output. This prevents the reverse edge of a cycle from being selected again
+     * through a different output lookup on the next calculation.</p>
+     *
+     * @return the number of dynamic patterns removed from the matching grid
+     */
+    public static int rejectRecursiveCycleAtOutput(AEKey target, IPatternDetails pattern) {
+        if (target == null || pattern == null) return 0;
         int removed = 0;
         for (GridState state : GRIDS.values()) {
-            removed += state.rejectRecursiveCycleAtOreDust(target, pattern);
+            removed += state.rejectRecursiveCycleAtOutput(target, pattern);
         }
         if (removed > 0) {
             RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
+            ApplyGrayMod.LOGGER.info("Discarded {} lazy RecipeMap pattern(s) from a non-productive recursive " +
+                    "cycle while producing {}", removed, target);
         }
         return removed;
     }
@@ -494,7 +509,7 @@ public final class DynamicRecipePatternRegistry {
             return removed;
         }
 
-        private synchronized int rejectRecursiveCycleAtOreDust(AEKey target, IPatternDetails pattern) {
+        private synchronized int rejectRecursiveCycleAtOutput(AEKey target, IPatternDetails pattern) {
             DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
             if (dynamic == null || !dynamic.netProduces(target) ||
                     patternsByRecipe.get(dynamic.getRecipeKey()) != dynamic) {
@@ -506,10 +521,6 @@ public final class DynamicRecipePatternRegistry {
             if (!rejected.add(dynamic.getRecipeKey())) return 0;
 
             int removed = invalidatePlanPatterns(Collections.singleton(dynamic));
-            if (removed > 0) {
-                ApplyGrayMod.LOGGER.info("Stopped a non-productive lazy RecipeMap cycle at ore-backed dust {} by " +
-                        "discarding {} for that output", target, dynamic.getRecipeKey());
-            }
             return removed;
         }
 
