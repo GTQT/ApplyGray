@@ -123,6 +123,36 @@ public final class DynamicRecipePatternRegistry {
         return state.invalidatePlanPatterns(patterns);
     }
 
+    /**
+     * Rejects dynamic patterns that participated in a recursive chain without a positive net output.
+     *
+     * <p>The rejection is scoped to the requested key. The same recipe can still be useful when it is selected to
+     * produce a different output.</p>
+     */
+    public static int rejectRecursiveCycle(AEKey target, Collection<? extends IPatternDetails> patterns) {
+        if (target == null || patterns.isEmpty()) return 0;
+
+        int removed = 0;
+        for (GridState state : GRIDS.values()) {
+            removed += state.rejectRecursiveCycle(target, patterns);
+        }
+        return removed;
+    }
+
+    /**
+     * Checks a dynamic detail against its requested output and any recursive-cycle rejection recorded for it.
+     */
+    public static boolean isPatternAvailableFor(AEKey target, IPatternDetails details) {
+        DynamicRecipePatternDetails dynamic = getDynamicPattern(details);
+        if (dynamic == null) return true;
+        if (target == null || !dynamic.netProduces(target)) return false;
+
+        for (GridState state : GRIDS.values()) {
+            if (state.isRejectedFor(target, dynamic)) return false;
+        }
+        return true;
+    }
+
     public static final class ProviderSnapshot {
 
         private final IGrid grid;
@@ -151,6 +181,7 @@ public final class DynamicRecipePatternRegistry {
         private final Map<String, ProviderSnapshot> providers = new ConcurrentHashMap<>();
         private final Map<AEKey, List<DynamicRecipePatternDetails>> patternsByTarget = new ConcurrentHashMap<>();
         private final Map<String, DynamicRecipePatternDetails> patternsByRecipe = new ConcurrentHashMap<>();
+        private final Map<AEKey, Set<String>> rejectedRecipeKeysByTarget = new ConcurrentHashMap<>();
         // Retired dynamic details must remain resolvable while an already-submitted CPU still holds them.
         // Weak keys release the association once no plan or CPU references the old detail anymore.
         private final Map<IPatternDetails, ICraftingProvider> providersByPattern =
@@ -228,7 +259,13 @@ public final class DynamicRecipePatternRegistry {
                     }
                 }
             }
-            return new ArrayList<IPatternDetails>(existing);
+            List<IPatternDetails> available = new ArrayList<>(existing.size());
+            for (DynamicRecipePatternDetails detail : existing) {
+                if (isPatternAvailableFor(target, detail)) {
+                    available.add(detail);
+                }
+            }
+            return available;
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
@@ -262,15 +299,27 @@ public final class DynamicRecipePatternRegistry {
                 DynamicRecipePatternDetails detail = candidate.source.provider
                         .getCachedDynamicPattern(candidate.recipeKey);
                 if (detail == null) {
+                    if (!DynamicRecipePatternDetails.hasNetOutput(target, candidate.encoded.inputs,
+                            candidate.encoded.alternatives, candidate.encoded.outputs)) {
+                        continue;
+                    }
                     detail = new DynamicRecipePatternDetails(candidate.recipeKey,
                             candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
                             candidate.encoded.alternatives, candidate.encoded.outputs,
                             candidate.encoded.circuitConfiguration,
                             candidate.cost.rawMaterials, candidate.cost.steps);
+                    if (!isPatternAvailableFor(target, detail)) {
+                        continue;
+                    }
                     detail = candidate.source.provider.cacheDynamicPattern(detail);
+                    if (!isPatternAvailableFor(target, detail)) {
+                        continue;
+                    }
                     ApplyGrayMod.LOGGER.debug("Generated lazy RecipeMap pattern {} (raw={}, steps={}, programmableNc={})",
                             candidate.recipeKey, candidate.cost.rawMaterials, candidate.cost.steps,
                             candidate.encoded.programmableNonConsumableInputs);
+                } else if (!isPatternAvailableFor(target, detail)) {
+                    continue;
                 }
                 patternsByRecipe.put(candidate.recipeKey, detail);
                 providersByPattern.put(detail, candidate.source.provider);
@@ -316,9 +365,44 @@ public final class DynamicRecipePatternRegistry {
             return removedPatterns.size();
         }
 
+        private synchronized int rejectRecursiveCycle(AEKey target,
+                                                      Collection<? extends IPatternDetails> patterns) {
+            Set<DynamicRecipePatternDetails> cyclePatterns = new HashSet<>();
+            for (IPatternDetails pattern : patterns) {
+                DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
+                if (dynamic != null && patternsByRecipe.get(dynamic.getRecipeKey()) == dynamic) {
+                    cyclePatterns.add(dynamic);
+                }
+            }
+            if (cyclePatterns.isEmpty()) return 0;
+
+            Set<String> rejected = rejectedRecipeKeysByTarget.computeIfAbsent(target,
+                    ignored -> ConcurrentHashMap.newKeySet());
+            for (DynamicRecipePatternDetails detail : cyclePatterns) {
+                rejected.add(detail.getRecipeKey());
+            }
+
+            int removed = invalidatePlanPatterns(cyclePatterns);
+            if (removed > 0) {
+                ApplyGrayMod.LOGGER.info("Discarded {} lazy RecipeMap patterns from a non-productive recursive " +
+                        "cycle for {}", removed, target);
+            }
+            return removed;
+        }
+
+        private boolean isPatternAvailableFor(AEKey target, DynamicRecipePatternDetails detail) {
+            return detail.netProduces(target) && !isRejectedFor(target, detail);
+        }
+
+        private boolean isRejectedFor(AEKey target, DynamicRecipePatternDetails detail) {
+            Set<String> rejected = rejectedRecipeKeysByTarget.get(target);
+            return rejected != null && rejected.contains(detail.getRecipeKey());
+        }
+
         private void clearGenerated() {
             patternsByTarget.clear();
             patternsByRecipe.clear();
+            rejectedRecipeKeysByTarget.clear();
             providersByPattern.clear();
         }
     }

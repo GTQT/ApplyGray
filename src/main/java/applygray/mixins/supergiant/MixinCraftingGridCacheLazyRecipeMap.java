@@ -29,14 +29,24 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
     private void applygray$appendLazyRecipeMapPatterns(AEKey requested,
                                                        CallbackInfoReturnable<java.util.Collection<IPatternDetails>> cir) {
         List<IPatternDetails> dynamic = DynamicRecipePatternRegistry.findPatterns(grid, requested);
-        if (dynamic.isEmpty()) return;
-
-        List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue());
-        for (IPatternDetails detail : dynamic) {
-            if (!merged.contains(detail)) {
+        List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue().size() + dynamic.size());
+        boolean changed = false;
+        for (IPatternDetails detail : cir.getReturnValue()) {
+            if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail)) {
                 merged.add(detail);
+            } else {
+                changed = true;
             }
         }
+        for (IPatternDetails detail : dynamic) {
+            if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail) &&
+                    !merged.contains(detail)) {
+                merged.add(detail);
+                changed = true;
+            }
+        }
+        if (!changed && dynamic.isEmpty()) return;
+
         merged.sort((left, right) -> {
             boolean leftDynamic = left instanceof DynamicRecipePatternDetails;
             boolean rightDynamic = right instanceof DynamicRecipePatternDetails;

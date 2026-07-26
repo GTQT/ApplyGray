@@ -9,6 +9,7 @@
   "mixins": [
     "supergiant.AccessorExecutingCraftingJob",
     "supergiant.MixinCraftingCPUCluster",
+    "supergiant.MixinCraftingCalculationLazyRecipeMap",
     "supergiant.MixinCraftingGridCacheLazyRecipeMap",
     "supergiant.MixinContainerCraftConfirmLazyRecipeMap",
     "supergiant.MixinAETrack",

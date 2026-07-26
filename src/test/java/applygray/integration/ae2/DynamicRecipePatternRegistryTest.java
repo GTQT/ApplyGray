@@ -17,6 +17,7 @@ import net.minecraft.init.Bootstrap;
 import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
 
+import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.GenericStack;
 import org.junit.jupiter.api.BeforeAll;
@@ -29,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -80,6 +82,41 @@ class DynamicRecipePatternRegistryTest {
         assertSame(normalCircuitStack, orderedChoices.get(1));
     }
 
+    @Test
+    void rejectsARequestedOutputThatThePatternAlsoConsumes() {
+        Item itemA = testItem("net_output_consumed_a");
+        Item itemB = testItem("net_output_consumed_b");
+        Item itemC = testItem("net_output_consumed_c");
+        List<GenericStack> inputs = List.of(stack(itemA, 1), stack(itemB, 1));
+        List<List<GenericStack>> alternatives = List.of(List.of(stack(itemA, 1)), List.of(stack(itemB, 1)));
+        List<GenericStack> outputs = List.of(stack(itemA, 1), stack(itemC, 1));
+
+        assertFalse(DynamicRecipePatternDetails.hasNetOutput(key(itemA), inputs, alternatives, outputs));
+        assertTrue(DynamicRecipePatternDetails.hasNetOutput(key(itemC), inputs, alternatives, outputs));
+    }
+
+    @Test
+    void acceptsARequestedOutputWithPositiveNetProduction() {
+        Item itemA = testItem("net_output_positive_a");
+        Item itemB = testItem("net_output_positive_b");
+        List<GenericStack> inputs = List.of(stack(itemA, 1), stack(itemB, 1));
+        List<List<GenericStack>> alternatives = List.of(List.of(stack(itemA, 1)), List.of(stack(itemB, 1)));
+        List<GenericStack> outputs = List.of(stack(itemA, 2));
+
+        assertTrue(DynamicRecipePatternDetails.hasNetOutput(key(itemA), inputs, alternatives, outputs));
+    }
+
+    @Test
+    void treatsAnyMatchingInputAlternativeAsConsumption() {
+        Item itemA = testItem("net_output_alternative_a");
+        Item itemB = testItem("net_output_alternative_b");
+        List<GenericStack> inputs = List.of(stack(itemA, 1));
+        List<List<GenericStack>> alternatives = List.of(List.of(stack(itemA, 1), stack(itemB, 1)));
+        List<GenericStack> outputs = List.of(stack(itemA, 1));
+
+        assertFalse(DynamicRecipePatternDetails.hasNetOutput(key(itemA), inputs, alternatives, outputs));
+    }
+
     private static Recipe createUhvWetwareMainframeRecipe() {
         int[] itemAmounts = {2, 2, 32, 32, 32, 32, 32, 64, 32, 16, 8};
         List<GTRecipeInput> itemInputs = new ArrayList<>(itemAmounts.length);
@@ -98,6 +135,22 @@ class DynamicRecipePatternRegistryTest {
                 ChancedItemOutput>empty(), fluidInputs, List.of(), ChancedOutputList.<FluidStack,
                 ChancedFluidOutput>empty(), List.of(new ItemStack(dustItem)), 2000, 300000, false, false,
                 new RecipePropertyStorageImpl(), null);
+    }
+
+    private static Item testItem(String name) {
+        return new Item().setRegistryName("applygray_test", name);
+    }
+
+    private static GenericStack stack(Item item, int amount) {
+        GenericStack stack = GenericStack.fromItemStack(new ItemStack(item, amount));
+        assertNotNull(stack);
+        return stack;
+    }
+
+    private static AEItemKey key(Item item) {
+        AEItemKey key = AEItemKey.of(new ItemStack(item));
+        assertNotNull(key);
+        return key;
     }
 
     private static Object encode(Recipe recipe) throws ReflectiveOperationException {

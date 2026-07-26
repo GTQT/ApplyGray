@@ -5,6 +5,7 @@ import ae2.api.crafting.PatternDetailsHelper;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
+import com.google.common.math.LongMath;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
@@ -81,6 +82,40 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
             }
         }
         return false;
+    }
+
+    /**
+     * Matches Supergiant's recursive-cycle accounting for one requested key.
+     *
+     * <p>Every matching input alternative counts as consumption because AE2 may choose that alternative while
+     * planning.</p>
+     */
+    public boolean netProduces(AEKey requested) {
+        return hasNetOutput(requested, inputs, outputs);
+    }
+
+    static boolean hasNetOutput(AEKey requested, List<GenericStack> primaryInputs,
+                                List<List<GenericStack>> alternatives, List<GenericStack> outputs) {
+        return hasNetOutput(requested, createInputs(primaryInputs, alternatives), outputs);
+    }
+
+    private static boolean hasNetOutput(AEKey requested, Input[] inputs, List<GenericStack> outputs) {
+        long netOutput = 0;
+        for (GenericStack output : outputs) {
+            if (requested.matches(output)) {
+                netOutput = LongMath.saturatedAdd(netOutput, output.amount());
+            }
+        }
+        for (Input input : inputs) {
+            for (GenericStack possibleInput : input.possibleInputs()) {
+                if (requested.matches(possibleInput)) {
+                    netOutput = LongMath.saturatedSubtract(netOutput,
+                            LongMath.saturatedMultiply(possibleInput.amount(), input.getMultiplier()));
+                    break;
+                }
+            }
+        }
+        return netOutput > 0;
     }
 
     public NBTTagCompound writeToNBT() {
