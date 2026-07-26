@@ -17,6 +17,7 @@
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],
   "client": [
+    "supergiant.InvokerAEBaseGui",
     "supergiant.MixinRecipeTransferHandler",
     "supergiant.MixinGuiCraftConfirmLazyRecipeMap",
     "supergiantfc.MixinRecipeTransferBuilder",
