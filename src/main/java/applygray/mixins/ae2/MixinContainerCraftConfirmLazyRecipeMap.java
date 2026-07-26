@@ -6,8 +6,8 @@ import applygray.integration.ae2.IRecipePatternRebuildable;
 
 import ae2.api.networking.IGrid;
 import ae2.api.networking.IGridNode;
+import ae2.api.networking.crafting.ICraftingPlan;
 import ae2.api.networking.security.IActionHost;
-import ae2.api.stacks.AEKey;
 import ae2.container.AEBaseContainer;
 import ae2.container.implementations.ContainerCraftConfirm;
 import org.jetbrains.annotations.Nullable;
@@ -17,17 +17,17 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Invalidates a lazy target before Supergiant's native craft-confirm replanning action runs. */
+/** Invalidates dynamic patterns selected by the current plan before Supergiant recalculates it. */
 @Mixin(value = ContainerCraftConfirm.class, remap = false)
 public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipePatternRebuildable {
 
-    @Shadow @Nullable private AEKey whatToCraft;
+    @Shadow @Nullable private ICraftingPlan result;
     @Shadow public abstract void replan();
 
     @Inject(method = "replan", at = @At("HEAD"))
-    private void applygray$invalidateLazyTargetBeforeReplan(CallbackInfo ci) {
+    private void applygray$invalidateCurrentPlanPatternsBeforeReplan(CallbackInfo ci) {
         AEBaseContainer container = (AEBaseContainer) (Object) this;
-        if (container.getPlayer().world.isRemote || whatToCraft == null) return;
+        if (container.getPlayer().world.isRemote || result == null) return;
         Object target = container.getTarget();
         if (!(target instanceof IActionHost actionHost)) return;
 
@@ -35,13 +35,15 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
         IGrid grid = node == null ? null : node.grid();
         if (grid == null) return;
 
-        DynamicRecipePatternRegistry.invalidateTarget(grid, whatToCraft);
-        ApplyGrayMod.LOGGER.info("Rebuilding Supergiant crafting calculation after clearing lazy patterns for {}",
-                whatToCraft);
+        int cleared = DynamicRecipePatternRegistry.invalidatePlanPatterns(grid, result.patternTimes().keySet());
+        if (cleared > 0) {
+            ApplyGrayMod.LOGGER.info("Rebuilding Supergiant crafting calculation after clearing {} lazy RecipeMap " +
+                    "patterns from the current chain", cleared);
+        }
     }
 
     @Override
-    public void applygray$clearTargetPatternsAndRecalculate() {
+    public void applygray$clearCurrentPlanPatternsAndRecalculate() {
         replan();
     }
 }

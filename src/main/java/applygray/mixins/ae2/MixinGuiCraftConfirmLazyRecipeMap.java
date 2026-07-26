@@ -32,6 +32,6 @@ public abstract class MixinGuiCraftConfirmLazyRecipeMap {
         applygray$rebuildButton = addToLeftToolbar(new TabButton(Icon.ADVANCED_MEMORY_CARD_REFRESH,
                 new TextComponentTranslation("applygray.gui.rebuild_recipe_patterns"),
                 () -> ((IRecipePatternRebuildable) (Object) container)
-                        .applygray$clearTargetPatternsAndRecalculate()));
+                        .applygray$clearCurrentPlanPatternsAndRecalculate()));
     }
 }

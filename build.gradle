@@ -116,6 +116,21 @@ configurations {
     runtimeOnly.extendsFrom(modRuntimeOnly)
 }
 
+sourceSets {
+    test {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+configurations.named('testCompileOnly').configure {
+    extendsFrom(configurations.compileOnly)
+}
+
+configurations.named('testRuntimeOnly').configure {
+    extendsFrom(configurations.runtimeOnly)
+}
+
 String remapTaskName = enableShadow ? 'remapShadowJar' : 'remapJar'
 
 unimined.minecraft {
@@ -155,6 +170,19 @@ unimined.minecraft {
         remap(configurations.modCompileOnly)
         remap(configurations.modRuntimeOnly)
     }
+}
+
+unimined.minecraft(sourceSets.test) {
+    version '1.12.2'
+    mappings {
+        mcp('stable', '39-1.12')
+    }
+    cleanroom {
+        loader '0.5.14-alpha'
+    }
+    createJarTask = false
+    defaultRemapJar = false
+    defaultRemapSourcesJar = false
 }
 
 apply from: 'dependencies.gradle'

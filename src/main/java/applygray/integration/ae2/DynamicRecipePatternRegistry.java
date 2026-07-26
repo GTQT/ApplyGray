@@ -35,6 +35,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -103,10 +104,19 @@ public final class DynamicRecipePatternRegistry {
         return false;
     }
 
-    public static void invalidateTarget(IGrid grid, AEKey target) {
+    /**
+     * Invalidates only dynamic patterns that were selected by one crafting calculation.
+     *
+     * <p>Pattern lookup results sharing one of those details are invalidated as a whole. Filtering a selected
+     * detail out of an existing result would leave an empty/partial cached lookup that could not regenerate the
+     * pattern on the next calculation.</p>
+     *
+     * @return the number of dynamic patterns removed from this grid
+     */
+    public static int invalidatePlanPatterns(IGrid grid, Collection<? extends IPatternDetails> patterns) {
         GridState state = GRIDS.get(grid);
-        if (state == null || target == null) return;
-        state.invalidateTarget(target);
+        if (state == null || patterns.isEmpty()) return 0;
+        return state.invalidatePlanPatterns(patterns);
     }
 
     public static final class ProviderSnapshot {
@@ -137,7 +147,10 @@ public final class DynamicRecipePatternRegistry {
         private final Map<String, ProviderSnapshot> providers = new ConcurrentHashMap<>();
         private final Map<AEKey, List<DynamicRecipePatternDetails>> patternsByTarget = new ConcurrentHashMap<>();
         private final Map<String, DynamicRecipePatternDetails> patternsByRecipe = new ConcurrentHashMap<>();
-        private final Map<IPatternDetails, ICraftingProvider> providersByPattern = new ConcurrentHashMap<>();
+        // Retired dynamic details must remain resolvable while an already-submitted CPU still holds them.
+        // Weak keys release the association once no plan or CPU references the old detail anymore.
+        private final Map<IPatternDetails, ICraftingProvider> providersByPattern =
+                Collections.synchronizedMap(new WeakHashMap<>());
 
         private synchronized void putProvider(ProviderSnapshot snapshot) {
             ProviderSnapshot existing = providers.put(snapshot.providerId, snapshot);
@@ -204,28 +217,41 @@ public final class DynamicRecipePatternRegistry {
             return Collections.unmodifiableList(result);
         }
 
-        private synchronized void invalidateTarget(AEKey target) {
-            patternsByTarget.remove(target);
-            List<String> removeKeys = new ArrayList<>();
-            for (Map.Entry<String, DynamicRecipePatternDetails> entry : patternsByRecipe.entrySet()) {
-                if (entry.getValue().produces(target)) removeKeys.add(entry.getKey());
+        private synchronized int invalidatePlanPatterns(Collection<? extends IPatternDetails> patterns) {
+            Set<DynamicRecipePatternDetails> selectedPatterns = new HashSet<>();
+            for (IPatternDetails pattern : patterns) {
+                DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
+                if (dynamic != null) selectedPatterns.add(dynamic);
             }
-            for (String key : removeKeys) {
-                DynamicRecipePatternDetails detail = patternsByRecipe.remove(key);
-                if (detail == null) continue;
-                ICraftingProvider provider = providersByPattern.remove(detail);
+            if (selectedPatterns.isEmpty()) return 0;
+
+            Set<DynamicRecipePatternDetails> removedPatterns = new HashSet<>();
+            for (DynamicRecipePatternDetails selected : selectedPatterns) {
+                String recipeKey = selected.getRecipeKey();
+                DynamicRecipePatternDetails registered = patternsByRecipe.get(recipeKey);
+                if (registered != selected || !patternsByRecipe.remove(recipeKey, registered)) continue;
+
+                removedPatterns.add(registered);
+                ICraftingProvider provider = providersByPattern.get(registered);
                 if (provider instanceof MetaTileEntityMERecipeMapPatternProvider) {
-                    ((MetaTileEntityMERecipeMapPatternProvider) provider).removeCachedDynamicPattern(key);
+                    ((MetaTileEntityMERecipeMapPatternProvider) provider).removeCachedDynamicPattern(recipeKey);
                 }
             }
+            if (removedPatterns.isEmpty()) return 0;
+
+            List<AEKey> affectedTargets = new ArrayList<>();
             for (Map.Entry<AEKey, List<DynamicRecipePatternDetails>> entry : patternsByTarget.entrySet()) {
-                List<DynamicRecipePatternDetails> retained = new ArrayList<>();
                 for (DynamicRecipePatternDetails detail : entry.getValue()) {
-                    if (!detail.produces(target)) retained.add(detail);
+                    if (removedPatterns.contains(detail)) {
+                        affectedTargets.add(entry.getKey());
+                        break;
+                    }
                 }
-                entry.setValue(Collections.unmodifiableList(retained));
             }
-            ApplyGrayMod.LOGGER.info("Cleared lazy RecipeMap patterns for {}", target);
+            for (AEKey target : affectedTargets) {
+                patternsByTarget.remove(target);
+            }
+            return removedPatterns.size();
         }
 
         private void clearGenerated() {
@@ -305,6 +331,18 @@ public final class DynamicRecipePatternRegistry {
             inputs.add(options.get(0));
             alternatives.add(options);
         }
+        for (GTRecipeInput input : recipe.getFluidInputs()) {
+            if (input.isNonConsumable()) return null;
+            FluidStack fluid = input.getInputFluidStack();
+            if (fluid == null) return null;
+
+            FluidStack copy = fluid.copy();
+            copy.amount = input.getAmount();
+            GenericStack genericFluid = GenericStack.fromFluidStack(copy);
+            if (genericFluid == null) return null;
+            inputs.add(genericFluid);
+            alternatives.add(Collections.singletonList(genericFluid));
+        }
 
         List<GenericStack> outputs = new ArrayList<>();
         for (ItemStack output : recipe.getOutputs()) {
@@ -361,6 +399,13 @@ public final class DynamicRecipePatternRegistry {
             ItemStack required = choices[0].copy();
             required.setCount(input.getAmount());
             total.add(estimateItemCost(required, sources, depth + 1, visiting));
+        }
+        for (GTRecipeInput input : recipe.getFluidInputs()) {
+            if (input.isNonConsumable()) continue;
+            FluidStack fluid = input.getInputFluidStack();
+            if (fluid != null) {
+                total.rawMaterials += estimateFluidRawMaterialCost(fluid, input.getAmount());
+            }
         }
         return total;
     }
@@ -468,6 +513,11 @@ public final class DynamicRecipePatternRegistry {
                 if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
                 FluidStack fluid = input.getInputFluidStack();
                 raw += fluid == null ? input.getAmount() : estimateFluidRawMaterialCost(fluid, input.getAmount());
+            }
+            for (GTRecipeInput input : recipe.getFluidInputs()) {
+                if (input.isNonConsumable()) continue;
+                FluidStack fluid = input.getInputFluidStack();
+                if (fluid != null) raw += estimateFluidRawMaterialCost(fluid, input.getAmount());
             }
             return new Cost(raw, 1);
         }
