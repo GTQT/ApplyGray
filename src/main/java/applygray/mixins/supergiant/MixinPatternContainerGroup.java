@@ -1,4 +1,4 @@
-package applygray.mixins.ae2;
+package applygray.mixins.supergiant;
 
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;

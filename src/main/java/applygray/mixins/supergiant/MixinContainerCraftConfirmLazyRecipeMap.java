@@ -1,4 +1,4 @@
-package applygray.mixins.ae2;
+package applygray.mixins.supergiant;
 
 import applygray.ApplyGrayMod;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;

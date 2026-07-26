@@ -1,4 +1,4 @@
-package applygray.mixins.ae2;
+package applygray.mixins.supergiant;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.crafting.execution.ExecutingCraftingJob;

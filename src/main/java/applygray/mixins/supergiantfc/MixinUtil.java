@@ -1,4 +1,4 @@
-package applygray.mixins.ae2fc;
+package applygray.mixins.supergiantfc;
 
 import gregtech.integration.ae2.GTCircuitHelper;
 

@@ -51,6 +51,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     protected boolean allowsExtraConnections;
     protected boolean meStatusChanged;
     private boolean wasCraftingProviderActive;
+    private boolean craftingProviderRefreshPending = true;
 
     public MetaTileEntityAEHostablePart(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch) {
         super(metaTileEntityId, tier, isExportHatch);
@@ -192,6 +193,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
             meStatusChanged = false;
         }
         refreshCraftingProviderState(online, null);
+        flushPendingCraftingProviderRefresh(online);
     }
 
     @Override
@@ -200,7 +202,9 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         if (world == null || world.isRemote) {
             return;
         }
-        refreshCraftingProviderState(getMainNode().isActive(), state);
+        boolean active = getMainNode().isActive();
+        refreshCraftingProviderState(active, state);
+        flushPendingCraftingProviderRefresh(active);
     }
 
     private void refreshCraftingProviderState(boolean active, @Nullable IGridNodeListener.State state) {
@@ -210,8 +214,39 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
 
         wasCraftingProviderActive = active;
         ICraftingProvider.requestUpdate(getMainNode());
+        if (active) {
+            craftingProviderRefreshPending = false;
+        }
         GTLog.logger.debug("Refreshing AE2 crafting patterns for {} at {} after {} (active={})",
                 metaTileEntityId, getPos(), state == null ? "periodic state check" : state, active);
+    }
+
+    /**
+     * Queue a provider-cache refresh until the managed node is actually active.
+     *
+     * <p>AE2 mounts a provider while its node is joining the grid, before a channel can be assigned. A provider that
+     * returns no patterns during that first mount must therefore be refreshed after activation. Keeping this state on
+     * the host also makes NBT-loaded pattern inventories independent of the machine update interval.</p>
+     */
+    protected final void queueCraftingProviderRefresh() {
+        if (!(this instanceof ICraftingProvider)) {
+            return;
+        }
+
+        craftingProviderRefreshPending = true;
+        World world = getWorld();
+        if (world != null && !world.isRemote) {
+            flushPendingCraftingProviderRefresh(getMainNode().isActive());
+        }
+    }
+
+    private void flushPendingCraftingProviderRefresh(boolean active) {
+        if (!craftingProviderRefreshPending || !(this instanceof ICraftingProvider) || !active) {
+            return;
+        }
+
+        craftingProviderRefreshPending = false;
+        ICraftingProvider.requestUpdate(getMainNode());
     }
 
     @Override
@@ -222,6 +257,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         }
         isOnline = false;
         wasCraftingProviderActive = false;
+        craftingProviderRefreshPending = this instanceof ICraftingProvider;
     }
 
     @Override

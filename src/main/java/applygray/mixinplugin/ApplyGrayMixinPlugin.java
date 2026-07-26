@@ -14,9 +14,9 @@ import java.util.Set;
 public class ApplyGrayMixinPlugin implements IMixinConfigPlugin {
 
     private static final Set<String> HEI_MIXINS = Set.of(
-            "applygray.mixins.ae2.MixinRecipeTransferHandler",
-            "applygray.mixins.ae2fc.MixinRecipeTransferBuilder",
-            "applygray.mixins.ae2fc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
+            "applygray.mixins.supergiant.MixinRecipeTransferHandler",
+            "applygray.mixins.supergiantfc.MixinRecipeTransferBuilder",
+            "applygray.mixins.supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
     );
 
     @Override

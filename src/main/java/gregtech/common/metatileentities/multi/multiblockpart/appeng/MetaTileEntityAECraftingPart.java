@@ -102,6 +102,7 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
 
     protected boolean advancedCircuit = false;
     private long lastPatternPushRejectLogTick = -200;
+    private long lastPatternDecodeFailureLogTick = -200;
     // SLOTS
     protected IItemHandlerModifiable actualImportItems;
     @Nullable
@@ -307,15 +308,53 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
             return;
         }
 
-        int slotCount = getPatternSlotCount();
+        int slotCount = Math.min(getPatternSlotCount(), Math.min(patternSlot.getSlots(), patternDetails.size()));
+        int storedPatternCount = 0;
+        int undecodablePatternCount = 0;
         for (int i = 0; i < slotCount; i++) {
             ItemStack pattern = patternSlot.getStackInSlot(i);
             if (pattern.isEmpty()) {
                 patternDetails.set(i, null);
                 continue;
             }
-            patternDetails.set(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
+            storedPatternCount++;
+            IPatternDetails detail = PatternDetailsHelper.decodePattern(pattern, getWorld());
+            if (detail == null) {
+                undecodablePatternCount++;
+            }
+            patternDetails.set(i, detail);
         }
+
+        logUndecodablePatterns(storedPatternCount, undecodablePatternCount);
+        queueCraftingProviderRefresh();
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (getWorld() != null && !getWorld().isRemote) {
+            // Re-decode after the holder is fully attached, then defer the AE2 cache refresh until the node is active.
+            setPatternDetails();
+        }
+    }
+
+    private void logUndecodablePatterns(int storedPatternCount, int undecodablePatternCount) {
+        if (storedPatternCount == 0 || undecodablePatternCount == 0) {
+            return;
+        }
+
+        World world = getWorld();
+        if (world == null || world.isRemote) {
+            return;
+        }
+
+        long worldTick = world.getTotalWorldTime();
+        if (worldTick - lastPatternDecodeFailureLogTick < 200) {
+            return;
+        }
+        lastPatternDecodeFailureLogTick = worldTick;
+        GTLog.logger.warn("ME crafting provider at {} could not decode {}/{} stored encoded patterns",
+                getPos(), undecodablePatternCount, storedPatternCount);
     }
 
     public boolean addItemAndFluid(KeyCounter[] inputHolder) {

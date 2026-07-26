@@ -7,20 +7,20 @@
   "target": "@env(MOD)",
   "refmap": "mixins.applygray.refmap.json",
   "mixins": [
-    "ae2.AccessorExecutingCraftingJob",
-    "ae2.MixinCraftingCPUCluster",
-    "ae2.MixinCraftingGridCacheLazyRecipeMap",
-    "ae2.MixinContainerCraftConfirmLazyRecipeMap",
-    "ae2.MixinAETrack",
-    "ae2.MixinPatternContainerGroup",
-    "ae2fc.MixinUtil",
-    "ae2fc.MixinFluidPatternTerminalRecipeTransferHandler"
+    "supergiant.AccessorExecutingCraftingJob",
+    "supergiant.MixinCraftingCPUCluster",
+    "supergiant.MixinCraftingGridCacheLazyRecipeMap",
+    "supergiant.MixinContainerCraftConfirmLazyRecipeMap",
+    "supergiant.MixinAETrack",
+    "supergiant.MixinPatternContainerGroup",
+    "supergiantfc.MixinUtil",
+    "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],
   "client": [
-    "ae2.MixinRecipeTransferHandler",
-    "ae2.MixinGuiCraftConfirmLazyRecipeMap",
-    "ae2fc.MixinRecipeTransferBuilder",
-    "ae2fc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
+    "supergiant.MixinRecipeTransferHandler",
+    "supergiant.MixinGuiCraftConfirmLazyRecipeMap",
+    "supergiantfc.MixinRecipeTransferBuilder",
+    "supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
   ],
   "server": []
 }

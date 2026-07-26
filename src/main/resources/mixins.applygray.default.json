@@ -12,7 +12,7 @@
     "gregtech.MixinMetaTileEntityHull"
   ],
   "client": [
-    "ae2.MixinGuiScreenButtonListAccessor"
+    "supergiant.MixinGuiScreenButtonListAccessor"
   ],
   "server": []
 }
