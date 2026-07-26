@@ -26,6 +26,7 @@ import java.util.List;
 public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
 
     private static final int GUI_PADDING_X = 17;
+    private static final int GUI_WIDTH = 213;
     private static final int GUI_HEADER_HEIGHT = 30;
     private static final int ROW_HEIGHT = 18;
     private static final int ROW_ACTION_BUTTON_WIDTH = 12;
@@ -76,20 +77,23 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
                 && applygray$localMouseY < y + ROW_ACTION_BUTTON_HEIGHT;
         SmallSquareButtonRenderer.drawBackground(x, y, ROW_ACTION_BUTTON_WIDTH, ROW_ACTION_BUTTON_HEIGHT, hovered);
         SmallSquareButtonRenderer.drawIcon(x, y, ROW_ACTION_BUTTON_WIDTH, ROW_ACTION_BUTTON_HEIGHT, Icon.CLEAR, 0);
-        applygray$clearButtons.add(new ClearButton(inventoryId, x, y));
+        applygray$clearButtons.add(new ClearButton(inventoryId, x, y, rowIndex));
     }
 
     @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
     private void applygray$clearRecipeMapPatterns(int mouseX, int mouseY, int mouseButton, CallbackInfo ci)
             throws IOException {
-        if (mouseButton != 0) {
+        if (mouseButton != 0 && mouseButton != 1) {
             return;
         }
 
         int localMouseX = mouseX - applygray$guiLeft;
         int localMouseY = mouseY - applygray$guiTop;
         for (ClearButton button : applygray$clearButtons) {
-            if (button.contains(localMouseX, localMouseY)) {
+            boolean clickedClearButton = button.contains(localMouseX, localMouseY);
+            boolean rightClickedGroupHeader = mouseButton == 1 && button.containsGroupHeader(localMouseX,
+                    localMouseY);
+            if (clickedClearButton || rightClickedGroupHeader) {
                 RecipeMapPatternAccessActions.send(((InvokerAEBaseGui) (Object) this).applygray$getContainer(),
                         button.inventoryId());
                 ci.cancel();
@@ -114,10 +118,16 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
     }
 
     @Unique
-    private record ClearButton(long inventoryId, int x, int y) {
+    private record ClearButton(long inventoryId, int x, int y, int rowIndex) {
         private boolean contains(int mouseX, int mouseY) {
             return mouseX >= x && mouseY >= y
                     && mouseX < x + ROW_ACTION_BUTTON_WIDTH && mouseY < y + ROW_ACTION_BUTTON_HEIGHT;
+        }
+
+        private boolean containsGroupHeader(int mouseX, int mouseY) {
+            int rowY = GUI_HEADER_HEIGHT + rowIndex * ROW_HEIGHT;
+            return mouseX >= GUI_PADDING_X && mouseX < GUI_WIDTH - GUI_PADDING_X
+                    && mouseY >= rowY && mouseY < rowY + ROW_HEIGHT;
         }
     }
 }

@@ -44,6 +44,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -53,11 +54,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
     private static final int MAX_PERSISTED_PATTERNS = 1024;
+    private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
     private final AtomicLong dynamicEpoch = new AtomicLong();
     private final ConcurrentMap<String, DynamicRecipePatternDetails> cachedPatterns = new ConcurrentHashMap<>();
-    private volatile boolean patternCacheRefreshPending = true;
+    private final AtomicBoolean patternCacheRefreshPending = new AtomicBoolean(true);
+    private final AtomicBoolean patternCachePersistencePending = new AtomicBoolean();
+    private long nextPatternCacheRefreshTick;
     private String lastRecipeMapSignature;
     private MultiblockControllerBase lastController;
 
@@ -87,14 +91,15 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         // Dynamic patterns are registered by MixinCraftingGridCache on demand.
     }
 
-    /**
-     * Dynamic details are injected by {@link DynamicRecipePatternRegistry} only for the output currently being
-     * calculated. Mounting the whole persisted cache through AE2's regular provider API turns every old candidate
-     * into a branch of every later calculation and can make recursive planning unbounded.
-     */
     @Override
     public List<? extends IPatternDetails> getAvailablePatterns() {
-        return Collections.emptyList();
+        if (!isActive() || cachedPatterns.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<DynamicRecipePatternDetails> patterns = new ArrayList<>(cachedPatterns.values());
+        patterns.sort((left, right) -> left.getRecipeKey().compareTo(right.getRecipeKey()));
+        return Collections.unmodifiableList(patterns);
     }
 
     @Override
@@ -152,7 +157,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
                 lastRecipeMapSignature = recipeMapSignature;
                 dynamicEpoch.incrementAndGet();
                 if (hadSource) clearCachedPatterns();
-                patternCacheRefreshPending = true;
+                patternCacheRefreshPending.set(true);
                 ApplyGrayMod.LOGGER.info("RecipeMap pattern provider at {} changed source to {}",
                         getPos(), recipeMapSignature.isEmpty() ? "none" : recipeMapSignature);
             }
@@ -193,18 +198,23 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public DynamicRecipePatternDetails cacheDynamicPattern(DynamicRecipePatternDetails detail) {
         DynamicRecipePatternDetails existing = cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
         if (existing == null) {
+            queueCachedPatternUpdate();
             return detail;
         }
         return existing;
     }
 
     public void removeCachedDynamicPattern(String recipeKey) {
-        cachedPatterns.remove(recipeKey);
+        if (cachedPatterns.remove(recipeKey) != null) {
+            queueCachedPatternUpdate();
+        }
     }
 
     public void clearCachedPatterns() {
-        cachedPatterns.clear();
-        patternCacheRefreshPending = true;
+        if (!cachedPatterns.isEmpty()) {
+            cachedPatterns.clear();
+            queueCachedPatternUpdate();
+        }
     }
 
     /** Clears this provider's persisted cache and invalidates its dynamic AE pattern registrations. */
@@ -215,7 +225,8 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         DynamicRecipePatternRegistry.clearProviderPatterns(this);
         clearCachedPatterns();
         markDirty();
-        patternCacheRefreshPending = requestPatternUpdate();
+        patternCachePersistencePending.set(false);
+        patternCacheRefreshPending.set(requestPatternUpdate());
         if (cachedPatternCount > 0) {
             ApplyGrayMod.LOGGER.info("Cleared {} dynamic RecipeMap patterns at {}", cachedPatternCount, getPos());
         }
@@ -285,7 +296,8 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
                 }
             }
         }
-        patternCacheRefreshPending = true;
+        patternCacheRefreshPending.set(true);
+        patternCachePersistencePending.set(false);
     }
 
     public String getDynamicProviderId() {
@@ -377,10 +389,30 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     }
 
     private void flushCachedPatternUpdate() {
-        if (!patternCacheRefreshPending || !isActive()) {
+        if (patternCachePersistencePending.getAndSet(false)) {
+            markDirty();
+        }
+        if (!patternCacheRefreshPending.get() || !isActive() || getWorld() == null) {
             return;
         }
-        patternCacheRefreshPending = requestPatternUpdate();
+
+        long worldTime = getWorld().getTotalWorldTime();
+        if (worldTime < nextPatternCacheRefreshTick) {
+            return;
+        }
+
+        if (!patternCacheRefreshPending.compareAndSet(true, false)) {
+            return;
+        }
+        nextPatternCacheRefreshTick = worldTime + PATTERN_CACHE_REFRESH_INTERVAL_TICKS;
+        if (requestPatternUpdate()) {
+            patternCacheRefreshPending.set(true);
+        }
+    }
+
+    private void queueCachedPatternUpdate() {
+        patternCachePersistencePending.set(true);
+        patternCacheRefreshPending.set(true);
     }
 
     private static String createRecipeMapSignature(RecipeMap<?>[] recipeMaps) {

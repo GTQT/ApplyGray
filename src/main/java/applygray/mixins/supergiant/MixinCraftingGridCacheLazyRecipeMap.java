@@ -46,11 +46,13 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
         List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue().size() + dynamic.size());
         boolean changed = false;
         for (IPatternDetails detail : cir.getReturnValue()) {
-            if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail)) {
-                merged.add(detail);
-            } else {
+            // Cached virtual patterns remain mounted for terminal visibility, but only the bounded lookup for the
+            // current requested output may participate in this calculation.
+            if (detail instanceof DynamicRecipePatternDetails) {
                 changed = true;
+                continue;
             }
+            merged.add(detail);
         }
         for (IPatternDetails detail : dynamic) {
             if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail) &&
