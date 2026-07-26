@@ -1,5 +1,6 @@
 package applygray.mixins.supergiant;
 
+import applygray.ApplyGrayMod;
 import applygray.integration.ae2.RecipeMapPatternAccessActions;
 import applygray.integration.ae2.RecipeMapPatternAccessDisplay;
 
@@ -11,12 +12,12 @@ import ae2.client.gui.widgets.SmallSquareButtonRenderer;
 import net.minecraft.util.text.TextComponentTranslation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
-import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -26,7 +27,6 @@ import java.util.List;
 public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
 
     private static final int GUI_PADDING_X = 17;
-    private static final int GUI_WIDTH = 213;
     private static final int GUI_HEADER_HEIGHT = 30;
     private static final int ROW_HEIGHT = 18;
     private static final int ROW_ACTION_BUTTON_WIDTH = 12;
@@ -44,9 +44,12 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
     private int applygray$guiLeft;
     @Unique
     private int applygray$guiTop;
-
-    @Accessor("patternAccessDisplay")
-    protected abstract Object applygray$getPatternAccessDisplay();
+    @Unique
+    private static Field applygray$patternAccessDisplayField;
+    @Unique
+    private static boolean applygray$patternAccessDisplayFieldResolved;
+    @Unique
+    private static boolean applygray$patternAccessDisplayAccessFailureLogged;
 
     @Inject(method = "drawFG", at = @At("HEAD"))
     private void applygray$beginRecipeMapClearButtons(int offsetX, int offsetY, int mouseX, int mouseY,
@@ -60,8 +63,8 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
 
     @Inject(method = "drawGroupHeader", at = @At("TAIL"))
     private void applygray$drawRecipeMapClearButton(PatternContainerGroup group, int rowIndex, CallbackInfo ci) {
-        Object display = applygray$getPatternAccessDisplay();
-        if (!(display instanceof RecipeMapPatternAccessDisplay recipeMapDisplay)) {
+        RecipeMapPatternAccessDisplay recipeMapDisplay = applygray$getRecipeMapPatternAccessDisplay();
+        if (recipeMapDisplay == null) {
             return;
         }
 
@@ -77,23 +80,20 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
                 && applygray$localMouseY < y + ROW_ACTION_BUTTON_HEIGHT;
         SmallSquareButtonRenderer.drawBackground(x, y, ROW_ACTION_BUTTON_WIDTH, ROW_ACTION_BUTTON_HEIGHT, hovered);
         SmallSquareButtonRenderer.drawIcon(x, y, ROW_ACTION_BUTTON_WIDTH, ROW_ACTION_BUTTON_HEIGHT, Icon.CLEAR, 0);
-        applygray$clearButtons.add(new ClearButton(inventoryId, x, y, rowIndex));
+        applygray$clearButtons.add(new ClearButton(inventoryId, x, y));
     }
 
     @Inject(method = "handlePatternAccessExtraMouseClicked", at = @At("HEAD"), cancellable = true)
     private void applygray$clearRecipeMapPatterns(int mouseX, int mouseY, int mouseButton,
                                                    CallbackInfoReturnable<Boolean> cir) {
-        if (mouseButton != 0 && mouseButton != 1) {
+        if (mouseButton != 0) {
             return;
         }
 
         int localMouseX = mouseX - applygray$guiLeft;
         int localMouseY = mouseY - applygray$guiTop;
         for (ClearButton button : applygray$clearButtons) {
-            boolean clickedClearButton = button.contains(localMouseX, localMouseY);
-            boolean rightClickedGroupHeader = mouseButton == 1 && button.containsGroupHeader(localMouseX,
-                    localMouseY);
-            if (clickedClearButton || rightClickedGroupHeader) {
+            if (button.contains(localMouseX, localMouseY)) {
                 RecipeMapPatternAccessActions.send(((InvokerAEBaseGui) (Object) this).applygray$getContainer(),
                         button.inventoryId());
                 cir.setReturnValue(true);
@@ -118,16 +118,57 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
     }
 
     @Unique
-    private record ClearButton(long inventoryId, int x, int y, int rowIndex) {
+    private RecipeMapPatternAccessDisplay applygray$getRecipeMapPatternAccessDisplay() {
+        Field field = applygray$getPatternAccessDisplayField();
+        if (field == null) {
+            return null;
+        }
+
+        try {
+            Object display = field.get(this);
+            return display instanceof RecipeMapPatternAccessDisplay recipeMapDisplay ? recipeMapDisplay : null;
+        } catch (IllegalAccessException e) {
+            applygray$logPatternAccessDisplayAccessFailure(e);
+            return null;
+        }
+    }
+
+    @Unique
+    private static Field applygray$getPatternAccessDisplayField() {
+        if (applygray$patternAccessDisplayFieldResolved) {
+            return applygray$patternAccessDisplayField;
+        }
+
+        synchronized (AbstractPatternAccessTerm.class) {
+            if (applygray$patternAccessDisplayFieldResolved) {
+                return applygray$patternAccessDisplayField;
+            }
+
+            try {
+                Field field = AbstractPatternAccessTerm.class.getDeclaredField("patternAccessDisplay");
+                field.setAccessible(true);
+                applygray$patternAccessDisplayField = field;
+            } catch (ReflectiveOperationException e) {
+                applygray$logPatternAccessDisplayAccessFailure(e);
+            }
+            applygray$patternAccessDisplayFieldResolved = true;
+            return applygray$patternAccessDisplayField;
+        }
+    }
+
+    @Unique
+    private static void applygray$logPatternAccessDisplayAccessFailure(ReflectiveOperationException e) {
+        if (!applygray$patternAccessDisplayAccessFailureLogged) {
+            applygray$patternAccessDisplayAccessFailureLogged = true;
+            ApplyGrayMod.LOGGER.error("Unable to access Pattern Access Terminal display state", e);
+        }
+    }
+
+    @Unique
+    private record ClearButton(long inventoryId, int x, int y) {
         private boolean contains(int mouseX, int mouseY) {
             return mouseX >= x && mouseY >= y
                     && mouseX < x + ROW_ACTION_BUTTON_WIDTH && mouseY < y + ROW_ACTION_BUTTON_HEIGHT;
-        }
-
-        private boolean containsGroupHeader(int mouseX, int mouseY) {
-            int rowY = GUI_HEADER_HEIGHT + rowIndex * ROW_HEIGHT;
-            return mouseX >= GUI_PADDING_X && mouseX < GUI_WIDTH - GUI_PADDING_X
-                    && mouseY >= rowY && mouseY < rowY + ROW_HEIGHT;
         }
     }
 }
