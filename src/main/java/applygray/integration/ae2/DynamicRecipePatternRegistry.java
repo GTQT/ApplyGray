@@ -30,7 +30,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class DynamicRecipePatternRegistry {
 
     private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
+    private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
@@ -203,13 +203,28 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<IPatternDetails> findPatterns(AEKey target) {
+            if (Thread.currentThread().isInterrupted()) {
+                return Collections.emptyList();
+            }
+
             List<DynamicRecipePatternDetails> existing = patternsByTarget.get(target);
             if (existing == null) {
+                long startedAt = System.nanoTime();
+                List<DynamicRecipePatternDetails> generated = createPatterns(target);
+                if (Thread.currentThread().isInterrupted()) {
+                    return Collections.emptyList();
+                }
+                long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
+                if (elapsedMillis >= 1_000L) {
+                    ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup for {} took {} ms and found {} patterns",
+                            target, elapsedMillis, generated.size());
+                }
+
                 synchronized (this) {
                     existing = patternsByTarget.get(target);
                     if (existing == null) {
-                        existing = createPatterns(target);
-                        patternsByTarget.put(target, existing);
+                        patternsByTarget.put(target, generated);
+                        existing = generated;
                     }
                 }
             }
@@ -219,13 +234,19 @@ public final class DynamicRecipePatternRegistry {
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
             List<PatternCandidate> candidates = new ArrayList<>();
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
+            int scannedRecipes = 0;
             for (ProviderSnapshot source : sources) {
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
                     for (Recipe recipe : recipeMap.getRecipeList()) {
+                        if ((scannedRecipes++ & 63) == 0 && Thread.currentThread().isInterrupted()) {
+                            return Collections.emptyList();
+                        }
                         if (!recipeProduces(recipe, target)) continue;
                         EncodedRecipe encoded = encodeRecipe(source, recipe);
                         if (encoded == null) continue;
-                        Cost cost = estimateRecipeCost(recipe, sources, 0, new HashSet<String>());
+                        // This ranking only affects pattern preference. A recursive full-recipe scan here can hold
+                        // up the crafting calculation for minutes on large RecipeMaps.
+                        Cost cost = Cost.fallback(recipe);
                         candidates.add(new PatternCandidate(source, recipeMap, recipe, encoded, cost));
                     }
                 }
@@ -246,7 +267,7 @@ public final class DynamicRecipePatternRegistry {
                             candidate.encoded.alternatives, candidate.encoded.outputs,
                             candidate.encoded.circuitConfiguration,
                             candidate.cost.rawMaterials, candidate.cost.steps);
-                    candidate.source.provider.cacheDynamicPattern(detail);
+                    detail = candidate.source.provider.cacheDynamicPattern(detail);
                     ApplyGrayMod.LOGGER.debug("Generated lazy RecipeMap pattern {} (raw={}, steps={}, programmableNc={})",
                             candidate.recipeKey, candidate.cost.rawMaterials, candidate.cost.steps,
                             candidate.encoded.programmableNonConsumableInputs);
@@ -361,8 +382,7 @@ public final class DynamicRecipePatternRegistry {
             ItemStack[] choices = input.getInputStacks();
             if (choices.length == 0) return null;
             List<GenericStack> options = new ArrayList<>();
-            for (ItemStack choice : choices) {
-                if (choice.isEmpty()) continue;
+            for (ItemStack choice : prioritizeGeneralCircuitBoards(choices)) {
                 ItemStack option = choice.copy();
                 option.setCount(input.getAmount());
                 GenericStack genericOption = GenericStack.fromItemStack(option);
@@ -413,8 +433,7 @@ public final class DynamicRecipePatternRegistry {
         if (choices == null || choices.length == 0) return null;
 
         List<GenericStack> programmableOptions = new ArrayList<>();
-        for (ItemStack choice : choices) {
-            if (choice.isEmpty()) continue;
+        for (ItemStack choice : prioritizeGeneralCircuitBoards(choices)) {
             ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
             if (programmable.isEmpty()) return null;
             ProgrammableCircuit.wrap(choice, programmable);
@@ -424,31 +443,25 @@ public final class DynamicRecipePatternRegistry {
         return programmableOptions.isEmpty() ? null : programmableOptions;
     }
 
-    private static Cost estimateRecipeCost(Recipe recipe, Collection<ProviderSnapshot> sources, int depth,
-                                           Set<String> visiting) {
-        if (depth >= 12) return Cost.fallback(recipe);
-        Cost total = new Cost(0, 1);
-        for (GTRecipeInput input : recipe.getInputs()) {
-            if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
-            FluidStack fluid = input.getInputFluidStack();
-            if (fluid != null) {
-                total.rawMaterials += estimateFluidRawMaterialCost(fluid, input.getAmount());
-                continue;
-            }
-            ItemStack[] choices = input.getInputStacks();
-            if (choices.length == 0) return Cost.fallback(recipe);
-            ItemStack required = choices[0].copy();
-            required.setCount(input.getAmount());
-            total.add(estimateItemCost(required, sources, depth + 1, visiting));
+    /**
+     * Dynamic patterns use the first alternative as their default AE input. Prefer the universal circuit board
+     * variants when a RecipeMap input accepts one, while retaining every other valid alternative.
+     */
+    private static List<ItemStack> prioritizeGeneralCircuitBoards(ItemStack[] choices) {
+        List<ItemStack> generalCircuitBoards = new ArrayList<>(choices.length);
+        List<ItemStack> otherChoices = new ArrayList<>(choices.length);
+        for (ItemStack choice : choices) {
+            if (choice == null || choice.isEmpty()) continue;
+            (isGeneralCircuitBoard(choice) ? generalCircuitBoards : otherChoices).add(choice);
         }
-        for (GTRecipeInput input : recipe.getFluidInputs()) {
-            if (input.isNonConsumable()) continue;
-            FluidStack fluid = input.getInputFluidStack();
-            if (fluid != null) {
-                total.rawMaterials += estimateFluidRawMaterialCost(fluid, input.getAmount());
-            }
-        }
-        return total;
+        generalCircuitBoards.addAll(otherChoices);
+        return generalCircuitBoards;
+    }
+
+    private static boolean isGeneralCircuitBoard(ItemStack stack) {
+        String translationKey = stack.getTranslationKey();
+        return translationKey.startsWith(GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX) ||
+                translationKey.startsWith("item." + GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX);
     }
 
     private static long estimateFluidRawMaterialCost(FluidStack fluid, int amount) {
@@ -461,47 +474,6 @@ public final class DynamicRecipePatternRegistry {
         Material material = FluidUnifier.getMaterialFromFluid(fluidStack.getFluid());
         return material != null && material.hasFluid() &&
                 material.getFluid(FluidStorageKeys.MOLTEN) == fluidStack.getFluid();
-    }
-
-    private static Cost estimateItemCost(ItemStack required, Collection<ProviderSnapshot> sources, int depth,
-                                         Set<String> visiting) {
-        String key = stackKey(required);
-        if (!visiting.add(key)) return new Cost(required.getCount(), 0);
-        try {
-            Cost best = null;
-            for (ProviderSnapshot source : sources) {
-                for (RecipeMap<?> recipeMap : source.recipeMaps) {
-                    for (Recipe candidate : recipeMap.getRecipeList()) {
-                        if (!recipeProduces(candidate, AEItemKey.of(required)) || encodeRecipe(source, candidate) == null) {
-                            continue;
-                        }
-                        int outputAmount = matchingOutputAmount(candidate, required);
-                        if (outputAmount <= 0) continue;
-                        Cost candidateCost = estimateRecipeCost(candidate, sources, depth, visiting);
-                        candidateCost.multiply((required.getCount() + outputAmount - 1L) / outputAmount);
-                        if (best == null || candidateCost.compareTo(best) < 0) best = candidateCost;
-                    }
-                }
-            }
-            return best == null ? new Cost(required.getCount(), 0) : best;
-        } finally {
-            visiting.remove(key);
-        }
-    }
-
-    private static int matchingOutputAmount(Recipe recipe, ItemStack requested) {
-        int amount = 0;
-        for (ItemStack output : recipe.getOutputs()) {
-            if (ItemStack.areItemsEqual(output, requested) && ItemStack.areItemStackTagsEqual(output, requested)) {
-                amount += output.getCount();
-            }
-        }
-        return amount;
-    }
-
-    private static String stackKey(ItemStack stack) {
-        return String.valueOf(stack.getItem().getRegistryName()) + '@' + stack.getMetadata() + ':' +
-                (stack.hasTagCompound() ? stack.getTagCompound().toString() : "");
     }
 
     private static final class EncodedRecipe {
@@ -561,16 +533,6 @@ public final class DynamicRecipePatternRegistry {
                 if (fluid != null) raw += estimateFluidRawMaterialCost(fluid, input.getAmount());
             }
             return new Cost(raw, 1);
-        }
-
-        private void add(Cost other) {
-            rawMaterials = Math.min(Long.MAX_VALUE / 4, rawMaterials + other.rawMaterials);
-            steps = Math.min(Integer.MAX_VALUE / 4, steps + other.steps);
-        }
-
-        private void multiply(long multiplier) {
-            rawMaterials = Math.min(Long.MAX_VALUE / 4, rawMaterials * multiplier);
-            steps = (int) Math.min(Integer.MAX_VALUE / 4, (long) steps * multiplier);
         }
 
         @Override

@@ -192,10 +192,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         return new ArrayList<>(cachedPatterns.values());
     }
 
-    public void cacheDynamicPattern(DynamicRecipePatternDetails detail) {
-        if (cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail) == null) {
+    public DynamicRecipePatternDetails cacheDynamicPattern(DynamicRecipePatternDetails detail) {
+        DynamicRecipePatternDetails existing = cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
+        if (existing == null) {
             patternCacheRefreshPending = true;
+            return detail;
         }
+        return existing;
     }
 
     public void removeCachedDynamicPattern(String recipeKey) {

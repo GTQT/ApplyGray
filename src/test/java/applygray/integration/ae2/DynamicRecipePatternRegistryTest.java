@@ -30,6 +30,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DynamicRecipePatternRegistryTest {
@@ -62,6 +63,23 @@ class DynamicRecipePatternRegistryTest {
                 "polybenzimidazole must be included in the pattern");
     }
 
+    @Test
+    void prefersGeneralCircuitBoardsForPrimaryPatternInputs() throws ReflectiveOperationException {
+        Item normalCircuit = new Item().setTranslationKey("metaitem.circuit.basic")
+                .setRegistryName("applygray_test", "normal_circuit");
+        Item generalCircuitBoard = new Item().setTranslationKey("metaitem.general_circuit.lv")
+                .setRegistryName("applygray_test", "general_circuit_board");
+
+        ItemStack normalCircuitStack = new ItemStack(normalCircuit);
+        ItemStack generalCircuitBoardStack = new ItemStack(generalCircuitBoard);
+        @SuppressWarnings("unchecked")
+        List<ItemStack> orderedChoices = (List<ItemStack>) prioritize(new ItemStack[]{
+                normalCircuitStack, generalCircuitBoardStack
+        });
+        assertSame(generalCircuitBoardStack, orderedChoices.get(0));
+        assertSame(normalCircuitStack, orderedChoices.get(1));
+    }
+
     private static Recipe createUhvWetwareMainframeRecipe() {
         int[] itemAmounts = {2, 2, 32, 32, 32, 32, 32, 64, 32, 16, 8};
         List<GTRecipeInput> itemInputs = new ArrayList<>(itemAmounts.length);
@@ -87,6 +105,13 @@ class DynamicRecipePatternRegistryTest {
                 DynamicRecipePatternRegistry.ProviderSnapshot.class, Recipe.class);
         method.setAccessible(true);
         return method.invoke(null, null, recipe);
+    }
+
+    private static Object prioritize(ItemStack[] choices) throws ReflectiveOperationException {
+        Method method = DynamicRecipePatternRegistry.class.getDeclaredMethod("prioritizeGeneralCircuitBoards",
+                ItemStack[].class);
+        method.setAccessible(true);
+        return method.invoke(null, (Object) choices);
     }
 
     private static Object readField(Object target, String fieldName) throws ReflectiveOperationException {
