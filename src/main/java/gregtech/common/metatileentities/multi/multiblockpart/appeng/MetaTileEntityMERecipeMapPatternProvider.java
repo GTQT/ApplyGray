@@ -22,6 +22,7 @@ import net.minecraftforge.common.util.Constants;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.networking.IGrid;
+import ae2.api.networking.IGridNodeListener;
 import ae2.api.stacks.KeyCounter;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.factory.PosGuiData;
@@ -32,6 +33,8 @@ import com.cleanroommc.modularui.widgets.TextWidget;
 import com.cleanroommc.modularui.widgets.layout.Flow;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -47,6 +50,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
 
     private final AtomicLong dynamicEpoch = new AtomicLong();
     private final ConcurrentMap<String, DynamicRecipePatternDetails> cachedPatterns = new ConcurrentHashMap<>();
+    private volatile boolean patternCacheRefreshPending = true;
     private String lastRecipeMapSignature;
     private MultiblockControllerBase lastController;
 
@@ -76,10 +80,38 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         // Dynamic patterns are registered by MixinCraftingGridCache on demand.
     }
 
+    /**
+     * Cached virtual patterns are mounted through AE2's normal provider API after a restart.
+     */
+    @Override
+    public List<? extends IPatternDetails> getAvailablePatterns() {
+        if (!isActive()) {
+            return Collections.emptyList();
+        }
+
+        List<DynamicRecipePatternDetails> available = new ArrayList<>();
+        for (DynamicRecipePatternDetails detail : cachedPatterns.values()) {
+            if (isRecipeMapRouteAvailable(detail)) {
+                available.add(detail);
+            }
+        }
+        available.sort(Comparator.comparing(DynamicRecipePatternDetails::getRecipeKey));
+        return available;
+    }
+
     @Override
     public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         DynamicRecipePatternDetails dynamic = DynamicRecipePatternRegistry.getDynamicPattern(patternDetails);
-        if (dynamic == null || !DynamicRecipePatternRegistry.owns(patternDetails, this) || !isActive()) {
+        if (dynamic == null) {
+            logPatternPushRejected("pattern is not a RecipeMap pattern");
+            return false;
+        }
+        if (!DynamicRecipePatternRegistry.owns(patternDetails, this)) {
+            logPatternPushRejected("pattern is not registered to this RecipeMap provider");
+            return false;
+        }
+        if (!isActive()) {
+            logPatternPushRejected("machine is not active");
             return false;
         }
         if (!isRecipeMapRouteAvailable(dynamic)) {
@@ -87,7 +119,10 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             return false;
         }
         ItemStack circuit = createCircuitMetadata(dynamic);
-        if (dynamic.getCircuitConfiguration() >= 0 && circuit.isEmpty()) return false;
+        if (dynamic.getCircuitConfiguration() >= 0 && circuit.isEmpty()) {
+            logPatternPushRejected("required circuit metadata could not be created");
+            return false;
+        }
         return pushToBuffer(inputHolder, dynamic.getRecipeKey(), dynamic.getRecipeMapName(), circuit);
     }
 
@@ -107,37 +142,71 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     @Override
     public void update() {
         super.update();
-        if (getWorld() == null || getWorld().isRemote || getOffsetTimer() % 20 != 0) return;
+        if (getWorld() == null || getWorld().isRemote) return;
 
-        MultiblockControllerBase controller = getController();
-        RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
-        String recipeMapSignature = createRecipeMapSignature(recipeMaps);
-        boolean hadSource = lastController != null || lastRecipeMapSignature != null;
-        if (controller != lastController || !recipeMapSignature.equals(lastRecipeMapSignature)) {
-            lastController = controller;
-            lastRecipeMapSignature = recipeMapSignature;
-            dynamicEpoch.incrementAndGet();
-            if (hadSource) clearCachedPatterns();
-            ApplyGrayMod.LOGGER.info("RecipeMap pattern provider at {} changed source to {}",
-                    getPos(), recipeMapSignature.isEmpty() ? "none" : recipeMapSignature);
+        if (getOffsetTimer() % 20 == 0) {
+            MultiblockControllerBase controller = getController();
+            RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
+            String recipeMapSignature = createRecipeMapSignature(recipeMaps);
+            boolean hadSource = lastController != null || lastRecipeMapSignature != null;
+            if (controller != lastController || !recipeMapSignature.equals(lastRecipeMapSignature)) {
+                lastController = controller;
+                lastRecipeMapSignature = recipeMapSignature;
+                dynamicEpoch.incrementAndGet();
+                if (hadSource) clearCachedPatterns();
+                patternCacheRefreshPending = true;
+                ApplyGrayMod.LOGGER.info("RecipeMap pattern provider at {} changed source to {}",
+                        getPos(), recipeMapSignature.isEmpty() ? "none" : recipeMapSignature);
+            }
+            DynamicRecipePatternRegistry.refreshProvider(this);
         }
-        DynamicRecipePatternRegistry.refreshProvider(this);
+        flushCachedPatternUpdate();
+    }
+
+    @Override
+    public void onMainNodeStateChanged(IGridNodeListener.State state) {
+        if (getWorld() == null || getWorld().isRemote) {
+            return;
+        }
+
+        if (isActive()) {
+            DynamicRecipePatternRegistry.refreshProvider(this);
+        } else {
+            DynamicRecipePatternRegistry.unregister(this);
+        }
+        super.onMainNodeStateChanged(state);
+        flushCachedPatternUpdate();
+    }
+
+    @Override
+    public void destroyMainNode() {
+        DynamicRecipePatternRegistry.unregister(this);
+        super.destroyMainNode();
     }
 
     public DynamicRecipePatternDetails getCachedDynamicPattern(String recipeKey) {
         return cachedPatterns.get(recipeKey);
     }
 
+    public List<DynamicRecipePatternDetails> getCachedDynamicPatterns() {
+        return new ArrayList<>(cachedPatterns.values());
+    }
+
     public void cacheDynamicPattern(DynamicRecipePatternDetails detail) {
-        cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
+        if (cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail) == null) {
+            patternCacheRefreshPending = true;
+        }
     }
 
     public void removeCachedDynamicPattern(String recipeKey) {
-        cachedPatterns.remove(recipeKey);
+        if (cachedPatterns.remove(recipeKey) != null) {
+            patternCacheRefreshPending = true;
+        }
     }
 
     public void clearCachedPatterns() {
         cachedPatterns.clear();
+        patternCacheRefreshPending = true;
     }
 
     @Override
@@ -168,13 +237,19 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         cachedPatterns.clear();
-        if (!data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) return;
-        NBTTagList patterns = data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND);
-        for (int i = 0; i < Math.min(patterns.tagCount(), MAX_PERSISTED_PATTERNS); i++) {
-            DynamicRecipePatternDetails detail = DynamicRecipePatternDetails.readFromNBT(patterns.getCompoundTagAt(i));
-            if (detail != null) cacheDynamicPattern(detail);
+        if (data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
+            NBTTagList patterns = data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND);
+            for (int i = 0; i < Math.min(patterns.tagCount(), MAX_PERSISTED_PATTERNS); i++) {
+                DynamicRecipePatternDetails detail = DynamicRecipePatternDetails.readFromNBT(
+                        patterns.getCompoundTagAt(i));
+                if (detail != null) {
+                    cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
+                }
+            }
         }
+        patternCacheRefreshPending = true;
     }
+
     public String getDynamicProviderId() {
         if (getWorld() == null) return "unbound:" + System.identityHashCode(this);
         return getWorld().provider.getDimension() + ":" + getPos().toLong();
@@ -239,6 +314,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             if (recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) return true;
         }
         return false;
+    }
+
+    private void flushCachedPatternUpdate() {
+        if (!patternCacheRefreshPending || !isActive()) {
+            return;
+        }
+        patternCacheRefreshPending = requestPatternUpdate();
     }
 
     private static String createRecipeMapSignature(RecipeMap<?>[] recipeMaps) {

@@ -952,14 +952,14 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                                         .height(36)
                                                         .leftRel(0.5f)
                                                         .widthRel(1.0f)
-                                                        .matrix(widgetsPattern)
+                                                        .grid(widgetsPattern)
                                         )
                                         .child(
                                                 new Grid()
                                                         .top(36)
                                                         .leftRel(0.5f)
                                                         .widthRel(1.0f)
-                                                        .matrix(weightText)
+                                                        .grid(weightText)
                                         )
 
                         )
@@ -973,7 +973,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                                         .height(40)
                                                         .leftRel(0.5f)
                                                         .widthRel(1.0f)
-                                                        .matrix(weightTagList)
+                                                        .grid(weightTagList)
                                         )
                                         .child(
                                                 new ScrollableTextWidget()
@@ -1007,7 +1007,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                                                         .minElementMargin(0, 0)
                                                         .minColWidth((int) (0.24f * backgroundWidth))
                                                         .minRowHeight(18)
-                                                        .matrix(weightsPos)
+                                                        .grid(weightsPos)
                                         )
                                         .childIf(useProxy, () -> Flow.column() // 创建多行文本列
                                                 .widthRel(1f)
@@ -1117,7 +1117,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         }
 
         setNeedPatternSync(true);
-        boolean waitingForSync = mePatternChange();
+        boolean waitingForSync = requestPatternUpdate();
         setNeedPatternSync(waitingForSync);
 
         String messageKey = waitingForSync

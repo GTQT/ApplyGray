@@ -43,6 +43,7 @@ import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.api.inventories.InternalInventory;
 import ae2.api.networking.IGrid;
 import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.storage.MEStorage;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
@@ -100,6 +101,7 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     protected boolean blockedMode = true;
 
     protected boolean advancedCircuit = false;
+    private long lastPatternPushRejectLogTick = -200;
     // SLOTS
     protected IItemHandlerModifiable actualImportItems;
     @Nullable
@@ -249,11 +251,12 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     }
 
     public void returnToNet() {
-        Utils.returnItems(getItemMonitor(), getImportItems(), getActionSource());
-        Utils.returnFluids(getFluidMonitor(), getImportFluids(), getActionSource());
+        MEStorage storage = getNetworkStorage();
+        Utils.returnItems(storage, getImportItems(), getActionSource());
+        Utils.returnFluids(storage, getImportFluids(), getActionSource());
     }
 
-    public boolean MEPatternChange() {
+    public boolean requestPatternUpdate() {
         if (!isActive()) {
             return true;
         }
@@ -336,17 +339,31 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
     @Override
     public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive()) {
-            GTLog.logger.debug("Machine is not active, rejecting pattern");
+            logPatternPushRejected("machine is not active");
             return false;
         }
 
         boolean isEmpty = isInventoryEmpty(getImportItems()) && isFluidTankListEmpty(getImportFluids());
 
         if (!isEmpty && isBlockedMode() && !checkBlockedModeCompatibility(inputHolder)) {
-                GTLog.logger.debug("Pattern rejected by blocked mode compatibility check");
-                return false;
+            logPatternPushRejected("blocked mode rejected incompatible inputs");
+            return false;
         }
         return addItemAndFluid(inputHolder);
+    }
+
+    protected final void logPatternPushRejected(String reason) {
+        World world = getWorld();
+        if (world == null || world.isRemote) {
+            return;
+        }
+
+        long worldTick = world.getTotalWorldTime();
+        if (worldTick - lastPatternPushRejectLogTick < 200) {
+            return;
+        }
+        lastPatternPushRejectLogTick = worldTick;
+        GTLog.logger.debug("ME crafting provider at {} rejected AE2 pattern push: {}", getPos(), reason);
     }
 
     protected boolean checkBlockedModeCompatibility(KeyCounter[] inputHolder) {

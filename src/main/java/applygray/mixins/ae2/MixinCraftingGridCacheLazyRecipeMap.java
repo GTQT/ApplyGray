@@ -32,7 +32,11 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
         if (dynamic.isEmpty()) return;
 
         List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue());
-        merged.addAll(dynamic);
+        for (IPatternDetails detail : dynamic) {
+            if (!merged.contains(detail)) {
+                merged.add(detail);
+            }
+        }
         merged.sort((left, right) -> {
             boolean leftDynamic = left instanceof DynamicRecipePatternDetails;
             boolean rightDynamic = right instanceof DynamicRecipePatternDetails;

@@ -318,7 +318,7 @@ public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostable
                         .top(7)
                         .overlay(IKey.str("/")))
                 .child(new TextFieldWidget()
-                        .alignX(0.5f)
+                        .horizontalCenter()
                         .top(5)
                         .widthRel(0.5f)
                         .height(20)

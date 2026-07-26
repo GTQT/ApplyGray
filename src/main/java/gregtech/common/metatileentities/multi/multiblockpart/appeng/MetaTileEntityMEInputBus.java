@@ -119,10 +119,10 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEItemConfigSlot(isStocking(), index, this::isAutoPull)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemConfigSlot(isStocking(), index, this::isAutoPull)
                                 .syncHandler(SYNC_HANDLER_NAME, 0)
-                                .name("Index " + index)));
+                                .name("Index " + index));
 
         for (IWidget slotUpper : grid.getChildren()) {
             ((AEItemConfigSlot) slotUpper).onSelect(() -> {
@@ -144,11 +144,11 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEItemDisplaySlot(index)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemDisplaySlot(index)
                                 .background(GTGuiTextures.SLOT_DARK)
                                 .syncHandler(SYNC_HANDLER_NAME, 0)
-                                .name("Index " + index)));
+                                .name("Index " + index));
     }
 
     @Override

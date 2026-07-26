@@ -6,6 +6,7 @@ import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IControllable;
 import gregtech.api.metatileentity.IAEStatusProvider;
+import gregtech.api.util.GTLog;
 import gregtech.common.ConfigHolder;
 import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityMultiblockNotifiablePart;
 
@@ -19,8 +20,8 @@ import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.common.capabilities.Capability;
 
-import ae2.api.config.Actionable;
 import ae2.api.networking.GridFlags;
+import ae2.api.networking.IGridNodeListener;
 import ae2.api.networking.IManagedGridNode;
 import ae2.api.networking.crafting.ICraftingProvider;
 import ae2.api.networking.security.IActionHost;
@@ -49,6 +50,7 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
     protected boolean isOnline;
     protected boolean allowsExtraConnections;
     protected boolean meStatusChanged;
+    private boolean wasCraftingProviderActive;
 
     public MetaTileEntityAEHostablePart(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch) {
         super(metaTileEntityId, tier, isExportHatch);
@@ -68,13 +70,6 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
             }
         }
         return mainNode;
-    }
-
-    /**
-     * Transitional name for subclasses while they are moved off the old proxy API.
-     */
-    protected final @NotNull IManagedGridNode getProxy() {
-        return getMainNode();
     }
 
     @Override
@@ -182,31 +177,51 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         return grid == null ? null : grid.getStorageService().getInventory();
     }
 
-    /**
-     * The network storage is unified in Supergiant; the old item/fluid monitor names remain only while subclasses are
-     * migrated to key filters.
-     */
-    @Nullable
-    protected MEStorage getItemMonitor() {
-        return getNetworkStorage();
-    }
-
-    @Nullable
-    protected MEStorage getFluidMonitor() {
-        return getNetworkStorage();
-    }
-
     public void updateMEStatus() {
-        if (!getWorld().isRemote) {
-            boolean online = getMainNode().isActive();
-            if (isOnline != online) {
-                writeCustomData(UPDATE_ONLINE_STATUS, buf -> buf.writeBoolean(online));
-                isOnline = online;
-                meStatusChanged = true;
-            } else {
-                meStatusChanged = false;
-            }
+        World world = getWorld();
+        if (world == null || world.isRemote) {
+            return;
         }
+
+        boolean online = getMainNode().isActive();
+        if (isOnline != online) {
+            writeCustomData(UPDATE_ONLINE_STATUS, buf -> buf.writeBoolean(online));
+            isOnline = online;
+            meStatusChanged = true;
+        } else {
+            meStatusChanged = false;
+        }
+        refreshCraftingProviderState(online, null);
+    }
+
+    @Override
+    public void onMainNodeStateChanged(IGridNodeListener.State state) {
+        World world = getWorld();
+        if (world == null || world.isRemote) {
+            return;
+        }
+        refreshCraftingProviderState(getMainNode().isActive(), state);
+    }
+
+    private void refreshCraftingProviderState(boolean active, @Nullable IGridNodeListener.State state) {
+        if (!(this instanceof ICraftingProvider) || wasCraftingProviderActive == active) {
+            return;
+        }
+
+        wasCraftingProviderActive = active;
+        ICraftingProvider.requestUpdate(getMainNode());
+        GTLog.logger.debug("Refreshing AE2 crafting patterns for {} at {} after {} (active={})",
+                metaTileEntityId, getPos(), state == null ? "periodic state check" : state, active);
+    }
+
+    @Override
+    public void destroyMainNode() {
+        if (mainNode != null) {
+            mainNode.destroy();
+            mainNode = null;
+        }
+        isOnline = false;
+        wasCraftingProviderActive = false;
     }
 
     @Override

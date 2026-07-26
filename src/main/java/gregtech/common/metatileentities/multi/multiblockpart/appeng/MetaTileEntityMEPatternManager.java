@@ -269,7 +269,7 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
                         .width(18 * 9 + 4)
                         .height(18 * 6)
                         .leftRel(0.5f)
-                        .matrix(list)
+                        .grid(list)
                 )
                 .bindPlayerInventory();
     }

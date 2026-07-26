@@ -38,6 +38,7 @@ public class OrderBehavior implements IItemBehaviour, ItemUIFactory {
     }
 
     @Override
+    @SuppressWarnings("deprecation") // ItemUIFactory still requires the legacy HandGuiData contract.
     public ModularPanel buildUI(HandGuiData data, PanelSyncManager syncManager, UISettings settings) {
         ItemStack stack = data.getUsedItemStack();
         StringSyncValue name = new StringSyncValue(() -> getName(stack), value -> setName(stack, value));

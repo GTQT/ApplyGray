@@ -267,7 +267,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
         super.update();
         if (getWorld() != null && !getWorld().isRemote) {
             if (isWorkingEnabled() && isOnline && shouldSyncME()) {
-                if (isNeedPatternSync()) setNeedPatternSync(MEPatternChange());
+                if (isNeedPatternSync()) setNeedPatternSync(requestPatternUpdate());
             }
         }
 
@@ -434,7 +434,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
                                         .minColWidth(18)
                                         .minRowHeight(18)
                                         .leftRel(0.5f)
-                                        .matrix(widgetsPattern))
+                                        .grid(widgetsPattern))
                         // Status page
                         .addPage(
                                 Flow.column()

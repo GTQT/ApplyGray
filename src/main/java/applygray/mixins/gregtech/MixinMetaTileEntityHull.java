@@ -32,6 +32,14 @@ public abstract class MixinMetaTileEntityHull implements IAEManagedMetaTileEntit
     }
 
     @Override
+    public void destroyMainNode() {
+        if (applygray$mainNode != null) {
+            applygray$mainNode.destroy();
+            applygray$mainNode = null;
+        }
+    }
+
+    @Override
     public @NotNull AECableType getCableConnectionType(@NotNull EnumFacing side) {
         return AECableType.SMART;
     }

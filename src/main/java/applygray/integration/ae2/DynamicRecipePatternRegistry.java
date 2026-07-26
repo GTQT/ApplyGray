@@ -63,7 +63,9 @@ public final class DynamicRecipePatternRegistry {
 
         if (oldGrid != null && oldGrid != snapshot.grid) {
             GridState oldState = GRIDS.get(oldGrid);
-            if (oldState != null) oldState.removeProvider(providerId);
+            if (oldState != null && oldState.removeProvider(providerId)) {
+                GRIDS.remove(oldGrid, oldState);
+            }
         }
 
         GridState state = GRIDS.computeIfAbsent(snapshot.grid, ignored -> new GridState());
@@ -76,7 +78,9 @@ public final class DynamicRecipePatternRegistry {
         IGrid grid = PROVIDER_GRIDS.remove(providerId);
         if (grid == null) return;
         GridState state = GRIDS.get(grid);
-        if (state != null) state.removeProvider(providerId);
+        if (state != null && state.removeProvider(providerId)) {
+            GRIDS.remove(grid, state);
+        }
     }
 
     public static List<IPatternDetails> findPatterns(IGrid grid, AEKey target) {
@@ -154,11 +158,48 @@ public final class DynamicRecipePatternRegistry {
 
         private synchronized void putProvider(ProviderSnapshot snapshot) {
             ProviderSnapshot existing = providers.put(snapshot.providerId, snapshot);
-            if (!snapshot.sameDefinition(existing)) clearGenerated();
+            if (!snapshot.sameDefinition(existing)) {
+                clearGenerated();
+                bindAllCachedPatterns();
+            } else {
+                bindCachedPatterns(snapshot);
+            }
         }
 
-        private synchronized void removeProvider(String providerId) {
-            if (providers.remove(providerId) != null) clearGenerated();
+        private void bindAllCachedPatterns() {
+            for (ProviderSnapshot provider : providers.values()) {
+                bindCachedPatterns(provider);
+            }
+        }
+
+        private void bindCachedPatterns(ProviderSnapshot snapshot) {
+            for (DynamicRecipePatternDetails detail : snapshot.provider.getCachedDynamicPatterns()) {
+                if (!isRecipeMapAvailable(snapshot, detail)) {
+                    continue;
+                }
+                patternsByRecipe.put(detail.getRecipeKey(), detail);
+                providersByPattern.put(detail, snapshot.provider);
+            }
+        }
+
+        private static boolean isRecipeMapAvailable(ProviderSnapshot snapshot, DynamicRecipePatternDetails detail) {
+            for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
+                if (recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * @return whether no active providers remain on this grid.
+         */
+        private synchronized boolean removeProvider(String providerId) {
+            if (providers.remove(providerId) != null) {
+                clearGenerated();
+                bindAllCachedPatterns();
+            }
+            return providers.isEmpty();
         }
 
         private List<IPatternDetails> findPatterns(AEKey target) {

@@ -24,6 +24,13 @@ public final class ApplyGrayGridNodeSupport {
                 managed.gridChanged();
             }
         }
+
+        @Override
+        public void onStateChanged(MetaTileEntity owner, IGridNode node, State state) {
+            if (owner instanceof IAEManagedMetaTileEntity managed) {
+                managed.onMainNodeStateChanged(state);
+            }
+        }
     };
 
     private ApplyGrayGridNodeSupport() {}

@@ -240,6 +240,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     @Override
     public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
         if (!isActive()) {
+            logPatternPushRejected("machine is not active");
             return false;
         }
         return pushToBuffer(inputHolder, null, null);
@@ -404,10 +405,12 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                    @Nullable String recipeMapName, @Nullable ItemStack extraCircuit) {
         BufferSignature signature = extractSignature(inputHolder, patternKey, recipeMapName, extraCircuit);
         if (signature == null) {
+            logPatternPushRejected("input signature is invalid");
             return false;
         }
         PatternBuffer buffer = findOrAllocateBuffer(signature);
         if (buffer == null) {
+            logPatternPushRejected("no matching or free pattern buffer is available");
             return false;
         }
 
@@ -423,6 +426,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 buffer.clear();
                 unregisterBufferFromSignatureMap(buffer, signature);
             }
+            logPatternPushRejected("selected pattern buffer cannot accept all inputs");
             return false;
         }
         insertKeyCounters(buffer, inputHolder);
@@ -621,7 +625,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         super.update();
         if (!getWorld().isRemote) {
             if (isWorkingEnabled() && isOnline && shouldSyncME()) {
-                if (isNeedPatternSync()) setNeedPatternSync(MEPatternChange());
+                if (isNeedPatternSync()) setNeedPatternSync(requestPatternUpdate());
                 if (isExport()) returnToNet();
             }
 
@@ -1257,7 +1261,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                         .minColWidth(18)
                                         .minRowHeight(18)
                                         .leftRel(0.5f) // 水平居中
-                                        .matrix(widgetsPattern))
+                                        .grid(widgetsPattern))
                         .addPage(// 缓冲区状态页面
                                 Flow.column()
                                         .top(0)
@@ -1279,7 +1283,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                                         .minElementMargin(0, 0)
                                                         .minColWidth((int) (0.24f * backgroundWidth))
                                                         .minRowHeight(18)
-                                                        .matrix(weightsPos)
+                                                        .grid(weightsPos)
                                         )
                                         .childIf(isUseProxy(), () -> Flow.column() // 创建多行文本列
                                                 .widthRel(1f)

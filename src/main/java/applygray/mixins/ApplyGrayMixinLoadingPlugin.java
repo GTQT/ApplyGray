@@ -18,6 +18,7 @@ import java.util.Map;
 @Name("ApplyGrayMixinLoadingPlugin")
 @MCVersion(ForgeVersion.mcVersion)
 @SortingIndex(1001)
+@SuppressWarnings("deprecation") // MixinBooter needs the early loader for the vanilla GuiScreen mixin.
 public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMixinLoader {
 
     private static final Logger LOGGER = LogManager.getLogger("applygray");
@@ -73,8 +74,4 @@ public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMix
         return Collections.singletonList("mixins.applygray.default.json");
     }
 
-    @Override
-    public boolean shouldMixinConfigQueue(String mixinConfig) {
-        return IEarlyMixinLoader.super.shouldMixinConfigQueue(mixinConfig);
-    }
 }

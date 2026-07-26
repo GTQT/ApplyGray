@@ -284,7 +284,7 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                         .height(18)
                         .top(5)
                         .right(7)
-                        .childIf(!isStocking, getMultiplierWidget(guiData, panelSyncManager))
+                        .childIf(!isStocking, () -> getMultiplierWidget(guiData, panelSyncManager))
                         .child(getSettingWidget(guiData, panelSyncManager)));
     }
 
@@ -297,10 +297,10 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEItemConfigSlot(isStocking(), index, this::isAutoPull)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemConfigSlot(isStocking(), index, this::isAutoPull)
                                 .syncHandler(SYNC_HANDLER_NAME + "item", 0)
-                                .name("Item Index " + index)));
+                                .name("Item Index " + index));
 
         for (IWidget slotUpper : itemGrid.getChildren()) {
             ((AEItemConfigSlot) slotUpper).onSelect(() -> {
@@ -317,10 +317,10 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEFluidConfigSlot(isStocking(), index, this::isAutoPull)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEFluidConfigSlot(isStocking(), index, this::isAutoPull)
                                 .syncHandler(SYNC_HANDLER_NAME + "fluid", 0)
-                                .name("Fluid Index " + index)));
+                                .name("Fluid Index " + index));
 
         for (IWidget slotLower : fluidGrid.getChildren()) {
             ((AEFluidConfigSlot) slotLower).onSelect(() -> {
@@ -346,11 +346,11 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEItemDisplaySlot(index)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemDisplaySlot(index)
                                 .background(GTGuiTextures.SLOT_DARK)
                                 .syncHandler(SYNC_HANDLER_NAME + "item", 0)
-                                .name("Item Index " + index)));
+                                .name("Item Index " + index));
 
         // 流体显示网格（下半部分）
         Grid fluidGrid = new Grid()
@@ -359,11 +359,11 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                 .minElementMargin(0, 0)
                 .minColWidth(18)
                 .minRowHeight(18)
-                .matrix(Grid.mapToMatrix((int) Math.sqrt(CONFIG_SIZE), CONFIG_SIZE,
-                        index -> new AEFluidDisplaySlot(index)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEFluidDisplaySlot(index)
                                 .background(GTGuiTextures.SLOT_DARK)
                                 .syncHandler(SYNC_HANDLER_NAME + "fluid", 0)
-                                .name("Fluid Index " + index)));
+                                .name("Fluid Index " + index));
 
         return Flow.column()
                 .pos(7 + 18 * 5, 25)
@@ -460,7 +460,7 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                         .top(7)
                         .overlay(IKey.str("/")))
                 .child(new TextFieldWidget()
-                        .alignX(0.5f)
+                        .horizontalCenter()
                         .top(5)
                         .widthRel(0.5f)
                         .height(20)

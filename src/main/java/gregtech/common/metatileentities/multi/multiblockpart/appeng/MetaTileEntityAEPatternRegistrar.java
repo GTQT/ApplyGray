@@ -246,7 +246,7 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
         }
     }
 
-    public boolean mePatternChange() {
+    public boolean requestPatternUpdate() {
         if (!isActive()) {
             return true;
         }
@@ -290,7 +290,7 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
             }
             if (isWorkingEnabled() && isOnline && shouldSyncME()) {
                 if (isNeedPatternSync()) {
-                    setNeedPatternSync(mePatternChange());
+                    setNeedPatternSync(requestPatternUpdate());
                 }
             }
         }

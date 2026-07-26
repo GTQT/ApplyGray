@@ -118,7 +118,7 @@ public abstract class MixinMetaTileEntityHolder implements IActionHost, IInWorld
                                                CallbackInfoReturnable<MetaTileEntity> cir) {
         IAEManagedMetaTileEntity managed = applygray$getManagedMetaTileEntity();
         if (managed != null) {
-            managed.getMainNode().destroy();
+            managed.destroyMainNode();
         }
         applygray$nodeCreationScheduled = false;
     }
@@ -155,16 +155,18 @@ public abstract class MixinMetaTileEntityHolder implements IActionHost, IInWorld
     private void applygray$unloadNode(CallbackInfo ci) {
         IAEManagedMetaTileEntity managed = applygray$getManagedMetaTileEntity();
         if (managed != null) {
-            managed.getMainNode().destroy();
+            managed.destroyMainNode();
         }
+        applygray$nodeCreationScheduled = false;
     }
 
     @Inject(method = "invalidate", at = @At("TAIL"))
     private void applygray$invalidateNode(CallbackInfo ci) {
         IAEManagedMetaTileEntity managed = applygray$getManagedMetaTileEntity();
         if (managed != null) {
-            managed.getMainNode().destroy();
+            managed.destroyMainNode();
         }
+        applygray$nodeCreationScheduled = false;
     }
 
     @Inject(method = "hasCapability", at = @At("HEAD"), cancellable = true)
