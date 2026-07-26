@@ -25,6 +25,7 @@ import net.minecraftforge.oredict.OreDictionary;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.networking.IGrid;
+import ae2.api.networking.crafting.ICraftingPlan;
 import ae2.api.networking.crafting.ICraftingProvider;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.AEItemKey;
@@ -32,20 +33,25 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
+import org.jetbrains.annotations.Nullable;
 
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Lazy bridge between AE2's requested-output lookup and active RecipeMap pattern providers.
@@ -70,6 +76,11 @@ public final class DynamicRecipePatternRegistry {
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
     private static final ThreadLocal<Boolean> RECURSIVE_CYCLE_RECOVERY_REQUIRED = new ThreadLocal<>();
     private static final ThreadLocal<CraftingCalculation> ACTIVE_CRAFTING_CALCULATION = new ThreadLocal<>();
+    /**
+     * Identifies the worker calculation launched by the explicit rebuild action. A grid can have several concurrent
+     * calculations, so only the calculation for this request may consume the pending full rebuild.
+     */
+    private static final ThreadLocal<OptimalRebuildRequest> ACTIVE_OPTIMAL_REBUILD_REQUEST = new ThreadLocal<>();
     /** Present only for the crafting calculation started by ApplyGray's explicit optimal rebuild action. */
     private static final ThreadLocal<OptimalRebuildContext> ACTIVE_OPTIMAL_REBUILD = new ThreadLocal<>();
 
@@ -92,25 +103,85 @@ public final class DynamicRecipePatternRegistry {
     /** Ends one CraftingService task after all recursive-cycle recovery attempts have either succeeded or failed. */
     public static void finishCraftingCalculationSession() {
         OptimalRebuildContext optimalRebuild = ACTIVE_OPTIMAL_REBUILD.get();
-        if (optimalRebuild == null) return;
+        OptimalRebuildRequest request = ACTIVE_OPTIMAL_REBUILD_REQUEST.get();
+        if (optimalRebuild == null) {
+            if (request != null) {
+                ApplyGrayMod.LOGGER.info("Finished ApplyGray optimal rebuild for {} x{} without requesting any " +
+                        "RecipeMap dynamic patterns", request.target, request.amount);
+            }
+            ACTIVE_OPTIMAL_REBUILD_REQUEST.remove();
+            return;
+        }
 
         long elapsedMillis = (System.nanoTime() - optimalRebuild.startedAt) / 1_000_000L;
-        ApplyGrayMod.LOGGER.info("Finished Supergiant optimal rebuild: indexed {} active RecipeMaps from {} " +
+        ApplyGrayMod.LOGGER.info("Finished Supergiant optimal rebuild for {} x{}: indexed {} active RecipeMaps from {} " +
                         "recipes in {} ms; inspected {} matching recipes for {} requested outputs and " +
                         "generated {} / reused {} dynamic patterns in {} ms; candidate priorities " +
-                        "[dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]",
+                        "[dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]; final plan dynamic " +
+                        "routes [dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]",
+                request == null ? "<unknown>" : request.target, request == null ? 0 : request.amount,
                 optimalRebuild.indexedRecipeMaps, optimalRebuild.indexedRecipes,
                 optimalRebuild.indexRebuildMillis, optimalRebuild.matchingRecipeCandidates,
                 optimalRebuild.requestedOutputs, optimalRebuild.generatedPatterns,
                 optimalRebuild.reusedPatterns, elapsedMillis,
                 optimalRebuild.dustOrFluidCandidates, optimalRebuild.ingotCandidates,
                 optimalRebuild.generalCandidates, optimalRebuild.materialFormChangeCandidates,
-                optimalRebuild.recyclingCandidates);
+                optimalRebuild.recyclingCandidates, optimalRebuild.selectedDustOrFluidPatterns,
+                optimalRebuild.selectedIngotPatterns, optimalRebuild.selectedGeneralPatterns,
+                optimalRebuild.selectedMaterialFormChangePatterns, optimalRebuild.selectedRecyclingPatterns);
         ACTIVE_OPTIMAL_REBUILD.remove();
+        ACTIVE_OPTIMAL_REBUILD_REQUEST.remove();
+    }
+
+    /** Records the final AE2 plan once, so an explicit rebuild has one concise, planner-facing diagnostic. */
+    public static void recordOptimalRebuildPlan(ICraftingPlan plan) {
+        OptimalRebuildContext optimalRebuild = ACTIVE_OPTIMAL_REBUILD.get();
+        if (optimalRebuild != null && plan != null) {
+            optimalRebuild.recordFinalPlan(plan);
+        }
     }
 
     private static OptimalRebuildContext getActiveOptimalRebuild() {
         return ACTIVE_CRAFTING_CALCULATION.get() == null ? null : ACTIVE_OPTIMAL_REBUILD.get();
+    }
+
+    private static boolean hasActiveOptimalRebuildRequest() {
+        return ACTIVE_CRAFTING_CALCULATION.get() != null && ACTIVE_OPTIMAL_REBUILD_REQUEST.get() != null;
+    }
+
+    /**
+     * Arms the next calculation for one exact requested output. The matching is performed on the worker thread so an
+     * unrelated concurrent calculation cannot consume the full rebuild.
+     */
+    public static void armOptimalRebuild(IGrid grid, AEKey target, long amount) {
+        GridState state = GRIDS.get(grid);
+        if (state != null && target != null && amount > 0) {
+            state.armOptimalRebuild(target, amount);
+        }
+    }
+
+    /**
+     * Reserves the rebuild session for a CraftingService task while it is submitted. The caller must enter the
+     * reserved session on that task's worker thread before invoking {@link CraftingCalculation#run()}.
+     */
+    public static boolean reserveOptimalRebuild(IGrid grid, AEKey target, long amount) {
+        GridState state = GRIDS.get(grid);
+        if (state == null) return false;
+
+        return state.claimOptimalRebuild(target, amount) != null;
+    }
+
+    /** Enters a rebuild session that was reserved at CraftingService task submission time. */
+    public static void enterOptimalRebuild(AEKey target, long amount) {
+        ACTIVE_OPTIMAL_REBUILD_REQUEST.set(new OptimalRebuildRequest(target, amount));
+    }
+
+    /** Removes an armed request when ContainerCraftConfirm could not schedule its calculation. */
+    public static void cancelOptimalRebuild(IGrid grid, AEKey target, long amount) {
+        GridState state = GRIDS.get(grid);
+        if (state != null) {
+            state.cancelOptimalRebuild(target, amount);
+        }
     }
 
     public static void refreshProvider(MetaTileEntityMERecipeMapPatternProvider provider) {
@@ -186,16 +257,17 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Invalidates the current plan's dynamic patterns and the output indexes used to find their replacements.
-     * The next lazy lookup will rebuild each active RecipeMap index from its complete recipe list.
+     * Invalidates the dynamic dependency chain reachable from one root request, including cached per-output candidate
+     * lists and recursive rejection records for that chain. The root calculation armed by the caller will recreate
+     * its complete dynamic chain from the active RecipeMaps.
      *
      * @return the number of dynamic patterns removed from this grid
      */
-    public static int invalidatePlanPatternsAndRecipeOutputIndexes(IGrid grid,
+    public static int invalidatePlanPatternsAndRecipeOutputIndexes(IGrid grid, AEKey rootTarget,
                                                                     Collection<? extends IPatternDetails> patterns) {
         GridState state = GRIDS.get(grid);
         if (state == null) return 0;
-        return state.invalidatePlanPatternsAndRecipeOutputIndexes(patterns);
+        return state.invalidatePlanPatternsAndRecipeOutputIndexes(rootTarget, patterns);
     }
 
     /**
@@ -295,31 +367,51 @@ public final class DynamicRecipePatternRegistry {
         return true;
     }
 
-    /** Orders virtual patterns by the input required per requested net output. */
+    /** Orders virtual patterns by their material route, then by input required per requested net output. */
     public static int compareDynamicPatternPriority(AEKey requested, DynamicRecipePatternDetails left,
                                                     DynamicRecipePatternDetails right) {
         long leftOutput = requested == null ? 0 : left.getNetOutputAmount(requested);
         long rightOutput = requested == null ? 0 : right.getNetOutputAmount(requested);
-        int efficiency = compareInputOutputEfficiency(left.getRawMaterialCost(), leftOutput,
-                right.getRawMaterialCost(), rightOutput);
-        if (efficiency != 0) return efficiency;
-
-        int steps = Integer.compare(left.getStepCost(), right.getStepCost());
-        return steps != 0 ? steps : left.getRecipeKey().compareTo(right.getRecipeKey());
+        return compareDynamicPatternPriority(left.getRoutePriority(), left.getRawMaterialCost(), leftOutput,
+                left.getStepCost(), left.getRecipeKey(), right.getRoutePriority(), right.getRawMaterialCost(),
+                rightOutput, right.getStepCost(), right.getRecipeKey());
     }
 
-    /** Exposes the first deterministic recipe output only, leaving all later outputs out of AE2's pattern result. */
-    static List<GenericStack> selectPrimaryPatternOutputs(AEKey requested, List<GenericStack> recipeOutputs) {
+    static int compareDynamicPatternPriority(CandidateRoutePriority leftPriority, long leftCost, long leftOutput,
+                                             int leftSteps, String leftRecipeKey,
+                                             CandidateRoutePriority rightPriority, long rightCost, long rightOutput,
+                                             int rightSteps, String rightRecipeKey) {
+        int route = compareCandidateRoutePriority(leftPriority, rightPriority);
+        if (route != 0) return route;
+
+        int efficiency = compareInputOutputEfficiency(leftCost, leftOutput, rightCost, rightOutput);
+        if (efficiency != 0) return efficiency;
+
+        int steps = Integer.compare(leftSteps, rightSteps);
+        return steps != 0 ? steps : leftRecipeKey.compareTo(rightRecipeKey);
+    }
+
+    /**
+     * Exposes only the requested deterministic output, even when it is not the recipe's first output.
+     * Other outputs remain outside this virtual pattern because RecipeMap dynamic patterns model one requested
+     * product at a time.
+     */
+    static List<GenericStack> selectRequestedPatternOutputs(AEKey requested, List<GenericStack> recipeOutputs) {
         if (requested == null || recipeOutputs.isEmpty()) {
             return Collections.emptyList();
         }
-        GenericStack primaryOutput = recipeOutputs.get(0);
-        return requested.matches(primaryOutput) ? Collections.singletonList(primaryOutput) :
-                Collections.emptyList();
+        for (GenericStack output : recipeOutputs) {
+            if (requested.matches(output)) {
+                return Collections.singletonList(output);
+            }
+        }
+        return Collections.emptyList();
     }
 
     static boolean isOreInputPrefix(String prefixName) {
-        return prefixName.startsWith("ore") || prefixName.startsWith("rawOre");
+        return prefixName != null && (prefixName.startsWith("ore") || prefixName.startsWith("rawOre") ||
+                prefixName.startsWith("crushed") || "dustImpure".equals(prefixName) ||
+                "dustPure".equals(prefixName));
     }
 
     static boolean isOreBackedDust(String prefixName, boolean materialHasOreProperty) {
@@ -338,7 +430,8 @@ public final class DynamicRecipePatternRegistry {
                 return true;
             }
         }
-        return false;
+        UnificationEntry entry = OreDictUnifier.getUnificationEntry(stack);
+        return entry != null && entry.orePrefix != null && isOreInputPrefix(entry.orePrefix.name());
     }
 
     private static boolean containsExternalOreInput(ItemStack[] choices) {
@@ -368,35 +461,69 @@ public final class DynamicRecipePatternRegistry {
             return CandidateRoutePriority.RECYCLING;
         }
 
-        boolean usesDustOrFluid = false;
+        boolean usesDust = false;
+        boolean usesPriorityFluid = false;
+        boolean usesElementalFluid = false;
         boolean usesIngot = false;
         Material targetMaterial = getMaterialForKey(target);
         boolean hasMaterialInput = false;
+        boolean hasTargetMaterialInput = false;
         boolean onlyTargetMaterialInputs = targetMaterial != null;
 
         for (GenericStack input : encoded.inputs) {
             AEKey inputKey = input.what();
+            Material inputMaterial = getMaterialForKey(inputKey);
             if (inputKey instanceof AEFluidKey) {
-                usesDustOrFluid = true;
+                usesPriorityFluid |= isPriorityFluidInput(targetMaterial, inputMaterial);
+                usesElementalFluid |= isElementalMaterial(inputMaterial);
             } else if (inputKey instanceof AEItemKey itemKey) {
                 UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
                 if (entry != null) {
                     String prefixName = entry.orePrefix.name();
-                    usesDustOrFluid |= isDustPrefix(prefixName);
+                    usesDust |= isDustPrefix(prefixName);
                     usesIngot |= isIngotPrefix(prefixName);
                 }
             }
 
-            Material inputMaterial = getMaterialForKey(inputKey);
             if (inputMaterial != null) {
                 hasMaterialInput = true;
-                if (targetMaterial == null || !targetMaterial.equals(inputMaterial)) {
+                if (targetMaterial != null && targetMaterial.equals(inputMaterial)) {
+                    hasTargetMaterialInput = true;
+                } else {
                     onlyTargetMaterialInputs = false;
                 }
             }
         }
 
-        if (usesDustOrFluid) {
+        usesPriorityFluid |= isPrimaryElementalFluidRoute(usesElementalFluid, usesDust, usesIngot,
+                hasTargetMaterialInput);
+        return classifyCandidateRoute(usesDust, usesPriorityFluid, usesIngot, hasMaterialInput,
+                onlyTargetMaterialInputs);
+    }
+
+    /**
+     * Molten forms of the requested material are only a form change, while elemental fluids such as the
+     * automatically-added Arc Furnace oxygen are processing auxiliaries. Neither may hide an ingot route.
+     */
+    static boolean isPriorityFluidInput(Material targetMaterial, Material inputMaterial) {
+        return inputMaterial == null ||
+                (!inputMaterial.equals(targetMaterial) && !isElementalMaterial(inputMaterial));
+    }
+
+    /**
+     * Elemental fluids are auxiliary inputs beside a dust, ingot, or target-material form change, but they are the
+     * actual raw materials of reactions such as hydrogen plus fluorine to hydrofluoric acid.
+     */
+    static boolean isPrimaryElementalFluidRoute(boolean usesElementalFluid, boolean usesDust, boolean usesIngot,
+                                                boolean hasTargetMaterialInput) {
+        return usesElementalFluid && !usesDust && !usesIngot && !hasTargetMaterialInput;
+    }
+
+    static CandidateRoutePriority classifyCandidateRoute(boolean usesDust, boolean usesPriorityFluid,
+                                                         boolean usesIngot,
+                                                         boolean hasMaterialInput,
+                                                         boolean onlyTargetMaterialInputs) {
+        if (usesDust || usesPriorityFluid) {
             return CandidateRoutePriority.DUST_OR_FLUID_INPUT;
         }
         if (usesIngot) {
@@ -435,6 +562,25 @@ public final class DynamicRecipePatternRegistry {
             return FluidUnifier.getMaterialFromFluid(fluidKey.getFluid());
         }
         return null;
+    }
+
+    static boolean isElementalMaterial(Material material) {
+        return material != null && material.isElement();
+    }
+
+    private static boolean isElementalSubstance(AEKey key) {
+        return isElementalMaterial(getMaterialForKey(key));
+    }
+
+    /**
+     * Separates virtual patterns for distinct requested outputs of one physical RecipeMap recipe. The serialized
+     * target representation keeps NBT-sensitive item and fluid keys distinct in the persisted provider cache.
+     */
+    static String createTargetedRecipeKey(String recipeKey, AEKey target) {
+        if (target == null) {
+            throw new IllegalArgumentException("Dynamic RecipeMap pattern target cannot be null");
+        }
+        return recipeKey + ":target:" + target.getType().getId() + ':' + target.toTag().toString();
     }
 
     public static final class ProviderSnapshot {
@@ -482,6 +628,8 @@ public final class DynamicRecipePatternRegistry {
         private long pendingFullRecipeOutputIndexEpoch;
         /** Guards one eager index rebuild at a time. Guarded by {@code this}. */
         private boolean fullRecipeOutputIndexRebuildInProgress;
+        /** The root request allowed to consume {@link #pendingFullRecipeOutputIndexEpoch}. Guarded by {@code this}. */
+        private OptimalRebuildRequest pendingOptimalRebuild;
 
         private synchronized void putProvider(ProviderSnapshot snapshot) {
             ProviderSnapshot existing = providers.put(snapshot.providerId, snapshot);
@@ -506,6 +654,31 @@ public final class DynamicRecipePatternRegistry {
                 }
                 patternsByRecipe.put(detail.getRecipeKey(), detail);
                 providersByPattern.put(detail, snapshot.provider);
+                bindCachedPatternOutputs(detail);
+            }
+        }
+
+        /**
+         * Restores the target lookup for persisted patterns so a world reload can use an already materialized dynamic
+         * pattern without rescanning the corresponding RecipeMap.
+         */
+        private void bindCachedPatternOutputs(DynamicRecipePatternDetails detail) {
+            for (GenericStack output : detail.getOutputs()) {
+                if (output == null || output.amount() <= 0 || !detail.netProduces(output.what())) {
+                    continue;
+                }
+                AEKey target = output.what();
+                patternsByTarget.compute(target, (ignored, existing) -> {
+                    List<DynamicRecipePatternDetails> updated = existing == null ?
+                            new ArrayList<>() : new ArrayList<>(existing);
+                    updated.removeIf(candidate -> candidate.getRecipeKey().equals(detail.getRecipeKey()));
+                    updated.add(detail);
+                    updated.sort((left, right) -> compareDynamicPatternPriority(target, left, right));
+                    if (updated.size() > MAX_PATTERNS_PER_TARGET) {
+                        updated = new ArrayList<>(updated.subList(0, MAX_PATTERNS_PER_TARGET));
+                    }
+                    return Collections.unmodifiableList(updated);
+                });
             }
         }
 
@@ -530,9 +703,14 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<IPatternDetails> findPatterns(AEKey target) {
-            // Ores are external resources. A parent recipe may consume them, but the lazy generator must never
-            // attempt to make an ore itself through another RecipeMap pattern.
+            // Ores and their processing intermediates are external resources. A parent recipe may consume them,
+            // but the lazy generator must never attempt to manufacture an ore-processing chain itself.
             if (isExternalOreInput(target)) {
+                return Collections.emptyList();
+            }
+            // A material explicitly registered as an element is the desired recursive leaf. This leaves the
+            // periodic-table substance as an external ME input instead of expanding it through another recipe.
+            if (isElementalSubstance(target)) {
                 return Collections.emptyList();
             }
             if (!cooperateWithCraftingCalculation()) {
@@ -612,7 +790,7 @@ public final class DynamicRecipePatternRegistry {
                         }
                         EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
-                        List<GenericStack> patternOutputs = selectPrimaryPatternOutputs(target, encoded.outputs);
+                        List<GenericStack> patternOutputs = selectRequestedPatternOutputs(target, encoded.outputs);
                         if (patternOutputs.isEmpty()) continue;
                         encoded = encoded.withOutputs(patternOutputs);
                         long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
@@ -625,7 +803,8 @@ public final class DynamicRecipePatternRegistry {
                         // This ranking only affects pattern preference. Avoiding recursive cost evaluation keeps
                         // large RecipeMaps from turning one lookup into a full dependency scan.
                         Cost cost = Cost.fallback(recipe, storedItems, netOutput, routePriority);
-                        PatternCandidate candidate = new PatternCandidate(source, recipeMap, recipe, encoded, cost);
+                        PatternCandidate candidate = new PatternCandidate(source, recipeMap, recipe, target, encoded,
+                                cost);
                         if (!seenRecipeKeys.add(candidate.recipeKey)) continue;
                         if (isRejectedFor(target, candidate.recipeKey)) continue;
                         keepBestCandidate(candidates, candidate);
@@ -641,13 +820,16 @@ public final class DynamicRecipePatternRegistry {
 
             List<DynamicRecipePatternDetails> result = new ArrayList<>(candidates.size());
             for (int index = 0; index < candidates.size(); index++) {
-                if (!cooperateWithCraftingCalculation()) {
-                    return Collections.emptyList();
-                }
-                PatternCandidate candidate = candidates.get(index);
-                DynamicRecipePatternDetails detail = candidate.source.provider
-                        .getCachedDynamicPattern(candidate.recipeKey);
-                if (detail != null && !detail.getOutputs().equals(candidate.encoded.outputs)) {
+                        if (!cooperateWithCraftingCalculation()) {
+                            return Collections.emptyList();
+                        }
+                        PatternCandidate candidate = candidates.get(index);
+                        DynamicRecipePatternDetails detail = candidate.source.provider
+                                .getCachedDynamicPattern(candidate.recipeKey);
+                if (detail != null && !detail.matchesRecipeDefinition(candidate.recipeMap.getUnlocalizedName(),
+                        candidate.encoded.inputs, candidate.encoded.alternatives, candidate.encoded.outputs,
+                        candidate.encoded.circuitConfiguration, candidate.cost.rawMaterials, candidate.cost.steps,
+                        candidate.cost.routePriority)) {
                     candidate.source.provider.removeCachedDynamicPattern(candidate.recipeKey);
                     detail = null;
                 }
@@ -656,7 +838,7 @@ public final class DynamicRecipePatternRegistry {
                             candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
                             candidate.encoded.alternatives, candidate.encoded.outputs,
                             candidate.encoded.circuitConfiguration,
-                            candidate.cost.rawMaterials, candidate.cost.steps);
+                            candidate.cost.rawMaterials, candidate.cost.steps, candidate.cost.routePriority);
                     if (!isPatternAvailableFor(target, detail)) {
                         continue;
                     }
@@ -699,9 +881,9 @@ public final class DynamicRecipePatternRegistry {
                 if (pendingFullRecipeOutputIndexEpoch == 0) {
                     return true;
                 }
-                // A terminal or container query can call getCraftingFor on the server thread while the new plan is
-                // being scheduled. Do not let that query consume the explicit rebuild before its calculation starts.
-                if (calculation == null) {
+                // A terminal query or another player's calculation can call getCraftingFor while the new plan is
+                // being scheduled. Only the exact root calculation armed by the rebuild button may consume it.
+                if (calculation == null || !hasActiveOptimalRebuildRequest()) {
                     return false;
                 }
 
@@ -876,14 +1058,115 @@ public final class DynamicRecipePatternRegistry {
             return removedPatterns.size();
         }
 
-        private synchronized int invalidatePlanPatternsAndRecipeOutputIndexes(
+        private synchronized int invalidatePlanPatternsAndRecipeOutputIndexes(AEKey rootTarget,
                 Collection<? extends IPatternDetails> patterns) {
-            int clearedPatterns = invalidatePlanPatterns(patterns);
+            Set<DynamicRecipePatternDetails> chainPatterns =
+                    Collections.newSetFromMap(new IdentityHashMap<>());
+            Set<AEKey> chainTargets = collectDynamicDependencyTargets(rootTarget, patterns, chainPatterns);
+            int clearedTargetLookups = 0;
+            for (AEKey target : chainTargets) {
+                if (patternsByTarget.remove(target) != null) {
+                    clearedTargetLookups++;
+                }
+            }
+
+            int clearedPatterns = 0;
+            for (DynamicRecipePatternDetails detail : chainPatterns) {
+                String recipeKey = detail.getRecipeKey();
+                DynamicRecipePatternDetails registered = patternsByRecipe.remove(recipeKey);
+                if (registered == null) continue;
+
+                clearedPatterns++;
+                ICraftingProvider provider = providersByPattern.get(registered);
+                if (provider instanceof MetaTileEntityMERecipeMapPatternProvider) {
+                    ((MetaTileEntityMERecipeMapPatternProvider) provider).removeCachedDynamicPattern(recipeKey);
+                }
+            }
+
+            int clearedRejections = 0;
+            for (AEKey target : chainTargets) {
+                Set<String> rejected = rejectedRecipeKeysByTarget.remove(target);
+                if (rejected != null) {
+                    clearedRejections += rejected.size();
+                }
+            }
+
             int clearedIndexes = recipeOutputIndexes.size();
             requestFullRecipeOutputIndexRebuild();
-            ApplyGrayMod.LOGGER.info("Cleared {} RecipeMap output indexes before rebuilding the Supergiant " +
-                    "crafting calculation; the next calculation will rescan every active RecipeMap", clearedIndexes);
+            ApplyGrayMod.LOGGER.info("Cleared {} dynamic RecipeMap patterns, {} cached target lookups, and {} " +
+                    "recursive rejections reachable from {}, plus {} RecipeMap output indexes; the root " +
+                    "calculation will re-evaluate only this chain's dynamic candidates",
+                    clearedPatterns, clearedTargetLookups, clearedRejections, rootTarget, clearedIndexes);
             return clearedPatterns;
+        }
+
+        private Set<AEKey> collectDynamicDependencyTargets(AEKey rootTarget,
+                                                            Collection<? extends IPatternDetails> patterns,
+                                                            Set<DynamicRecipePatternDetails> chainPatterns) {
+            Set<AEKey> chainTargets = new HashSet<>();
+            Set<IPatternDetails> visitedPatterns = Collections.newSetFromMap(new IdentityHashMap<>());
+            Deque<AEKey> targetsToVisit = new ArrayDeque<>();
+            Deque<IPatternDetails> patternsToVisit = new ArrayDeque<>();
+            if (rootTarget != null) {
+                targetsToVisit.add(rootTarget);
+            }
+            for (IPatternDetails pattern : patterns) {
+                if (pattern != null) {
+                    patternsToVisit.add(pattern);
+                }
+            }
+
+            while (!targetsToVisit.isEmpty() || !patternsToVisit.isEmpty()) {
+                while (!targetsToVisit.isEmpty()) {
+                    AEKey target = targetsToVisit.removeFirst();
+                    if (!chainTargets.add(target)) continue;
+
+                    List<DynamicRecipePatternDetails> candidates = patternsByTarget.get(target);
+                    if (candidates != null) {
+                        patternsToVisit.addAll(candidates);
+                    }
+                }
+
+                if (patternsToVisit.isEmpty()) continue;
+                IPatternDetails pattern = patternsToVisit.removeFirst();
+                if (!visitedPatterns.add(pattern)) continue;
+
+                if (pattern instanceof DynamicRecipePatternDetails) {
+                    chainPatterns.add((DynamicRecipePatternDetails) pattern);
+                }
+                for (GenericStack output : pattern.getOutputs()) {
+                    if (output != null) {
+                        targetsToVisit.add(output.what());
+                    }
+                }
+                for (IPatternDetails.IInput input : pattern.getInputs()) {
+                    for (GenericStack possibleInput : input.possibleInputs()) {
+                        if (possibleInput != null) {
+                            targetsToVisit.add(possibleInput.what());
+                        }
+                    }
+                }
+            }
+            return chainTargets;
+        }
+
+        private synchronized void armOptimalRebuild(AEKey target, long amount) {
+            pendingOptimalRebuild = new OptimalRebuildRequest(target, amount);
+        }
+
+        private synchronized OptimalRebuildRequest claimOptimalRebuild(AEKey target, long amount) {
+            OptimalRebuildRequest pending = pendingOptimalRebuild;
+            if (pending == null || !pending.matches(target, amount)) {
+                return null;
+            }
+            pendingOptimalRebuild = null;
+            return pending;
+        }
+
+        private synchronized void cancelOptimalRebuild(AEKey target, long amount) {
+            if (pendingOptimalRebuild != null && pendingOptimalRebuild.matches(target, amount)) {
+                pendingOptimalRebuild = null;
+            }
         }
 
         private synchronized int clearProviderPatterns(String providerId) {
@@ -1069,6 +1352,11 @@ public final class DynamicRecipePatternRegistry {
     }
 
     private static EncodedRecipe encodeRecipe(Recipe recipe, KeyCounter storedItems) {
+        return encodeRecipe(recipe, storedItems, DynamicRecipePatternRegistry::createProgrammableCircuit);
+    }
+
+    private static EncodedRecipe encodeRecipe(Recipe recipe, KeyCounter storedItems,
+                                              Function<ItemStack, ItemStack> programmableCircuitFactory) {
         if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
                 !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) return null;
         if (producesGeneralCircuitBoard(recipe)) return null;
@@ -1076,21 +1364,21 @@ public final class DynamicRecipePatternRegistry {
         List<GenericStack> inputs = new ArrayList<>();
         List<List<GenericStack>> alternatives = new ArrayList<>();
         int circuitConfiguration = -1;
-        int programmableNonConsumableInputs = 0;
         for (GTRecipeInput input : recipe.getInputs()) {
             if (input instanceof IntCircuitIngredient) {
-                if (circuitConfiguration >= 0) return null;
-                ItemStack[] circuits = input.getInputStacks();
-                if (circuits.length == 0) return null;
-                circuitConfiguration = IntCircuitIngredient.getCircuitConfiguration(circuits[0]);
-                continue;
-            }
-            if (input.isNonConsumable()) {
-                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems);
+                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems,
+                        programmableCircuitFactory);
                 if (programmableOptions == null) return null;
                 inputs.add(programmableOptions.get(0));
                 alternatives.add(programmableOptions);
-                programmableNonConsumableInputs++;
+                continue;
+            }
+            if (input.isNonConsumable()) {
+                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems,
+                        programmableCircuitFactory);
+                if (programmableOptions == null) return null;
+                inputs.add(programmableOptions.get(0));
+                alternatives.add(programmableOptions);
                 continue;
             }
 
@@ -1142,17 +1430,17 @@ public final class DynamicRecipePatternRegistry {
             if (genericOutput != null) outputs.add(genericOutput);
         }
         if (inputs.isEmpty() || outputs.isEmpty() || inputs.size() > 81 || outputs.size() > 27) return null;
-        return new EncodedRecipe(inputs, alternatives, outputs, circuitConfiguration,
-                programmableNonConsumableInputs);
+        return new EncodedRecipe(inputs, alternatives, outputs, circuitConfiguration);
     }
 
     /**
      * Converts one non-consumable item requirement into the corresponding programmable circuit.
      * Non-consumable fluids and multi-count item requirements have no equivalent virtual circuit representation.
      */
-    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input, KeyCounter storedItems) {
+    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input, KeyCounter storedItems,
+                                                               Function<ItemStack, ItemStack> programmableCircuitFactory) {
         if (input.getInputFluidStack() != null || input.getAmount() != 1 ||
-                MetaItems.PROGRAMMABLE_CIRCUIT == null) {
+                programmableCircuitFactory == null) {
             return null;
         }
 
@@ -1162,13 +1450,24 @@ public final class DynamicRecipePatternRegistry {
 
         List<GenericStack> programmableOptions = new ArrayList<>();
         for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
-            ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
-            if (programmable.isEmpty()) return null;
-            ProgrammableCircuit.wrap(choice, programmable);
+            ItemStack programmable = programmableCircuitFactory.apply(choice);
+            if (programmable == null || programmable.isEmpty()) return null;
             GenericStack genericProgrammable = GenericStack.fromItemStack(programmable);
             if (genericProgrammable != null) programmableOptions.add(genericProgrammable);
         }
         return programmableOptions.isEmpty() ? null : programmableOptions;
+    }
+
+    @Nullable
+    private static ItemStack createProgrammableCircuit(ItemStack choice) {
+        if (MetaItems.PROGRAMMABLE_CIRCUIT == null) {
+            return null;
+        }
+        ItemStack programmable = MetaItems.PROGRAMMABLE_CIRCUIT.getStackForm(1);
+        if (programmable.isEmpty()) {
+            return null;
+        }
+        return ProgrammableCircuit.wrap(choice, programmable);
     }
 
     /**
@@ -1309,6 +1608,11 @@ public final class DynamicRecipePatternRegistry {
         private int generalCandidates;
         private int materialFormChangeCandidates;
         private int recyclingCandidates;
+        private int selectedDustOrFluidPatterns;
+        private int selectedIngotPatterns;
+        private int selectedGeneralPatterns;
+        private int selectedMaterialFormChangePatterns;
+        private int selectedRecyclingPatterns;
 
         private OptimalRebuildContext(int indexedRecipeMaps, int indexedRecipes, long indexRebuildMillis,
                                       long startedAt) {
@@ -1327,6 +1631,40 @@ public final class DynamicRecipePatternRegistry {
                 case RECYCLING -> recyclingCandidates++;
             }
         }
+
+        private void recordFinalPlan(ICraftingPlan plan) {
+            selectedDustOrFluidPatterns = 0;
+            selectedIngotPatterns = 0;
+            selectedGeneralPatterns = 0;
+            selectedMaterialFormChangePatterns = 0;
+            selectedRecyclingPatterns = 0;
+            for (IPatternDetails details : plan.patternTimes().keySet()) {
+                DynamicRecipePatternDetails dynamic = getDynamicPattern(details);
+                if (dynamic == null) continue;
+                switch (dynamic.getRoutePriority()) {
+                    case DUST_OR_FLUID_INPUT -> selectedDustOrFluidPatterns++;
+                    case INGOT_INPUT -> selectedIngotPatterns++;
+                    case GENERAL -> selectedGeneralPatterns++;
+                    case MATERIAL_FORM_CHANGE -> selectedMaterialFormChangePatterns++;
+                    case RECYCLING -> selectedRecyclingPatterns++;
+                }
+            }
+        }
+    }
+
+    private static final class OptimalRebuildRequest {
+
+        private final AEKey target;
+        private final long amount;
+
+        private OptimalRebuildRequest(AEKey target, long amount) {
+            this.target = target;
+            this.amount = amount;
+        }
+
+        private boolean matches(AEKey otherTarget, long otherAmount) {
+            return target.equals(otherTarget) && amount == otherAmount;
+        }
     }
 
     private static final class EncodedRecipe {
@@ -1334,21 +1672,18 @@ public final class DynamicRecipePatternRegistry {
         private final List<List<GenericStack>> alternatives;
         private final List<GenericStack> outputs;
         private final int circuitConfiguration;
-        private final int programmableNonConsumableInputs;
 
         private EncodedRecipe(List<GenericStack> inputs, List<List<GenericStack>> alternatives,
                               List<GenericStack> outputs,
-                              int circuitConfiguration, int programmableNonConsumableInputs) {
+                              int circuitConfiguration) {
             this.inputs = inputs;
             this.alternatives = alternatives;
             this.outputs = outputs;
             this.circuitConfiguration = circuitConfiguration;
-            this.programmableNonConsumableInputs = programmableNonConsumableInputs;
         }
 
         private EncodedRecipe withOutputs(List<GenericStack> patternOutputs) {
-            return new EncodedRecipe(inputs, alternatives, patternOutputs, circuitConfiguration,
-                    programmableNonConsumableInputs);
+            return new EncodedRecipe(inputs, alternatives, patternOutputs, circuitConfiguration);
         }
     }
 
@@ -1359,13 +1694,14 @@ public final class DynamicRecipePatternRegistry {
         private final Cost cost;
         private final String recipeKey;
 
-        private PatternCandidate(ProviderSnapshot source, RecipeMap<?> recipeMap, Recipe recipe,
+        private PatternCandidate(ProviderSnapshot source, RecipeMap<?> recipeMap, Recipe recipe, AEKey target,
                                  EncodedRecipe encoded, Cost cost) {
             this.source = source;
             this.recipeMap = recipeMap;
             this.encoded = encoded;
             this.cost = cost;
-            this.recipeKey = source.providerId + ':' + recipeMap.getUnlocalizedName() + ':' + recipe.hashCode();
+            String baseRecipeKey = source.providerId + ':' + recipeMap.getUnlocalizedName() + ':' + recipe.hashCode();
+            this.recipeKey = createTargetedRecipeKey(baseRecipeKey, target);
         }
     }
 

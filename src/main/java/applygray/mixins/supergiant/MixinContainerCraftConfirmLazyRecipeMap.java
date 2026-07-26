@@ -48,6 +48,15 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
     private void applygray$performFullRecipeMapRebuild() {
         AEBaseContainer container = (AEBaseContainer) (Object) this;
         if (container.getPlayer().world.isRemote || result == null) return;
+        AEKey requestedTarget = whatToCraft;
+        long requestedAmount = amount;
+        CalculationStrategy requestedStrategy = strategy;
+        if (requestedTarget == null || requestedAmount <= 0) {
+            ApplyGrayMod.LOGGER.warn("Could not start ApplyGray's Supergiant optimal rebuild because the original " +
+                    "crafting target is unavailable");
+            return;
+        }
+
         Object target = container.getTarget();
         if (!(target instanceof IActionHost actionHost)) return;
 
@@ -56,12 +65,14 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
         if (grid == null) return;
 
         int cleared = DynamicRecipePatternRegistry.invalidatePlanPatternsAndRecipeOutputIndexes(grid,
-                result.patternTimes().keySet());
-        ApplyGrayMod.LOGGER.info("Starting ApplyGray's Supergiant optimal rebuild after clearing {} lazy RecipeMap " +
-                "patterns from the current chain", cleared);
-        if (!applygray$startOptimalRebuildCalculation()) {
-            ApplyGrayMod.LOGGER.warn("Could not start ApplyGray's Supergiant optimal rebuild because the current " +
-                    "crafting target is unavailable");
+                requestedTarget, result.patternTimes().keySet());
+        DynamicRecipePatternRegistry.armOptimalRebuild(grid, requestedTarget, requestedAmount);
+        ApplyGrayMod.LOGGER.info("Starting ApplyGray's Supergiant optimal rebuild for original request {} x{} after " +
+                "clearing {} dynamic RecipeMap patterns", requestedTarget, requestedAmount, cleared);
+        if (!applygray$startOptimalRebuildCalculation(requestedTarget, requestedAmount, requestedStrategy)) {
+            DynamicRecipePatternRegistry.cancelOptimalRebuild(grid, requestedTarget, requestedAmount);
+            ApplyGrayMod.LOGGER.warn("Could not schedule ApplyGray's Supergiant optimal rebuild for original request " +
+                    "{} x{}", requestedTarget, requestedAmount);
         }
     }
 
@@ -70,8 +81,9 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
      * planJob is the container's public calculation launcher and preserves its job-cancellation and GUI state logic.
      */
     @Unique
-    private boolean applygray$startOptimalRebuildCalculation() {
-        return whatToCraft != null && planJob(whatToCraft, amount, strategy);
+    private boolean applygray$startOptimalRebuildCalculation(AEKey requestedTarget, long requestedAmount,
+                                                             CalculationStrategy requestedStrategy) {
+        return planJob(requestedTarget, requestedAmount, requestedStrategy);
     }
 
     @Override

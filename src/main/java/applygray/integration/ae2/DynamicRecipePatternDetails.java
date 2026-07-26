@@ -10,6 +10,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.world.World;
+import net.minecraftforge.common.util.Constants;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -29,12 +30,14 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
     private final int circuitConfiguration;
     private final long rawMaterialCost;
     private final int stepCost;
+    private final DynamicRecipePatternRegistry.CandidateRoutePriority routePriority;
     private final AEItemKey definition;
 
     DynamicRecipePatternDetails(String recipeKey, String recipeMapName,
                                 List<GenericStack> inputs, List<List<GenericStack>> alternatives,
                                 List<GenericStack> outputs, int circuitConfiguration,
-                                long rawMaterialCost, int stepCost) {
+                                long rawMaterialCost, int stepCost,
+                                DynamicRecipePatternRegistry.CandidateRoutePriority routePriority) {
         if (inputs.isEmpty() || outputs.isEmpty()) {
             throw new IllegalArgumentException("Dynamic RecipeMap pattern requires inputs and outputs");
         }
@@ -46,6 +49,8 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         this.circuitConfiguration = circuitConfiguration;
         this.rawMaterialCost = rawMaterialCost;
         this.stepCost = stepCost;
+        this.routePriority = routePriority == null ?
+                DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL : routePriority;
 
         ItemStack encoded = PatternDetailsHelper.encodeProcessingPattern(
                 primaryInputs(inputs), this.outputs, recipeMapName);
@@ -73,6 +78,41 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
 
     public int getStepCost() {
         return stepCost;
+    }
+
+    public DynamicRecipePatternRegistry.CandidateRoutePriority getRoutePriority() {
+        return routePriority;
+    }
+
+    boolean matchesRecipeDefinition(String expectedRecipeMapName, List<GenericStack> expectedPrimaryInputs,
+                                    List<List<GenericStack>> expectedAlternatives,
+                                    List<GenericStack> expectedOutputs, int expectedCircuitConfiguration,
+                                    long expectedRawMaterialCost, int expectedStepCost,
+                                    DynamicRecipePatternRegistry.CandidateRoutePriority expectedRoutePriority) {
+        if (!recipeMapName.equals(expectedRecipeMapName) || !outputs.equals(expectedOutputs) ||
+                circuitConfiguration != expectedCircuitConfiguration || rawMaterialCost != expectedRawMaterialCost ||
+                stepCost != expectedStepCost || routePriority != expectedRoutePriority) {
+            return false;
+        }
+
+        Input[] expectedInputs = createInputs(expectedPrimaryInputs, expectedAlternatives);
+        if (inputs.length != expectedInputs.length) {
+            return false;
+        }
+        for (int inputIndex = 0; inputIndex < inputs.length; inputIndex++) {
+            Input actual = inputs[inputIndex];
+            Input expected = expectedInputs[inputIndex];
+            if (actual.multiplier != expected.multiplier ||
+                    actual.possibleInputs.length != expected.possibleInputs.length) {
+                return false;
+            }
+            for (int optionIndex = 0; optionIndex < actual.possibleInputs.length; optionIndex++) {
+                if (!actual.possibleInputs[optionIndex].equals(expected.possibleInputs[optionIndex])) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     public boolean produces(AEKey requested) {
@@ -135,6 +175,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         data.setInteger("Circuit", circuitConfiguration);
         data.setLong("RawCost", rawMaterialCost);
         data.setInteger("StepCost", stepCost);
+        data.setInteger("RoutePriority", routePriority.ordinal());
         data.setTag("Inputs", GenericStack.writeList(primaryInputs()));
         data.setTag("Outputs", GenericStack.writeList(outputs));
 
@@ -174,7 +215,18 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
 
         return new DynamicRecipePatternDetails(data.getString("RecipeKey"), data.getString("RecipeMap"),
                 inputs, alternatives, outputs, data.getInteger("Circuit"), data.getLong("RawCost"),
-                data.getInteger("StepCost"));
+                data.getInteger("StepCost"), readRoutePriority(data));
+    }
+
+    private static DynamicRecipePatternRegistry.CandidateRoutePriority readRoutePriority(NBTTagCompound data) {
+        if (!data.hasKey("RoutePriority", Constants.NBT.TAG_INT)) {
+            return DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL;
+        }
+        int ordinal = data.getInteger("RoutePriority");
+        DynamicRecipePatternRegistry.CandidateRoutePriority[] priorities =
+                DynamicRecipePatternRegistry.CandidateRoutePriority.values();
+        return ordinal >= 0 && ordinal < priorities.length ? priorities[ordinal] :
+                DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL;
     }
 
     @Override

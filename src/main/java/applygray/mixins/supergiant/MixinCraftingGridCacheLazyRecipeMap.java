@@ -42,40 +42,34 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
     @Inject(method = "getCraftingFor", at = @At("RETURN"), cancellable = true)
     private void applygray$appendLazyRecipeMapPatterns(AEKey requested,
                                                        CallbackInfoReturnable<java.util.Collection<IPatternDetails>> cir) {
-        List<IPatternDetails> dynamic = DynamicRecipePatternRegistry.findPatterns(grid, requested);
-        List<IPatternDetails> merged = new ArrayList<>(cir.getReturnValue().size() + dynamic.size());
-        boolean changed = false;
+        List<IPatternDetails> normalPatterns = new ArrayList<>(cir.getReturnValue().size());
+        List<IPatternDetails> cachedDynamicPatterns = new ArrayList<>();
         for (IPatternDetails detail : cir.getReturnValue()) {
-            // Cached virtual patterns remain mounted for terminal visibility, but only the bounded lookup for the
-            // current requested output may participate in this calculation.
             if (detail instanceof DynamicRecipePatternDetails) {
-                changed = true;
+                if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail)) {
+                    cachedDynamicPatterns.add(detail);
+                }
                 continue;
             }
-            merged.add(detail);
+            normalPatterns.add(detail);
         }
-        for (IPatternDetails detail : dynamic) {
-            if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail) &&
-                    !merged.contains(detail)) {
-                merged.add(detail);
-                changed = true;
-            }
-        }
-        if (!changed && dynamic.isEmpty()) return;
 
-        merged.sort((left, right) -> {
-            boolean leftDynamic = left instanceof DynamicRecipePatternDetails;
-            boolean rightDynamic = right instanceof DynamicRecipePatternDetails;
-            if (leftDynamic && rightDynamic) {
-                DynamicRecipePatternDetails l = (DynamicRecipePatternDetails) left;
-                DynamicRecipePatternDetails r = (DynamicRecipePatternDetails) right;
-                return DynamicRecipePatternRegistry.compareDynamicPatternPriority(requested, l, r);
-            }
-            if (leftDynamic) return -1;
-            if (rightDynamic) return 1;
-            return 0;
+        // RecipeMap patterns are a fallback. A regular AE2 pattern must completely suppress the virtual route.
+        if (!normalPatterns.isEmpty()) {
+            cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
+            return;
+        }
+
+        // A cached virtual pattern is already a materialized answer. Do not scan its RecipeMap again.
+        if (cachedDynamicPatterns.isEmpty()) {
+            cachedDynamicPatterns.addAll(DynamicRecipePatternRegistry.findPatterns(grid, requested));
+        }
+        cachedDynamicPatterns.sort((left, right) -> {
+            DynamicRecipePatternDetails l = (DynamicRecipePatternDetails) left;
+            DynamicRecipePatternDetails r = (DynamicRecipePatternDetails) right;
+            return DynamicRecipePatternRegistry.compareDynamicPatternPriority(requested, l, r);
         });
-        cir.setReturnValue(java.util.Collections.unmodifiableList(merged));
+        cir.setReturnValue(java.util.Collections.unmodifiableList(cachedDynamicPatterns));
     }
 
     @Redirect(
@@ -86,7 +80,11 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
     private Future<ICraftingPlan> applygray$retryAfterRecursivePatternCleanup(
             ExecutorService executor, Callable<ICraftingPlan> calculation, World world,
             ICraftingSimulationRequester simRequester, AEKey what, long amount, CalculationStrategy strategy) {
+        boolean optimalRebuild = DynamicRecipePatternRegistry.reserveOptimalRebuild(grid, what, amount);
         return executor.submit(() -> {
+            if (optimalRebuild) {
+                DynamicRecipePatternRegistry.enterOptimalRebuild(what, amount);
+            }
             try {
                 for (int recoveryAttempt = 0; ; recoveryAttempt++) {
                     if (Thread.currentThread().isInterrupted()) {
@@ -95,10 +93,14 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                     DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
                     try {
                         if (recoveryAttempt == 0) {
-                            return calculation.call();
+                            ICraftingPlan plan = calculation.call();
+                            DynamicRecipePatternRegistry.recordOptimalRebuildPlan(plan);
+                            return plan;
                         }
-                        return new CraftingCalculation(world, grid, simRequester, new GenericStack(what, amount),
-                                strategy).run();
+                        ICraftingPlan plan = new CraftingCalculation(world, grid, simRequester,
+                                new GenericStack(what, amount), strategy).run();
+                        DynamicRecipePatternRegistry.recordOptimalRebuildPlan(plan);
+                        return plan;
                     } catch (RuntimeException failure) {
                         if (wasCancelled(failure)) {
                             Thread.currentThread().interrupt();

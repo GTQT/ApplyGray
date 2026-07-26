@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
     private static final int MAX_PERSISTED_PATTERNS = 1024;
+    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 2;
     private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
@@ -279,6 +280,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             patterns.appendTag(detail.writeToNBT());
         }
         data.setTag("LazyRecipePatterns", patterns);
+        data.setInteger("LazyRecipePatternVersion", DYNAMIC_PATTERN_CACHE_VERSION);
         return data;
     }
 
@@ -286,7 +288,9 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         cachedPatterns.clear();
-        if (data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
+        int persistedVersion = data.getInteger("LazyRecipePatternVersion");
+        if (persistedVersion == DYNAMIC_PATTERN_CACHE_VERSION &&
+                data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
             NBTTagList patterns = data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND);
             for (int i = 0; i < Math.min(patterns.tagCount(), MAX_PERSISTED_PATTERNS); i++) {
                 DynamicRecipePatternDetails detail = DynamicRecipePatternDetails.readFromNBT(
@@ -295,6 +299,9 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
                     cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
                 }
             }
+        } else if (data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
+            ApplyGrayMod.LOGGER.info("Discarded {} incompatible cached RecipeMap patterns at {}",
+                    data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND).tagCount(), getPos());
         }
         patternCacheRefreshPending.set(true);
         patternCachePersistencePending.set(false);
