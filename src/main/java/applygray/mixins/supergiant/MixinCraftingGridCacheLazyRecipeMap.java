@@ -5,22 +5,34 @@ import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.networking.IGrid;
+import ae2.api.networking.crafting.CalculationStrategy;
+import ae2.api.networking.crafting.ICraftingPlan;
 import ae2.api.networking.crafting.ICraftingProvider;
+import ae2.api.networking.crafting.ICraftingSimulationRequester;
 import ae2.api.stacks.AEKey;
+import ae2.api.stacks.GenericStack;
+import ae2.crafting.CraftingCalculation;
 import ae2.me.service.CraftingService;
+import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
-/** Adds lazy RecipeMap patterns only when Supergiant's crafting service asks for an output. */
+/** Lazily exposes RecipeMap patterns and retries after removing a non-productive recursive pattern chain. */
 @Mixin(value = CraftingService.class, remap = false)
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
+
+    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 4;
 
     @Shadow @Final
     private IGrid grid;
@@ -63,6 +75,39 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             return 0;
         });
         cir.setReturnValue(java.util.Collections.unmodifiableList(merged));
+    }
+
+    @Redirect(
+            method = "beginCraftingCalculation",
+            at = @At(value = "INVOKE",
+                    target = "Ljava/util/concurrent/ExecutorService;submit(Ljava/util/concurrent/Callable;)" +
+                            "Ljava/util/concurrent/Future;"))
+    private Future<ICraftingPlan> applygray$retryAfterRecursivePatternCleanup(
+            ExecutorService executor, Callable<ICraftingPlan> calculation, World world,
+            ICraftingSimulationRequester simRequester, AEKey what, long amount, CalculationStrategy strategy) {
+        return executor.submit(() -> {
+            try {
+                for (int recoveryAttempt = 0; ; recoveryAttempt++) {
+                    DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
+                    try {
+                        if (recoveryAttempt == 0) {
+                            return calculation.call();
+                        }
+                        return new CraftingCalculation(world, grid, simRequester, new GenericStack(what, amount),
+                                strategy).run();
+                    } catch (RuntimeException failure) {
+                        boolean cleanedRecursivePatterns =
+                                DynamicRecipePatternRegistry.consumeRecursiveCycleRecovery();
+                        if (!cleanedRecursivePatterns ||
+                                recoveryAttempt >= MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS) {
+                            throw failure;
+                        }
+                    }
+                }
+            } finally {
+                DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
+            }
+        });
     }
 
     @Inject(method = "getProviders", at = @At("RETURN"), cancellable = true)

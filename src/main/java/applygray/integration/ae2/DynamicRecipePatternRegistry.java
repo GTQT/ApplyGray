@@ -48,6 +48,7 @@ public final class DynamicRecipePatternRegistry {
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
+    private static final ThreadLocal<Boolean> RECURSIVE_CYCLE_RECOVERY_REQUIRED = new ThreadLocal<>();
 
     private DynamicRecipePatternRegistry() {}
 
@@ -136,7 +137,24 @@ public final class DynamicRecipePatternRegistry {
         for (GridState state : GRIDS.values()) {
             removed += state.rejectRecursiveCycle(target, patterns);
         }
+        if (removed > 0) {
+            RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
+        }
         return removed;
+    }
+
+    /** Clears the current crafting thread's recursive-cycle recovery signal. */
+    public static void clearRecursiveCycleRecovery() {
+        RECURSIVE_CYCLE_RECOVERY_REQUIRED.remove();
+    }
+
+    /**
+     * Returns whether the current crafting calculation removed recursive dynamic patterns, then clears the signal.
+     */
+    public static boolean consumeRecursiveCycleRecovery() {
+        boolean required = Boolean.TRUE.equals(RECURSIVE_CYCLE_RECOVERY_REQUIRED.get());
+        RECURSIVE_CYCLE_RECOVERY_REQUIRED.remove();
+        return required;
     }
 
     /**
