@@ -132,6 +132,8 @@ configurations.named('testRuntimeOnly').configure {
 }
 
 String remapTaskName = enableShadow ? 'remapShadowJar' : 'remapJar'
+def cclMcpMappingsSource = layout.projectDirectory.file('.gradle/unimined/local/mappings/srg2mcp.tsrg')
+def cclLegacyMappingsDir = layout.buildDirectory.dir('generated/ccl-legacy-mappings')
 
 unimined.minecraft {
     version '1.12.2'
@@ -146,6 +148,10 @@ unimined.minecraft {
         runs.all {
             systemProperty('crl.dev.mixin', 'mixins.applygray.mod.json')
             systemProperty('mixin.debug.export', 'true')
+            // CodeChickenLib reads these after FML coremods initialize. Passing its
+            // legacy ForgeGradle keys directly activates Unimined's agent too early.
+            systemProperty('applygray.ccl.notchSrg', cclMcpMappingsSource.asFile.absolutePath)
+            systemProperty('applygray.ccl.csvDir', cclLegacyMappingsDir.get().asFile.absolutePath)
             if (isCoremod) {
                 systemProperty('fml.coreMods.load', coremodPluginClassName)
             }
@@ -183,6 +189,48 @@ unimined.minecraft(sourceSets.test) {
     createJarTask = false
     defaultRemapJar = false
     defaultRemapSourcesJar = false
+}
+
+def generateCclLegacyMappings = tasks.register('generateCclLegacyMappings') {
+    inputs.file(cclMcpMappingsSource)
+    outputs.dir(cclLegacyMappingsDir)
+
+    doLast {
+        File source = cclMcpMappingsSource.asFile
+        if (!source.isFile()) {
+            throw new GradleException("Missing Unimined MCP mappings required by CodeChickenLib: ${source}")
+        }
+
+        List<String> fields = ['searge,name,side,desc']
+        List<String> methods = ['searge,name,side,desc']
+        source.eachLine('UTF-8') { String line ->
+            if (!line.startsWith('\t')) return
+
+            String[] columns = line.trim().split('\\s+', 3)
+            if (columns.length == 2 && columns[0].startsWith('field_')) {
+                fields.add("${columns[0]},${columns[1]},0,")
+            } else if (columns.length == 3 && columns[0].startsWith('func_')) {
+                methods.add("${columns[0]},${columns[2]},0,")
+            }
+        }
+
+        if (fields.size() == 1 || methods.size() == 1) {
+            throw new GradleException("Unimined MCP mappings did not contain CodeChickenLib field and method names: ${source}")
+        }
+
+        File outputDirectory = cclLegacyMappingsDir.get().asFile
+        outputDirectory.mkdirs()
+        new File(outputDirectory, 'fields.csv').setText(fields.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
+        new File(outputDirectory, 'methods.csv').setText(methods.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
+    }
+}
+
+tasks.named('runClient').configure {
+    dependsOn(generateCclLegacyMappings)
+}
+
+tasks.named('runServer').configure {
+    dependsOn(generateCclLegacyMappings)
 }
 
 apply from: 'dependencies.gradle'

@@ -1,4 +1,4 @@
-package applygray.mixins;
+package applygray.mixinplugin;
 
 import net.minecraftforge.fml.common.Loader;
 

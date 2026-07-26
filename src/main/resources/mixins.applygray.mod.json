@@ -2,7 +2,7 @@
   "required": true,
   "minVersion": "0.8",
   "package": "applygray.mixins",
-  "plugin": "applygray.mixins.ApplyGrayMixinPlugin",
+  "plugin": "applygray.mixinplugin.ApplyGrayMixinPlugin",
   "compatibilityLevel": "JAVA_25",
   "target": "@env(MOD)",
   "refmap": "mixins.applygray.refmap.json",

@@ -6,6 +6,8 @@ import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin.MCVersion;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin.Name;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin.SortingIndex;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 import zone.rong.mixinbooter.IEarlyMixinLoader;
 
@@ -17,6 +19,12 @@ import java.util.Map;
 @MCVersion(ForgeVersion.mcVersion)
 @SortingIndex(1001)
 public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMixinLoader {
+
+    private static final Logger LOGGER = LogManager.getLogger("applygray");
+    private static final String CCL_NOTCH_SRG_PROPERTY = "net.minecraftforge.gradle.GradleStart.srg.notch-srg";
+    private static final String CCL_CSV_DIR_PROPERTY = "net.minecraftforge.gradle.GradleStart.csvDir";
+    private static final String APPLY_GRAY_CCL_NOTCH_SRG_PROPERTY = "applygray.ccl.notchSrg";
+    private static final String APPLY_GRAY_CCL_CSV_DIR_PROPERTY = "applygray.ccl.csvDir";
 
     @Override
     public String[] getASMTransformerClass() {
@@ -36,6 +44,23 @@ public class ApplyGrayMixinLoadingPlugin implements IFMLLoadingPlugin, IEarlyMix
 
     @Override
     public void injectData(Map<String, Object> data) {
+        // Set these after Unimined's startup agent has finished but before CCL constructs its dev remapper.
+        boolean configured = copyRunProperty(CCL_NOTCH_SRG_PROPERTY, APPLY_GRAY_CCL_NOTCH_SRG_PROPERTY);
+        configured |= copyRunProperty(CCL_CSV_DIR_PROPERTY, APPLY_GRAY_CCL_CSV_DIR_PROPERTY);
+        if (configured) {
+            LOGGER.info("Configured deferred legacy CodeChickenLib development mappings.");
+        }
+    }
+
+    private static boolean copyRunProperty(String targetProperty, String sourceProperty) {
+        if (System.getProperty(targetProperty) != null) return false;
+
+        String value = System.getProperty(sourceProperty);
+        if (value != null && !value.trim().isEmpty()) {
+            System.setProperty(targetProperty, value);
+            return true;
+        }
+        return false;
     }
 
     @Override

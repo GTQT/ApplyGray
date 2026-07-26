@@ -82,12 +82,14 @@ dependencies {
     modRuntimeOnly 'curse.maven:the-one-probe-245211:2667280'
     modCompileOnly 'curse.maven:codechicken-lib-1-8-242818:2779848'
     modRuntimeOnly 'curse.maven:codechicken-lib-1-8-242818:2779848'
-    // GregTech exposes EnderCore API types from its public classes, so they must be
-    // available while compiling this addon as well as at runtime.
+    // Fugue supplies Java 25 compatibility patches for legacy CodeChickenLib.
+    modRuntimeOnly 'curse.maven:fugue-1005815:7853971'
+    // GregTech exposes EnderCore API types from its public classes, so they are
+    // needed on this addon's compilation classpath. Do not load EnderCore in the
+    // Java 25 development client: its legacy transformer cannot process Cleanroom's
+    // patched Minecraft classes.
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78:core")
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78")
-    modRuntimeOnly("com.enderio.core:EnderCore:1.12.2-0.5.78:core")
-    modRuntimeOnly("com.enderio.core:EnderCore:1.12.2-0.5.78")
 
     if (project.findProperty('enable_junit_testing')?.toString()?.toBoolean()) {
         testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'
