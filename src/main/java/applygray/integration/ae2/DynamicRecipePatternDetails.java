@@ -281,6 +281,12 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         return result;
     }
 
+    /** Builds the normalized input view used for route scoring without encoding or materializing a pattern. */
+    static IInput[] createScoringInputs(List<GenericStack> primary,
+                                        List<List<GenericStack>> alternatives) {
+        return createInputs(primary, alternatives);
+    }
+
     private static List<GenericStack> nonNull(List<@Nullable GenericStack> source) {
         List<GenericStack> result = new ArrayList<>(source.size());
         for (GenericStack stack : source) {

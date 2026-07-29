@@ -53,8 +53,9 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
-    private static final int MAX_PERSISTED_PATTERNS = 1024;
-    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 2;
+    private static final int MAX_PERSISTED_PATTERNS = 64;
+    // Version 4 discards caches that may contain several materialized routes for the same requested output.
+    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 4;
     private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
@@ -292,6 +293,10 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (persistedVersion == DYNAMIC_PATTERN_CACHE_VERSION &&
                 data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
             NBTTagList patterns = data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND);
+            if (patterns.tagCount() > MAX_PERSISTED_PATTERNS) {
+                ApplyGrayMod.LOGGER.warn("Truncated {} persisted RecipeMap patterns to {} at {}",
+                        patterns.tagCount(), MAX_PERSISTED_PATTERNS, getPos());
+            }
             for (int i = 0; i < Math.min(patterns.tagCount(), MAX_PERSISTED_PATTERNS); i++) {
                 DynamicRecipePatternDetails detail = DynamicRecipePatternDetails.readFromNBT(
                         patterns.getCompoundTagAt(i));

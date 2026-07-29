@@ -61,17 +61,20 @@ public final class DynamicRecipePatternRegistry {
 
     private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
     /**
-     * A RecipeMap can have hundreds of valid variants for one common output. Giving all of them to AE2 makes every
-     * recursive branch fan out, which is worse than selecting a bounded set of the best direct candidates.
+     * A RecipeMap can have hundreds of valid variants for one common output. Keep only this many lightweight
+     * candidates for scoring, then materialize a single winner for AE2.
      */
-    private static final int MAX_PATTERNS_PER_TARGET = 8;
+    private static final int MAX_ROUTE_CANDIDATES_PER_TARGET = 8;
+    private static final int MAX_MATERIALIZED_PATTERNS_PER_TARGET = 1;
     /**
      * Limits the work for a pathological common output even before candidates have been encoded. The output index is
      * ordered by RecipeMap registration order, so this is deliberately much larger than the exposed pattern limit.
      */
     private static final int MAX_RECIPES_PER_TARGET = 512;
     private static final int MAX_ROUTE_COST_DEPTH = 16;
-    private static final int MAX_ROUTE_COST_EXPANSIONS = 256;
+    private static final int MAX_ROUTE_COST_EXPANSIONS = 64;
+    private static final int MAX_ROUTE_COST_CALCULATION_EXPANSIONS = 512;
+    private static final long MAX_ROUTE_COST_CALCULATION_NANOS = 2_000_000_000L;
     private static final int MAX_REFINED_ROUTE_CANDIDATES = 2;
     private static final int MAX_NORMAL_PATTERNS_PER_TARGET = 32;
     private static final int MAX_ROUTE_COST_INPUT_ALTERNATIVES = 16;
@@ -92,8 +95,8 @@ public final class DynamicRecipePatternRegistry {
     private static final ThreadLocal<OptimalRebuildContext> ACTIVE_OPTIMAL_REBUILD = new ThreadLocal<>();
     /** Prevents a normal-pattern probe used by route costing from recursively appending dynamic patterns. */
     private static final ThreadLocal<Boolean> NORMAL_PATTERN_COST_LOOKUP = new ThreadLocal<>();
-    /** Reuses lazy inventory reads and mounted-pattern probes within one AE crafting calculation. */
-    private static final ThreadLocal<RouteCostSession> ROUTE_COST_SESSION = new ThreadLocal<>();
+    /** Caps all recursive route refinement performed by one AE crafting calculation. */
+    private static final ThreadLocal<RouteCostBudget> ROUTE_COST_BUDGET = new ThreadLocal<>();
 
     private DynamicRecipePatternRegistry() {}
 
@@ -108,13 +111,12 @@ public final class DynamicRecipePatternRegistry {
     public static void leaveCraftingCalculation(CraftingCalculation calculation) {
         if (ACTIVE_CRAFTING_CALCULATION.get() == calculation) {
             ACTIVE_CRAFTING_CALCULATION.remove();
-            ROUTE_COST_SESSION.remove();
         }
     }
 
     /** Ends one CraftingService task after all recursive-cycle recovery attempts have either succeeded or failed. */
     public static void finishCraftingCalculationSession() {
-        ROUTE_COST_SESSION.remove();
+        ROUTE_COST_BUDGET.remove();
         OptimalRebuildContext optimalRebuild = ACTIVE_OPTIMAL_REBUILD.get();
         OptimalRebuildRequest request = ACTIVE_OPTIMAL_REBUILD_REQUEST.get();
         if (optimalRebuild == null) {
@@ -198,7 +200,7 @@ public final class DynamicRecipePatternRegistry {
 
     /** Returns whether the current crafting calculation was launched by the explicit optimal rebuild action. */
     public static boolean isOptimalRebuildCalculation() {
-        return hasActiveOptimalRebuildRequest();
+        return hasActiveOptimalRebuildRequest() && getActiveOptimalRebuild() != null;
     }
 
     /** Enters a rebuild session that was reserved at CraftingService task submission time. */
@@ -367,7 +369,7 @@ public final class DynamicRecipePatternRegistry {
         }
         if (removedCount > 0) {
             RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
-            ApplyGrayMod.LOGGER.info("Discarded {} cached lazy RecipeMap pattern(s) from a non-productive recursive " +
+            ApplyGrayMod.LOGGER.debug("Discarded {} cached lazy RecipeMap pattern(s) from a non-productive recursive " +
                     "cycle while producing {}", removedCount, target);
         }
         return removedCount;
@@ -424,7 +426,7 @@ public final class DynamicRecipePatternRegistry {
         if (state == null) return;
 
         long startedAt = System.nanoTime();
-        RouteCostEstimator estimator = new RouteCostEstimator(grid, state, getRouteCostSession(grid));
+        RouteCostEstimator estimator = new RouteCostEstimator(grid, state, getRouteCostBudget());
         Map<IPatternDetails, DirectRouteCost> quickCosts = new IdentityHashMap<>();
         for (IPatternDetails pattern : patterns) {
             quickCosts.put(pattern, estimator.estimateDirect(pattern));
@@ -811,8 +813,8 @@ public final class DynamicRecipePatternRegistry {
                     updated.removeIf(candidate -> candidate.getRecipeKey().equals(detail.getRecipeKey()));
                     updated.add(detail);
                     updated.sort((left, right) -> compareDynamicPatternPriority(target, left, right));
-                    if (updated.size() > MAX_PATTERNS_PER_TARGET) {
-                        updated = new ArrayList<>(updated.subList(0, MAX_PATTERNS_PER_TARGET));
+                    if (updated.size() > MAX_MATERIALIZED_PATTERNS_PER_TARGET) {
+                        updated = new ArrayList<>(updated.subList(0, MAX_MATERIALIZED_PATTERNS_PER_TARGET));
                     }
                     return Collections.unmodifiableList(updated);
                 });
@@ -904,36 +906,28 @@ public final class DynamicRecipePatternRegistry {
 
         /**
          * Supplies dynamic dependency edges to the route estimator without recursively invoking CraftingService.
-         * Static candidate ranking bounds the materialized set; inventory-aware ordering is applied by the estimator.
+         * Only the statically best candidate metadata is returned; route scoring never materializes dependency patterns.
          */
-        private List<DynamicRecipePatternDetails> getPatternsForRouteCost(AEKey target) {
+        private List<PatternCandidate> getCandidatesForRouteCost(AEKey target) {
             if (target == null || isExternalOreInput(target) || isElementalDust(target)) {
                 return Collections.emptyList();
             }
-
-            List<DynamicRecipePatternDetails> existing = patternsByTarget.get(target);
-            if (existing == null) {
-                List<DynamicRecipePatternDetails> generated = createPatterns(target);
-                synchronized (this) {
-                    existing = patternsByTarget.get(target);
-                    if (existing == null) {
-                        patternsByTarget.put(target, generated);
-                        existing = generated;
-                    }
-                }
-            }
-
-            List<DynamicRecipePatternDetails> available = new ArrayList<>(existing.size());
-            for (DynamicRecipePatternDetails detail : existing) {
-                if (isPatternAvailableFor(target, detail)) {
-                    available.add(detail);
-                }
-            }
-            return available;
+            return collectPatternCandidates(target, 1);
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
-            List<PatternCandidate> candidates = new ArrayList<>(MAX_PATTERNS_PER_TARGET);
+            List<PatternCandidate> candidates = collectPatternCandidates(target, MAX_ROUTE_CANDIDATES_PER_TARGET);
+            if (candidates.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            PatternCandidate selected = selectBestCandidate(target, candidates);
+            DynamicRecipePatternDetails detail = materializePattern(target, selected);
+            return detail == null ? Collections.emptyList() : Collections.singletonList(detail);
+        }
+
+        private List<PatternCandidate> collectPatternCandidates(AEKey target, int candidateLimit) {
+            List<PatternCandidate> candidates = new ArrayList<>(candidateLimit);
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
             Set<String> seenRecipeKeys = new HashSet<>();
             OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
@@ -983,7 +977,7 @@ public final class DynamicRecipePatternRegistry {
                                 cost);
                         if (!seenRecipeKeys.add(candidate.recipeKey)) continue;
                         if (isRejectedFor(target, candidate.recipeKey)) continue;
-                        keepBestCandidate(candidates, candidate);
+                        keepBestCandidate(candidates, candidate, candidateLimit);
                     }
                 }
             }
@@ -993,51 +987,105 @@ public final class DynamicRecipePatternRegistry {
                                 "to keep the crafting calculation bounded",
                         target, MAX_RECIPES_PER_TARGET);
             }
+            return candidates;
+        }
 
-            List<DynamicRecipePatternDetails> result = new ArrayList<>(candidates.size());
-            for (int index = 0; index < candidates.size(); index++) {
-                        if (!cooperateWithCraftingCalculation()) {
-                            return Collections.emptyList();
-                        }
-                        PatternCandidate candidate = candidates.get(index);
-                        DynamicRecipePatternDetails detail = candidate.source.provider
-                                .getCachedDynamicPattern(candidate.recipeKey);
-                if (detail != null && !detail.matchesRecipeDefinition(candidate.recipeMap.getUnlocalizedName(),
-                        candidate.encoded.inputs, candidate.encoded.alternatives, candidate.encoded.outputs,
-                        candidate.encoded.circuitConfiguration, candidate.cost.rawMaterials, candidate.cost.steps,
-                        candidate.cost.routePriority)) {
-                    candidate.source.provider.removeCachedDynamicPattern(candidate.recipeKey);
-                    detail = null;
-                }
-                if (detail == null) {
-                    detail = new DynamicRecipePatternDetails(candidate.recipeKey,
-                            candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
-                            candidate.encoded.alternatives, candidate.encoded.outputs,
-                            candidate.encoded.circuitConfiguration,
-                            candidate.cost.rawMaterials, candidate.cost.steps, candidate.cost.routePriority);
-                    if (!isPatternAvailableFor(target, detail)) {
-                        continue;
-                    }
-                    detail = candidate.source.provider.cacheDynamicPattern(detail);
-                    if (!isPatternAvailableFor(target, detail)) {
-                        continue;
-                    }
-                    if (optimalRebuild != null) {
-                        optimalRebuild.generatedPatterns++;
-                    }
-                } else {
-                    if (!isPatternAvailableFor(target, detail)) {
-                        continue;
-                    }
-                    if (optimalRebuild != null) {
-                        optimalRebuild.reusedPatterns++;
-                    }
-                }
-                patternsByRecipe.put(candidate.recipeKey, detail);
-                providersByPattern.put(detail, candidate.source.provider);
-                result.add(detail);
+        private PatternCandidate selectBestCandidate(AEKey target, List<PatternCandidate> candidates) {
+            if (candidates.size() < 2) {
+                return candidates.get(0);
             }
-            return Collections.unmodifiableList(result);
+
+            long startedAt = System.nanoTime();
+            PatternCandidate staticBest = candidates.get(0);
+            RouteCostEstimator estimator = new RouteCostEstimator(staticBest.source.grid, this,
+                    getRouteCostBudget());
+            Map<PatternCandidate, DirectRouteCost> quickCosts = new IdentityHashMap<>();
+            for (PatternCandidate candidate : candidates) {
+                quickCosts.put(candidate, estimator.estimateDirect(candidate));
+            }
+            candidates.sort((left, right) -> {
+                int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
+                return quickCost != 0 ? quickCost : compareCandidates(left, right);
+            });
+
+            boolean stockOnlySelection = quickCosts.get(candidates.get(0)).isFullyStocked();
+            Map<PatternCandidate, RouteCost> refinedCosts = new IdentityHashMap<>();
+            if (!stockOnlySelection) {
+                List<PatternCandidate> refined = new ArrayList<>(MAX_REFINED_ROUTE_CANDIDATES);
+                refined.add(candidates.get(0));
+                if (staticBest != refined.get(0)) {
+                    refined.add(staticBest);
+                } else if (candidates.size() > 1) {
+                    refined.add(candidates.get(1));
+                }
+
+                for (PatternCandidate candidate : refined) {
+                    refinedCosts.put(candidate, estimator.estimateRoot(candidate, target));
+                }
+                refined.sort((left, right) -> {
+                    int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
+                    return routeCost != 0 ? routeCost : compareCandidates(left, right);
+                });
+
+                PatternCandidate selected = refined.get(0);
+                if (candidates.get(0) != selected) {
+                    candidates.remove(selected);
+                    candidates.add(0, selected);
+                }
+            }
+
+            OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
+            if (optimalRebuild != null) {
+                optimalRebuild.inventoryScoredTargets.add(target);
+                optimalRebuild.recordRouteCostEstimator(target, candidates.size(), refinedCosts.size(),
+                        stockOnlySelection, System.nanoTime() - startedAt, estimator);
+            }
+            return candidates.get(0);
+        }
+
+        @Nullable
+        private DynamicRecipePatternDetails materializePattern(AEKey target, PatternCandidate candidate) {
+            if (!cooperateWithCraftingCalculation()) {
+                return null;
+            }
+
+            OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
+            DynamicRecipePatternDetails detail = candidate.source.provider
+                    .getCachedDynamicPattern(candidate.recipeKey);
+            if (detail != null && !detail.matchesRecipeDefinition(candidate.recipeMap.getUnlocalizedName(),
+                    candidate.encoded.inputs, candidate.encoded.alternatives, candidate.encoded.outputs,
+                    candidate.encoded.circuitConfiguration, candidate.cost.rawMaterials, candidate.cost.steps,
+                    candidate.cost.routePriority)) {
+                candidate.source.provider.removeCachedDynamicPattern(candidate.recipeKey);
+                detail = null;
+            }
+            if (detail == null) {
+                detail = new DynamicRecipePatternDetails(candidate.recipeKey,
+                        candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
+                        candidate.encoded.alternatives, candidate.encoded.outputs,
+                        candidate.encoded.circuitConfiguration,
+                        candidate.cost.rawMaterials, candidate.cost.steps, candidate.cost.routePriority);
+                if (!isPatternAvailableFor(target, detail)) {
+                    return null;
+                }
+                detail = candidate.source.provider.cacheDynamicPattern(detail);
+                if (!isPatternAvailableFor(target, detail)) {
+                    return null;
+                }
+                if (optimalRebuild != null) {
+                    optimalRebuild.generatedPatterns++;
+                }
+            } else {
+                if (!isPatternAvailableFor(target, detail)) {
+                    return null;
+                }
+                if (optimalRebuild != null) {
+                    optimalRebuild.reusedPatterns++;
+                }
+            }
+            patternsByRecipe.put(candidate.recipeKey, detail);
+            providersByPattern.put(detail, candidate.source.provider);
+            return detail;
         }
 
         /** Fully rebuilds every active RecipeMap output index after the explicit ApplyGray rebuild action. */
@@ -1166,18 +1214,19 @@ public final class DynamicRecipePatternRegistry {
             return result;
         }
 
-        private static void keepBestCandidate(List<PatternCandidate> candidates, PatternCandidate candidate) {
+        private static void keepBestCandidate(List<PatternCandidate> candidates, PatternCandidate candidate,
+                                              int candidateLimit) {
             int insertionIndex = 0;
             while (insertionIndex < candidates.size() &&
                     compareCandidates(candidates.get(insertionIndex), candidate) <= 0) {
                 insertionIndex++;
             }
-            if (insertionIndex >= MAX_PATTERNS_PER_TARGET) {
+            if (insertionIndex >= candidateLimit) {
                 return;
             }
 
             candidates.add(insertionIndex, candidate);
-            if (candidates.size() > MAX_PATTERNS_PER_TARGET) {
+            if (candidates.size() > candidateLimit) {
                 candidates.remove(candidates.size() - 1);
             }
         }
@@ -1776,17 +1825,17 @@ public final class DynamicRecipePatternRegistry {
                 material.getFluid(FluidStorageKeys.MOLTEN) == fluidStack.getFluid();
     }
 
-    private static RouteCostSession getRouteCostSession(IGrid grid) {
+    private static RouteCostBudget getRouteCostBudget() {
         if (ACTIVE_CRAFTING_CALCULATION.get() == null) {
-            return new RouteCostSession(grid);
+            return new RouteCostBudget();
         }
 
-        RouteCostSession session = ROUTE_COST_SESSION.get();
-        if (session == null || session.grid != grid) {
-            session = new RouteCostSession(grid);
-            ROUTE_COST_SESSION.set(session);
+        RouteCostBudget budget = ROUTE_COST_BUDGET.get();
+        if (budget == null) {
+            budget = new RouteCostBudget();
+            ROUTE_COST_BUDGET.set(budget);
         }
-        return session;
+        return budget;
     }
 
     private static List<IPatternDetails> getNormalPatternsForRouteCost(IGrid grid, AEKey target) {
@@ -1812,25 +1861,6 @@ public final class DynamicRecipePatternRegistry {
                 NORMAL_PATTERN_COST_LOOKUP.set(previous);
             }
         }
-    }
-
-    private static long getPatternNetOutput(IPatternDetails pattern, AEKey target) {
-        long output = 0;
-        for (GenericStack stack : pattern.getOutputs()) {
-            if (target.matches(stack)) {
-                output = addSaturated(output, stack.amount());
-            }
-        }
-        for (IPatternDetails.IInput input : pattern.getInputs()) {
-            for (GenericStack option : input.possibleInputs()) {
-                if (target.matches(option)) {
-                    long consumed = multiplySaturated(option.amount(), input.getMultiplier());
-                    output = consumed >= output ? 0 : output - consumed;
-                    break;
-                }
-            }
-        }
-        return output;
     }
 
     private static long estimateKeyMaterialAmount(AEKey key, long amount) {
@@ -1860,8 +1890,10 @@ public final class DynamicRecipePatternRegistry {
 
         private final IGrid grid;
         private final GridState state;
-        private final RouteCostSession session;
-        private final Map<AEKey, List<IPatternDetails>> edgesByOutput = new HashMap<>();
+        private final RouteCostBudget budget;
+        private final InventorySnapshot inventory;
+        private final Map<AEKey, List<RouteEdge>> edgesByOutput = new HashMap<>();
+        private final Map<AEKey, List<IPatternDetails>> normalPatternsByOutput = new HashMap<>();
         private final Set<AEKey> countedNormalTargets = new HashSet<>();
         private int currentRootExpansions;
         private int totalExpansions;
@@ -1869,16 +1901,25 @@ public final class DynamicRecipePatternRegistry {
         private int dynamicPatternEdges;
         private int boundedFallbacks;
 
-        private RouteCostEstimator(IGrid grid, GridState state, RouteCostSession session) {
+        private RouteCostEstimator(IGrid grid, GridState state, RouteCostBudget budget) {
             this.grid = grid;
             this.state = state;
-            this.session = session;
+            this.budget = budget;
+            inventory = new InventorySnapshot(grid.getStorageService().getCachedInventory());
         }
 
         private DirectRouteCost estimateDirect(IPatternDetails pattern) {
-            InventoryLedger ledger = new InventoryLedger(session.inventory);
+            return estimateDirect(RouteEdge.of(pattern));
+        }
+
+        private DirectRouteCost estimateDirect(PatternCandidate candidate) {
+            return estimateDirect(RouteEdge.of(candidate));
+        }
+
+        private DirectRouteCost estimateDirect(RouteEdge edge) {
+            InventoryLedger ledger = new InventoryLedger(inventory);
             DirectRouteCost total = DirectRouteCost.ZERO;
-            for (IPatternDetails.IInput input : pattern.getInputs()) {
+            for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 DirectRouteChoice best = null;
                 int optionLimit = Math.min(options.length, MAX_ROUTE_COST_INPUT_ALTERNATIVES);
@@ -1909,17 +1950,25 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private RouteCost estimateRoot(IPatternDetails pattern, AEKey target) {
-            currentRootExpansions = 0;
-            InventoryLedger ledger = new InventoryLedger(session.inventory);
-            Set<AEKey> path = new HashSet<>();
-            path.add(target);
-            return estimatePattern(pattern, 1, ledger, path, 0);
+            return estimateRoot(RouteEdge.of(pattern), target);
         }
 
-        private RouteCost estimatePattern(IPatternDetails pattern, long crafts, InventoryLedger ledger,
-                                          Set<AEKey> path, int depth) {
+        private RouteCost estimateRoot(PatternCandidate candidate, AEKey target) {
+            return estimateRoot(RouteEdge.of(candidate), target);
+        }
+
+        private RouteCost estimateRoot(RouteEdge edge, AEKey target) {
+            currentRootExpansions = 0;
+            InventoryLedger ledger = new InventoryLedger(inventory);
+            Set<AEKey> path = new HashSet<>();
+            path.add(target);
+            return estimateEdge(edge, 1, ledger, path, 0);
+        }
+
+        private RouteCost estimateEdge(RouteEdge edge, long crafts, InventoryLedger ledger,
+                                       Set<AEKey> path, int depth) {
             RouteCost total = RouteCost.executions(crafts, depth + 1);
-            for (IPatternDetails.IInput input : pattern.getInputs()) {
+            for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 RouteChoice best = null;
                 int optionLimit = Math.min(options.length, MAX_ROUTE_COST_INPUT_ALTERNATIVES);
@@ -1954,7 +2003,8 @@ public final class DynamicRecipePatternRegistry {
             long remaining = amount - fromStock;
             if (remaining <= 0) return stockCost;
 
-            if (depth >= MAX_ROUTE_COST_DEPTH || currentRootExpansions++ >= MAX_ROUTE_COST_EXPANSIONS) {
+            if (depth >= MAX_ROUTE_COST_DEPTH || currentRootExpansions++ >= MAX_ROUTE_COST_EXPANSIONS ||
+                    !budget.tryExpansion()) {
                 boundedFallbacks++;
                 return stockCost.plus(RouteCost.bounded(depth));
             }
@@ -1968,16 +2018,16 @@ public final class DynamicRecipePatternRegistry {
             }
 
             try {
-                List<IPatternDetails> patterns = getEdges(key);
+                List<RouteEdge> edges = getEdges(key);
                 RouteChoice best = null;
-                for (IPatternDetails pattern : patterns) {
-                    long netOutput = getPatternNetOutput(pattern, key);
+                for (RouteEdge edge : edges) {
+                    long netOutput = edge.getNetOutput(key);
                     if (netOutput <= 0) continue;
 
                     long crafts = divideRoundUp(remaining, netOutput);
                     InventoryLedger branch = ledger.copy();
-                    RouteCost patternCost = estimatePattern(pattern, crafts, branch, path, depth);
-                    for (GenericStack output : pattern.getOutputs()) {
+                    RouteCost patternCost = estimateEdge(edge, crafts, branch, path, depth);
+                    for (GenericStack output : edge.outputs) {
                         branch.add(output.what(), multiplySaturated(output.amount(), crafts));
                     }
                     if (branch.consume(key, remaining) < remaining) {
@@ -2000,26 +2050,35 @@ public final class DynamicRecipePatternRegistry {
             }
         }
 
-        private List<IPatternDetails> getEdges(AEKey target) {
-            List<IPatternDetails> cached = edgesByOutput.get(target);
+        private List<RouteEdge> getEdges(AEKey target) {
+            List<RouteEdge> cached = edgesByOutput.get(target);
             if (cached != null) return cached;
 
             List<IPatternDetails> normal = getNormalEdges(target);
             if (!normal.isEmpty()) {
-                List<IPatternDetails> result = Collections.unmodifiableList(new ArrayList<>(normal));
+                List<RouteEdge> result = new ArrayList<>(normal.size());
+                for (IPatternDetails pattern : normal) {
+                    result.add(RouteEdge.of(pattern));
+                }
+                result = Collections.unmodifiableList(result);
                 edgesByOutput.put(target, result);
                 return result;
             }
 
-            List<DynamicRecipePatternDetails> dynamic = state.getPatternsForRouteCost(target);
+            List<PatternCandidate> dynamic = state.getCandidatesForRouteCost(target);
             dynamicPatternEdges += dynamic.size();
-            List<IPatternDetails> result = Collections.unmodifiableList(new ArrayList<>(dynamic));
+            List<RouteEdge> result = new ArrayList<>(dynamic.size());
+            for (PatternCandidate candidate : dynamic) {
+                result.add(RouteEdge.of(candidate));
+            }
+            result = Collections.unmodifiableList(result);
             edgesByOutput.put(target, result);
             return result;
         }
 
         private List<IPatternDetails> getNormalEdges(AEKey target) {
-            List<IPatternDetails> normal = session.getNormalPatterns(target);
+            List<IPatternDetails> normal = normalPatternsByOutput.computeIfAbsent(target,
+                    key -> Collections.unmodifiableList(new ArrayList<>(getNormalPatternsForRouteCost(grid, key))));
             if (!normal.isEmpty() && countedNormalTargets.add(target)) {
                 normalPatternEdges += normal.size();
             }
@@ -2027,21 +2086,59 @@ public final class DynamicRecipePatternRegistry {
         }
     }
 
-    /** One calculation-wide cache. Values are read lazily so large AE networks are never copied in full. */
-    private static final class RouteCostSession {
+    /** Input/output metadata used by route scoring before a dynamic pattern is encoded or registered. */
+    private static final class RouteEdge {
 
-        private final IGrid grid;
-        private final InventorySnapshot inventory;
-        private final Map<AEKey, List<IPatternDetails>> normalPatternsByOutput = new HashMap<>();
+        private final IPatternDetails.IInput[] inputs;
+        private final List<GenericStack> outputs;
 
-        private RouteCostSession(IGrid grid) {
-            this.grid = grid;
-            inventory = new InventorySnapshot(grid.getStorageService().getCachedInventory());
+        private RouteEdge(IPatternDetails.IInput[] inputs, List<GenericStack> outputs) {
+            this.inputs = inputs;
+            this.outputs = outputs;
         }
 
-        private List<IPatternDetails> getNormalPatterns(AEKey target) {
-            return normalPatternsByOutput.computeIfAbsent(target, key -> Collections.unmodifiableList(
-                    new ArrayList<>(getNormalPatternsForRouteCost(grid, key))));
+        private static RouteEdge of(IPatternDetails pattern) {
+            return new RouteEdge(pattern.getInputs(), pattern.getOutputs());
+        }
+
+        private static RouteEdge of(PatternCandidate candidate) {
+            return new RouteEdge(DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
+                    candidate.encoded.alternatives), candidate.encoded.outputs);
+        }
+
+        private long getNetOutput(AEKey target) {
+            long output = 0;
+            for (GenericStack stack : outputs) {
+                if (target.matches(stack)) {
+                    output = addSaturated(output, stack.amount());
+                }
+            }
+            for (IPatternDetails.IInput input : inputs) {
+                for (GenericStack option : input.possibleInputs()) {
+                    if (target.matches(option)) {
+                        long consumed = multiplySaturated(option.amount(), input.getMultiplier());
+                        output = consumed >= output ? 0 : output - consumed;
+                        break;
+                    }
+                }
+            }
+            return output;
+        }
+    }
+
+    /** Hard lifetime bound for all recursive route scoring performed by one AE calculation. */
+    private static final class RouteCostBudget {
+
+        private final long deadlineNanos = System.nanoTime() + MAX_ROUTE_COST_CALCULATION_NANOS;
+        private int expansions;
+
+        private boolean tryExpansion() {
+            if (expansions >= MAX_ROUTE_COST_CALCULATION_EXPANSIONS ||
+                    System.nanoTime() >= deadlineNanos) {
+                return false;
+            }
+            expansions++;
+            return true;
         }
     }
 

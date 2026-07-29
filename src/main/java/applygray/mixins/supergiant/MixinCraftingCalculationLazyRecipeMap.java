@@ -62,13 +62,16 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
             return;
         }
 
-        // The last process is the edge that closes the recursion. Prefer leaving an ore-backed dust at that edge
-        // as an external input so the restarted calculation can take its normal ore-processing route.
-        for (int index = lastProcessIndex; index >= requestIndex; index--) {
-            if (DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(index),
-                    processStack.get(index).getDetails()) > 0) {
-                return;
-            }
+        // Ordinary requests may inspect only the two processes forming the recursive edge. Prefer leaving an
+        // ore-backed dust at the closing edge, then at the opening edge, without traversing the intermediate segment.
+        if (DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(lastProcessIndex),
+                processStack.get(lastProcessIndex).getDetails()) > 0) {
+            return;
+        }
+        if (lastProcessIndex != requestIndex &&
+                DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(requestIndex),
+                        processStack.get(requestIndex).getDetails()) > 0) {
+            return;
         }
 
         // The rest of the active segment can be ordinary intermediate processing. Only the first and closing

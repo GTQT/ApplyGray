@@ -34,7 +34,8 @@ import java.util.concurrent.Future;
 @Mixin(value = CraftingService.class, remap = false)
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
 
-    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 4;
+    private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 16;
+    private static final int MAX_DYNAMIC_PATTERNS_PER_TARGET = 1;
 
     @Shadow @Final
     private IGrid grid;
@@ -70,6 +71,9 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             cachedDynamicPatterns.addAll(DynamicRecipePatternRegistry.findPatterns(grid, requested));
         }
         DynamicRecipePatternRegistry.sortPatternsForCrafting(grid, requested, cachedDynamicPatterns);
+        if (cachedDynamicPatterns.size() > MAX_DYNAMIC_PATTERNS_PER_TARGET) {
+            cachedDynamicPatterns.subList(MAX_DYNAMIC_PATTERNS_PER_TARGET, cachedDynamicPatterns.size()).clear();
+        }
         cir.setReturnValue(java.util.Collections.unmodifiableList(cachedDynamicPatterns));
     }
 
@@ -93,14 +97,14 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                     }
                     DynamicRecipePatternRegistry.clearRecursiveCycleRecovery();
                     try {
-                        if (recoveryAttempt == 0) {
-                            ICraftingPlan plan = calculation.call();
-                            DynamicRecipePatternRegistry.recordOptimalRebuildPlan(plan);
-                            return plan;
-                        }
-                        ICraftingPlan plan = new CraftingCalculation(world, grid, simRequester,
-                                new GenericStack(what, amount), strategy).run();
+                        ICraftingPlan plan = recoveryAttempt == 0 ? calculation.call() :
+                                new CraftingCalculation(world, grid, simRequester,
+                                        new GenericStack(what, amount), strategy).run();
                         DynamicRecipePatternRegistry.recordOptimalRebuildPlan(plan);
+                        if (recoveryAttempt > 0) {
+                            ApplyGrayMod.LOGGER.info("Recovered lazy RecipeMap crafting calculation for {} after {} " +
+                                    "recursive cleanup attempt(s)", what, recoveryAttempt);
+                        }
                         return plan;
                     } catch (RuntimeException failure) {
                         if (wasCancelled(failure)) {
@@ -117,7 +121,7 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
                                             "retries", what, MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS);
                             throw failure;
                         }
-                        ApplyGrayMod.LOGGER.info("Retrying lazy RecipeMap crafting calculation for {} after " +
+                        ApplyGrayMod.LOGGER.debug("Retrying lazy RecipeMap crafting calculation for {} after " +
                                         "recursive pattern cleanup ({}/{})", what, recoveryAttempt + 1,
                                 MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS);
                     }
