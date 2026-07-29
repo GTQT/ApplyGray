@@ -71,6 +71,7 @@ public final class DynamicRecipePatternRegistry {
      */
     private static final int MAX_RECIPES_PER_TARGET = 512;
     private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
+    private static final String DISTILLATION_TOWER_RECIPE_MAP = "distillation_tower";
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
@@ -169,6 +170,11 @@ public final class DynamicRecipePatternRegistry {
         if (state == null) return false;
 
         return state.claimOptimalRebuild(target, amount) != null;
+    }
+
+    /** Returns whether the current crafting calculation was launched by the explicit optimal rebuild action. */
+    public static boolean isOptimalRebuildCalculation() {
+        return hasActiveOptimalRebuildRequest();
     }
 
     /** Enters a rebuild session that was reserved at CraftingService task submission time. */
@@ -285,22 +291,22 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Rejects dynamic patterns that participated in a recursive chain without a positive net output.
-     *
-     * <p>The rejection is scoped to the requested key. The same recipe can still be useful when it is selected to
-     * produce a different output.</p>
+     * Clears every dynamic pattern in a recursive segment while the explicit optimal rebuild recalculates that
+     * segment. Ordinary crafting requests must use {@link #rejectRecursiveCycleAtOutput(AEKey, IPatternDetails)}
+     * instead, so their cached intermediate patterns remain intact.
      */
-    public static int rejectRecursiveCycle(AEKey target, Collection<? extends IPatternDetails> patterns) {
-        if (target == null || patterns.isEmpty()) return 0;
+    public static int invalidateRecursiveCycleForOptimalRebuild(AEKey target,
+                                                                 Collection<? extends IPatternDetails> patterns) {
+        if (!isOptimalRebuildCalculation() || target == null || patterns.isEmpty()) return 0;
 
-        int removed = 0;
+        int removedCount = 0;
         for (GridState state : GRIDS.values()) {
-            removed += state.rejectRecursiveCycle(target, patterns);
+            removedCount += state.invalidateRecursiveCycleForOptimalRebuild(target, patterns);
         }
-        if (removed > 0) {
+        if (removedCount > 0) {
             RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
         }
-        return removed;
+        return removedCount;
     }
 
     /**
@@ -319,24 +325,23 @@ public final class DynamicRecipePatternRegistry {
     /**
      * Rejects one selected dynamic pattern for the output it was producing in a non-productive recursive chain.
      *
-     * <p>Unlike {@link #rejectRecursiveCycle(AEKey, Collection)}, this preserves the association between each
-     * pattern and its own requested output. This prevents the reverse edge of a cycle from being selected again
-     * through a different output lookup on the next calculation.</p>
+     * <p>This preserves the association between the pattern and its requested output. It prevents the reverse edge
+     * of a cycle from being selected again through a different output lookup on the next calculation.</p>
      *
      * @return the number of dynamic patterns removed from the matching grid
      */
     public static int rejectRecursiveCycleAtOutput(AEKey target, IPatternDetails pattern) {
         if (target == null || pattern == null) return 0;
-        int removed = 0;
+        int removedCount = 0;
         for (GridState state : GRIDS.values()) {
-            removed += state.rejectRecursiveCycleAtOutput(target, pattern);
+            removedCount += state.rejectRecursiveCycleAtOutput(target, pattern);
         }
-        if (removed > 0) {
+        if (removedCount > 0) {
             RECURSIVE_CYCLE_RECOVERY_REQUIRED.set(Boolean.TRUE);
-            ApplyGrayMod.LOGGER.info("Discarded {} lazy RecipeMap pattern(s) from a non-productive recursive " +
-                    "cycle while producing {}", removed, target);
+            ApplyGrayMod.LOGGER.info("Discarded {} cached lazy RecipeMap pattern(s) from a non-productive recursive " +
+                    "cycle while producing {}", removedCount, target);
         }
-        return removed;
+        return removedCount;
     }
 
     /** Clears the current crafting thread's recursive-cycle recovery signal. */
@@ -568,6 +573,14 @@ public final class DynamicRecipePatternRegistry {
         return material != null && material.isElement();
     }
 
+    static boolean isDynamicRecipeMapEnabled(String recipeMapName) {
+        return !DISTILLATION_TOWER_RECIPE_MAP.equals(recipeMapName);
+    }
+
+    private static boolean isDynamicRecipeMapEnabled(RecipeMap<?> recipeMap) {
+        return recipeMap != null && isDynamicRecipeMapEnabled(recipeMap.getUnlocalizedName());
+    }
+
     private static boolean isElementalSubstance(AEKey key) {
         return isElementalMaterial(getMaterialForKey(key));
     }
@@ -684,7 +697,8 @@ public final class DynamicRecipePatternRegistry {
 
         private static boolean isRecipeMapAvailable(ProviderSnapshot snapshot, DynamicRecipePatternDetails detail) {
             for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
-                if (recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) {
+                if (isDynamicRecipeMapEnabled(recipeMap) &&
+                        recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) {
                     return true;
                 }
             }
@@ -772,6 +786,9 @@ public final class DynamicRecipePatternRegistry {
             for (ProviderSnapshot source : sources) {
                 KeyCounter storedItems = getStoredItems(source);
                 for (RecipeMap<?> recipeMap : source.recipeMaps) {
+                    if (!isDynamicRecipeMapEnabled(recipeMap)) {
+                        continue;
+                    }
                     RecipeOutputIndex outputIndex = getRecipeOutputIndex(recipeMap);
                     if (outputIndex == null) {
                         return Collections.emptyList();
@@ -931,7 +948,11 @@ public final class DynamicRecipePatternRegistry {
         private List<RecipeMap<?>> getActiveRecipeMaps() {
             Set<RecipeMap<?>> uniqueRecipeMaps = new HashSet<>();
             for (ProviderSnapshot snapshot : providers.values()) {
-                uniqueRecipeMaps.addAll(Arrays.asList(snapshot.recipeMaps));
+                for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
+                    if (isDynamicRecipeMapEnabled(recipeMap)) {
+                        uniqueRecipeMaps.add(recipeMap);
+                    }
+                }
             }
             return new ArrayList<>(uniqueRecipeMaps);
         }
@@ -1214,8 +1235,8 @@ public final class DynamicRecipePatternRegistry {
             }
         }
 
-        private synchronized int rejectRecursiveCycle(AEKey target,
-                                                      Collection<? extends IPatternDetails> patterns) {
+        private synchronized int invalidateRecursiveCycleForOptimalRebuild(AEKey target,
+                                                                            Collection<? extends IPatternDetails> patterns) {
             Set<DynamicRecipePatternDetails> cyclePatterns = new HashSet<>();
             for (IPatternDetails pattern : patterns) {
                 DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
@@ -1227,16 +1248,20 @@ public final class DynamicRecipePatternRegistry {
 
             Set<String> rejected = rejectedRecipeKeysByTarget.computeIfAbsent(target,
                     ignored -> ConcurrentHashMap.newKeySet());
+            Set<DynamicRecipePatternDetails> newlyRejected = new HashSet<>();
             for (DynamicRecipePatternDetails detail : cyclePatterns) {
-                rejected.add(detail.getRecipeKey());
+                if (rejected.add(detail.getRecipeKey())) {
+                    newlyRejected.add(detail);
+                }
             }
+            if (newlyRejected.isEmpty()) return 0;
 
-            int removed = invalidatePlanPatterns(cyclePatterns);
-            if (removed > 0) {
-                ApplyGrayMod.LOGGER.info("Discarded {} lazy RecipeMap patterns from a non-productive recursive " +
-                        "cycle for {}", removed, target);
+            int removedCount = invalidatePlanPatterns(newlyRejected);
+            if (removedCount > 0) {
+                ApplyGrayMod.LOGGER.info("Cleared {} cached lazy RecipeMap pattern(s) from a non-productive " +
+                        "recursive cycle during an optimal rebuild for {}", removedCount, target);
             }
-            return removed;
+            return removedCount;
         }
 
         private synchronized int rejectRecursiveCycleAtOutput(AEKey target, IPatternDetails pattern) {
@@ -1250,8 +1275,7 @@ public final class DynamicRecipePatternRegistry {
                     ignored -> ConcurrentHashMap.newKeySet());
             if (!rejected.add(dynamic.getRecipeKey())) return 0;
 
-            int removed = invalidatePlanPatterns(Collections.singleton(dynamic));
-            return removed;
+            return invalidatePlanPatterns(Collections.singleton(dynamic));
         }
 
         private boolean isPatternAvailableFor(AEKey target, DynamicRecipePatternDetails detail) {

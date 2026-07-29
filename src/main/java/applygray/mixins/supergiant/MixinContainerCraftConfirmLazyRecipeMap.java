@@ -13,6 +13,7 @@ import ae2.api.stacks.AEKey;
 import ae2.api.storage.ISubGuiHost;
 import ae2.container.AEBaseContainer;
 import ae2.container.implementations.ContainerCraftConfirm;
+import ae2.container.me.crafting.CraftingPlanSummary;
 import net.minecraft.entity.player.InventoryPlayer;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
@@ -34,6 +35,7 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
     @Shadow private long amount;
     @Shadow private CalculationStrategy strategy;
     @Shadow public abstract boolean planJob(AEKey what, long amount, CalculationStrategy strategy);
+    @Shadow public abstract void setPlan(@Nullable CraftingPlanSummary plan);
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void applygray$registerFullRecipeMapRebuildAction(InventoryPlayer playerInventory, ISubGuiHost host,
@@ -69,6 +71,7 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
         DynamicRecipePatternRegistry.armOptimalRebuild(grid, requestedTarget, requestedAmount);
         ApplyGrayMod.LOGGER.info("Starting ApplyGray's Supergiant optimal rebuild for original request {} x{} after " +
                 "clearing {} dynamic RecipeMap patterns", requestedTarget, requestedAmount, cleared);
+        setPlan(null);
         if (!applygray$startOptimalRebuildCalculation(requestedTarget, requestedAmount, requestedStrategy)) {
             DynamicRecipePatternRegistry.cancelOptimalRebuild(grid, requestedTarget, requestedAmount);
             ApplyGrayMod.LOGGER.warn("Could not schedule ApplyGray's Supergiant optimal rebuild for original request " +
@@ -90,6 +93,8 @@ public abstract class MixinContainerCraftConfirmLazyRecipeMap implements IRecipe
     public void applygray$rebuildOptimalRecipePlan() {
         AEBaseContainer container = (AEBaseContainer) (Object) this;
         if (container.isClientSide()) {
+            // The plan packet only arrives when the new calculation completes, so clear the old client-side view now.
+            setPlan(null);
             ((InvokerAEBaseContainer) (Object) this).applygray$sendClientAction(
                     APPLYGRAY_REBUILD_RECIPE_MAP_PATTERNS, Boolean.TRUE);
         } else {
