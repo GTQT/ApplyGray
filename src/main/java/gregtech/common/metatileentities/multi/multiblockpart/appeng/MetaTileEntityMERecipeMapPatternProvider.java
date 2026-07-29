@@ -54,8 +54,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
     private static final int MAX_PERSISTED_PATTERNS = 64;
-    // Version 4 discards caches that may contain several materialized routes for the same requested output.
-    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 4;
+    // Version 5 reselects polymer synthesis routes after chemical synthesis gained priority.
+    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 5;
     private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 

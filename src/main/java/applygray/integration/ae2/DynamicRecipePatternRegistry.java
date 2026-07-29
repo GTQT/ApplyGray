@@ -76,11 +76,16 @@ public final class DynamicRecipePatternRegistry {
     private static final int MAX_ROUTE_COST_CALCULATION_EXPANSIONS = 512;
     private static final long MAX_ROUTE_COST_CALCULATION_NANOS = 2_000_000_000L;
     private static final int MAX_REFINED_ROUTE_CANDIDATES = 2;
+    /** Lets route scoring compare the lathe and casting alternatives for one material-shaped output. */
+    private static final int MAX_ROUTE_COST_MATERIAL_FORM_CANDIDATES = 2;
     private static final int MAX_NORMAL_PATTERNS_PER_TARGET = 32;
     private static final int MAX_ROUTE_COST_INPUT_ALTERNATIVES = 16;
     private static final long BOUNDED_ROUTE_COST_PENALTY = Long.MAX_VALUE / 4;
     private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
     private static final String DISTILLATION_TOWER_RECIPE_MAP = "distillation_tower";
+    /** Only polymer synthesis in these RecipeMaps may outrank a powder-to-fluid recycling route. */
+    private static final Set<String> CHEMICAL_PRODUCT_SYNTHESIS_RECIPE_MAPS = Set.of(
+            "chemical_reactor", "large_chemical_reactor", "polymerization_tank");
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
@@ -132,8 +137,9 @@ public final class DynamicRecipePatternRegistry {
         ApplyGrayMod.LOGGER.info("Finished Supergiant optimal rebuild for {} x{}: indexed {} active RecipeMaps from {} " +
                         "recipes in {} ms; inspected {} matching recipes for {} requested outputs and " +
                         "generated {} / reused {} dynamic patterns in {} ms; candidate priorities " +
-                        "[dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]; final plan dynamic " +
-                        "routes [dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]; dependency " +
+                        "[chemical synthesis={}, dust/fluid={}, ingot={}, general={}, form change={}, recycling={}]; " +
+                        "final plan dynamic routes [chemical synthesis={}, dust/fluid={}, ingot={}, general={}, " +
+                        "form change={}, recycling={}]; dependency " +
                         "leaves [elemental dust={}]; inventory route scoring " +
                         "[targets={}, quick candidates={}, refined candidates={}, stock-only targets={}, " +
                         "expansions={}, normal pattern edges={}, dynamic edges={}, bounded fallbacks={}, " +
@@ -143,9 +149,11 @@ public final class DynamicRecipePatternRegistry {
                 optimalRebuild.indexRebuildMillis, optimalRebuild.matchingRecipeCandidates,
                 optimalRebuild.requestedOutputs, optimalRebuild.generatedPatterns,
                 optimalRebuild.reusedPatterns, elapsedMillis,
-                optimalRebuild.dustOrFluidCandidates, optimalRebuild.ingotCandidates,
+                optimalRebuild.chemicalSynthesisCandidates, optimalRebuild.dustOrFluidCandidates,
+                optimalRebuild.ingotCandidates,
                 optimalRebuild.generalCandidates, optimalRebuild.materialFormChangeCandidates,
-                optimalRebuild.recyclingCandidates, optimalRebuild.selectedDustOrFluidPatterns,
+                optimalRebuild.recyclingCandidates, optimalRebuild.selectedChemicalSynthesisPatterns,
+                optimalRebuild.selectedDustOrFluidPatterns,
                 optimalRebuild.selectedIngotPatterns, optimalRebuild.selectedGeneralPatterns,
                 optimalRebuild.selectedMaterialFormChangePatterns, optimalRebuild.selectedRecyclingPatterns,
                 optimalRebuild.elementalDustLeaves.size(), optimalRebuild.inventoryScoredTargets.size(),
@@ -432,10 +440,14 @@ public final class DynamicRecipePatternRegistry {
             quickCosts.put(pattern, estimator.estimateDirect(pattern));
         }
         patterns.sort((left, right) -> {
+            DynamicRecipePatternDetails leftDynamic = (DynamicRecipePatternDetails) left;
+            DynamicRecipePatternDetails rightDynamic = (DynamicRecipePatternDetails) right;
+            int mandatoryRoute = compareMandatoryRoutePriority(leftDynamic.getRoutePriority(),
+                    rightDynamic.getRoutePriority());
+            if (mandatoryRoute != 0) return mandatoryRoute;
             int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
             if (quickCost != 0) return quickCost;
-            return compareDynamicPatternPriority(requested, (DynamicRecipePatternDetails) left,
-                    (DynamicRecipePatternDetails) right);
+            return compareDynamicPatternPriority(requested, leftDynamic, rightDynamic);
         });
 
         boolean stockOnlySelection = quickCosts.get(patterns.get(0)).isFullyStocked();
@@ -462,6 +474,10 @@ public final class DynamicRecipePatternRegistry {
                 refinedCosts.put(pattern, estimator.estimateRoot(pattern, requested));
             }
             refined.sort((left, right) -> {
+                int mandatoryRoute = compareMandatoryRoutePriority(
+                        ((DynamicRecipePatternDetails) left).getRoutePriority(),
+                        ((DynamicRecipePatternDetails) right).getRoutePriority());
+                if (mandatoryRoute != 0) return mandatoryRoute;
                 int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
                 if (routeCost != 0) return routeCost;
                 return compareDynamicPatternPriority(requested, (DynamicRecipePatternDetails) left,
@@ -487,7 +503,8 @@ public final class DynamicRecipePatternRegistry {
                 for (IPatternDetails pattern : patterns) {
                     DynamicRecipePatternDetails candidate = (DynamicRecipePatternDetails) pattern;
                     RouteCost refinedCost = refinedCosts.get(pattern);
-                    ranking.add(candidate.getRecipeMapName() + "={quick=" + quickCosts.get(pattern) +
+                    ranking.add(candidate.getRecipeMapName() + "[" + candidate.getRoutePriority() + "]={quick=" +
+                            quickCosts.get(pattern) +
                             (refinedCost == null ? "" : ", refined=" + refinedCost) + '}');
                 }
                 ApplyGrayMod.LOGGER.debug("Inventory-aware RecipeMap route for {} selected {} in {} after {} " +
@@ -576,8 +593,8 @@ public final class DynamicRecipePatternRegistry {
      * form apart must never outrank a recipe that actually synthesizes the requested material from dusts, fluids,
      * or ingots merely because the former is a smaller batch.
      */
-    private static CandidateRoutePriority getCandidateRoutePriority(AEKey target, Recipe recipe,
-                                                                      EncodedRecipe encoded) {
+    private static CandidateRoutePriority getCandidateRoutePriority(AEKey target, RecipeMap<?> recipeMap,
+                                                                      Recipe recipe, EncodedRecipe encoded) {
         if (isRecyclingRecipe(recipe)) {
             return CandidateRoutePriority.RECYCLING;
         }
@@ -589,6 +606,7 @@ public final class DynamicRecipePatternRegistry {
         Material targetMaterial = getMaterialForKey(target);
         boolean hasMaterialInput = false;
         boolean hasTargetMaterialInput = false;
+        boolean hasNonTargetMaterialInput = false;
         boolean onlyTargetMaterialInputs = targetMaterial != null;
 
         for (GenericStack input : encoded.inputs) {
@@ -612,6 +630,7 @@ public final class DynamicRecipePatternRegistry {
                     hasTargetMaterialInput = true;
                 } else {
                     onlyTargetMaterialInputs = false;
+                    hasNonTargetMaterialInput = true;
                 }
             }
         }
@@ -621,8 +640,34 @@ public final class DynamicRecipePatternRegistry {
         // non-element reactions such as hydrogen plus fluorine to hydrofluoric acid.
         usesPriorityFluid |= !isElementalMaterial(targetMaterial) &&
                 isPrimaryElementalFluidRoute(usesElementalFluid, usesDust, usesIngot, hasTargetMaterialInput);
-        return classifyCandidateRoute(usesDust, usesPriorityFluid, usesIngot, hasMaterialInput,
-                onlyTargetMaterialInputs);
+        CandidateRoutePriority fallback = classifyCandidateRoute(usesDust, usesPriorityFluid, usesIngot,
+                hasMaterialInput, onlyTargetMaterialInputs);
+        return promoteChemicalProductSynthesis(target instanceof AEFluidKey,
+                targetMaterial != null && targetMaterial.hasProperty(PropertyKey.POLYMER),
+                recipeMap == null ? null : recipeMap.getUnlocalizedName(), hasTargetMaterialInput,
+                hasNonTargetMaterialInput, fallback);
+    }
+
+    /**
+     * Polymer fluids have an automatic extractor-recycling conversion from their dust form. That conversion is
+     * useful for recycling, but it must not replace the actual chemical synthesis chain. Other fluid products retain
+     * their existing route priority.
+     */
+    static CandidateRoutePriority promoteChemicalProductSynthesis(boolean targetIsFluid, boolean targetIsPolymer,
+                                                                   @Nullable String recipeMapName,
+                                                                   boolean hasTargetMaterialInput,
+                                                                   boolean hasNonTargetMaterialInput,
+                                                                   CandidateRoutePriority fallback) {
+        boolean polymerSynthesis = targetIsFluid && targetIsPolymer && !hasTargetMaterialInput &&
+                hasNonTargetMaterialInput;
+        if (polymerSynthesis && isChemicalProductSynthesisRecipeMap(recipeMapName)) {
+            return CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
+        }
+        return fallback;
+    }
+
+    static boolean isChemicalProductSynthesisRecipeMap(@Nullable String recipeMapName) {
+        return recipeMapName != null && CHEMICAL_PRODUCT_SYNTHESIS_RECIPE_MAPS.contains(recipeMapName);
     }
 
     /**
@@ -906,13 +951,26 @@ public final class DynamicRecipePatternRegistry {
 
         /**
          * Supplies dynamic dependency edges to the route estimator without recursively invoking CraftingService.
-         * Only the statically best candidate metadata is returned; route scoring never materializes dependency patterns.
+         * Material-form routes retain their two cheapest alternatives so a round can follow either its lathe or
+         * casting chain to a producible input. All other targets keep one edge to bound recursive scoring.
          */
         private List<PatternCandidate> getCandidatesForRouteCost(AEKey target) {
             if (target == null || isExternalOreInput(target) || isElementalDust(target)) {
                 return Collections.emptyList();
             }
-            return collectPatternCandidates(target, 1);
+            List<PatternCandidate> candidates = collectPatternCandidates(target,
+                    MAX_ROUTE_COST_MATERIAL_FORM_CANDIDATES);
+            if (candidates.isEmpty() ||
+                    candidates.get(0).cost.routePriority != CandidateRoutePriority.MATERIAL_FORM_CHANGE) {
+                return candidates.isEmpty() ? candidates : Collections.singletonList(candidates.get(0));
+            }
+
+            List<PatternCandidate> formChangeCandidates = new ArrayList<>(candidates.size());
+            for (PatternCandidate candidate : candidates) {
+                if (candidate.cost.routePriority != CandidateRoutePriority.MATERIAL_FORM_CHANGE) break;
+                formChangeCandidates.add(candidate);
+            }
+            return formChangeCandidates;
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
@@ -966,7 +1024,8 @@ public final class DynamicRecipePatternRegistry {
                         long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
                                 encoded.alternatives, encoded.outputs);
                         if (netOutput <= 0) continue;
-                        CandidateRoutePriority routePriority = getCandidateRoutePriority(target, recipe, encoded);
+                        CandidateRoutePriority routePriority = getCandidateRoutePriority(target, recipeMap, recipe,
+                                encoded);
                         if (optimalRebuild != null) {
                             optimalRebuild.recordCandidate(routePriority);
                         }
@@ -1004,6 +1063,9 @@ public final class DynamicRecipePatternRegistry {
                 quickCosts.put(candidate, estimator.estimateDirect(candidate));
             }
             candidates.sort((left, right) -> {
+                int mandatoryRoute = compareMandatoryRoutePriority(left.cost.routePriority,
+                        right.cost.routePriority);
+                if (mandatoryRoute != 0) return mandatoryRoute;
                 int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
                 return quickCost != 0 ? quickCost : compareCandidates(left, right);
             });
@@ -1023,6 +1085,9 @@ public final class DynamicRecipePatternRegistry {
                     refinedCosts.put(candidate, estimator.estimateRoot(candidate, target));
                 }
                 refined.sort((left, right) -> {
+                    int mandatoryRoute = compareMandatoryRoutePriority(left.cost.routePriority,
+                            right.cost.routePriority);
+                    if (mandatoryRoute != 0) return mandatoryRoute;
                     int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
                     return routeCost != 0 ? routeCost : compareCandidates(left, right);
                 });
@@ -2019,8 +2084,18 @@ public final class DynamicRecipePatternRegistry {
 
             try {
                 List<RouteEdge> edges = getEdges(key);
+                boolean hasMandatoryRoute = false;
+                for (RouteEdge edge : edges) {
+                    if (edge.hasMandatoryRoutePriority()) {
+                        hasMandatoryRoute = true;
+                        break;
+                    }
+                }
                 RouteChoice best = null;
                 for (RouteEdge edge : edges) {
+                    if (hasMandatoryRoute && !edge.hasMandatoryRoutePriority()) {
+                        continue;
+                    }
                     long netOutput = edge.getNetOutput(key);
                     if (netOutput <= 0) continue;
 
@@ -2091,19 +2166,28 @@ public final class DynamicRecipePatternRegistry {
 
         private final IPatternDetails.IInput[] inputs;
         private final List<GenericStack> outputs;
+        @Nullable private final CandidateRoutePriority routePriority;
 
-        private RouteEdge(IPatternDetails.IInput[] inputs, List<GenericStack> outputs) {
+        private RouteEdge(IPatternDetails.IInput[] inputs, List<GenericStack> outputs,
+                          @Nullable CandidateRoutePriority routePriority) {
             this.inputs = inputs;
             this.outputs = outputs;
+            this.routePriority = routePriority;
         }
 
         private static RouteEdge of(IPatternDetails pattern) {
-            return new RouteEdge(pattern.getInputs(), pattern.getOutputs());
+            DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
+            return new RouteEdge(pattern.getInputs(), pattern.getOutputs(),
+                    dynamic == null ? null : dynamic.getRoutePriority());
         }
 
         private static RouteEdge of(PatternCandidate candidate) {
             return new RouteEdge(DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
-                    candidate.encoded.alternatives), candidate.encoded.outputs);
+                    candidate.encoded.alternatives), candidate.encoded.outputs, candidate.cost.routePriority);
+        }
+
+        private boolean hasMandatoryRoutePriority() {
+            return routePriority == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
         }
 
         private long getNetOutput(AEKey target) {
@@ -2350,11 +2434,13 @@ public final class DynamicRecipePatternRegistry {
         private int requestedOutputs;
         private int generatedPatterns;
         private int reusedPatterns;
+        private int chemicalSynthesisCandidates;
         private int dustOrFluidCandidates;
         private int ingotCandidates;
         private int generalCandidates;
         private int materialFormChangeCandidates;
         private int recyclingCandidates;
+        private int selectedChemicalSynthesisPatterns;
         private int selectedDustOrFluidPatterns;
         private int selectedIngotPatterns;
         private int selectedGeneralPatterns;
@@ -2383,6 +2469,7 @@ public final class DynamicRecipePatternRegistry {
 
         private void recordCandidate(CandidateRoutePriority routePriority) {
             switch (routePriority) {
+                case CHEMICAL_PRODUCT_SYNTHESIS -> chemicalSynthesisCandidates++;
                 case DUST_OR_FLUID_INPUT -> dustOrFluidCandidates++;
                 case INGOT_INPUT -> ingotCandidates++;
                 case GENERAL -> generalCandidates++;
@@ -2411,6 +2498,7 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private void recordFinalPlan(ICraftingPlan plan) {
+            selectedChemicalSynthesisPatterns = 0;
             selectedDustOrFluidPatterns = 0;
             selectedIngotPatterns = 0;
             selectedGeneralPatterns = 0;
@@ -2420,6 +2508,7 @@ public final class DynamicRecipePatternRegistry {
                 DynamicRecipePatternDetails dynamic = getDynamicPattern(details);
                 if (dynamic == null) continue;
                 switch (dynamic.getRoutePriority()) {
+                    case CHEMICAL_PRODUCT_SYNTHESIS -> selectedChemicalSynthesisPatterns++;
                     case DUST_OR_FLUID_INPUT -> selectedDustOrFluidPatterns++;
                     case INGOT_INPUT -> selectedIngotPatterns++;
                     case GENERAL -> selectedGeneralPatterns++;
@@ -2484,6 +2573,7 @@ public final class DynamicRecipePatternRegistry {
     }
 
     enum CandidateRoutePriority {
+        CHEMICAL_PRODUCT_SYNTHESIS,
         DUST_OR_FLUID_INPUT,
         INGOT_INPUT,
         GENERAL,
@@ -2493,6 +2583,13 @@ public final class DynamicRecipePatternRegistry {
 
     static int compareCandidateRoutePriority(CandidateRoutePriority left, CandidateRoutePriority right) {
         return Integer.compare(left.ordinal(), right.ordinal());
+    }
+
+    /** Chemical-product synthesis is a policy requirement rather than an inventory-dependent preference. */
+    static int compareMandatoryRoutePriority(CandidateRoutePriority left, CandidateRoutePriority right) {
+        boolean leftMandatory = left == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
+        boolean rightMandatory = right == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
+        return leftMandatory == rightMandatory ? 0 : leftMandatory ? -1 : 1;
     }
 
     private static final class Cost implements Comparable<Cost> {
