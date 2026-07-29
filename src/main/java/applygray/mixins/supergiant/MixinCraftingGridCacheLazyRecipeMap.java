@@ -54,6 +54,11 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             normalPatterns.add(detail);
         }
 
+        if (DynamicRecipePatternRegistry.isNormalPatternCostLookup()) {
+            cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
+            return;
+        }
+
         // RecipeMap patterns are a fallback. A regular AE2 pattern must completely suppress the virtual route.
         if (!normalPatterns.isEmpty()) {
             cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
@@ -64,11 +69,7 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
         if (cachedDynamicPatterns.isEmpty()) {
             cachedDynamicPatterns.addAll(DynamicRecipePatternRegistry.findPatterns(grid, requested));
         }
-        cachedDynamicPatterns.sort((left, right) -> {
-            DynamicRecipePatternDetails l = (DynamicRecipePatternDetails) left;
-            DynamicRecipePatternDetails r = (DynamicRecipePatternDetails) right;
-            return DynamicRecipePatternRegistry.compareDynamicPatternPriority(requested, l, r);
-        });
+        DynamicRecipePatternRegistry.sortPatternsForCrafting(grid, requested, cachedDynamicPatterns);
         cir.setReturnValue(java.util.Collections.unmodifiableList(cachedDynamicPatterns));
     }
 
