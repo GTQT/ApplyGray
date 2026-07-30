@@ -390,19 +390,6 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Breaks a non-productive recursive chain at a dust that has an ore form.
-     *
-     * <p>Only the selected pattern is rejected, and only while producing {@code target}. The next calculation can
-     * then satisfy the dust through an ore-processing chain or report the dust as a missing external input.</p>
-     *
-     * @return the number of dynamic patterns removed from the matching grid
-     */
-    public static int rejectRecursiveCycleAtOreDust(AEKey target, IPatternDetails pattern) {
-        if (!isOreBackedDust(target) || pattern == null) return 0;
-        return rejectRecursiveCycleAtOutput(target, pattern);
-    }
-
-    /**
      * Rejects one selected dynamic pattern for the output it was producing in a non-productive recursive chain.
      *
      * <p>This preserves the association between the pattern and its requested output. It prevents the reverse edge

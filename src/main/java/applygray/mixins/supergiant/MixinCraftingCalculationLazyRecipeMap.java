@@ -1,5 +1,7 @@
 package applygray.mixins.supergiant;
 
+import applygray.ApplyGrayMod;
+import applygray.integration.ae2.DynamicRecipePatternDetails;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
 import ae2.api.crafting.IPatternDetails;
@@ -15,7 +17,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /** Removes lazy RecipeMap details selected by a recursion that cannot produce its requested key positively. */
@@ -52,36 +53,18 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
         }
         if (requestIndex < 0 || requestIndex >= processStack.size()) return;
 
-        int lastProcessIndex = Math.min(requestStack.size(), processStack.size()) - 1;
-        if (DynamicRecipePatternRegistry.isOptimalRebuildCalculation()) {
-            List<IPatternDetails> cyclePatterns = new ArrayList<>(lastProcessIndex - requestIndex + 1);
-            for (int index = requestIndex; index <= lastProcessIndex; index++) {
-                cyclePatterns.add(processStack.get(index).getDetails());
-            }
-            DynamicRecipePatternRegistry.invalidateRecursiveCycleForOptimalRebuild(requested, cyclePatterns);
-            return;
-        }
+        // The repeated request belongs to its opening process. The closing process merely consumes the repeated
+        // key while producing another key, so rejecting it would discard a valid route for that other output.
+        IPatternDetails detail = processStack.get(requestIndex).getDetails();
+        DynamicRecipePatternDetails dynamic = DynamicRecipePatternRegistry.getDynamicPattern(detail);
+        if (dynamic == null || !dynamic.netProduces(requested)) return;
 
-        // Ordinary requests may inspect only the two processes forming the recursive edge. Prefer leaving an
-        // ore-backed dust at the closing edge, then at the opening edge, without traversing the intermediate segment.
-        if (DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(lastProcessIndex),
-                processStack.get(lastProcessIndex).getDetails()) > 0) {
-            return;
+        int removed = DynamicRecipePatternRegistry.isOptimalRebuildCalculation() ?
+                DynamicRecipePatternRegistry.invalidateRecursiveCycleForOptimalRebuild(requested, List.of(detail)) :
+                DynamicRecipePatternRegistry.rejectRecursiveCycleAtOutput(requested, detail);
+        if (removed > 0) {
+            ApplyGrayMod.LOGGER.debug("Rejected recursive RecipeMap opening output {} at request stack index {}: {} ({})",
+                    requested, requestIndex, dynamic.getRecipeKey(), dynamic.getRecipeMapName());
         }
-        if (lastProcessIndex != requestIndex &&
-                DynamicRecipePatternRegistry.rejectRecursiveCycleAtOreDust(requestStack.get(requestIndex),
-                        processStack.get(requestIndex).getDetails()) > 0) {
-            return;
-        }
-
-        // The rest of the active segment can be ordinary intermediate processing. Only the first and closing
-        // processes form the recursive edge, so retain every intervening dynamic pattern for later requests.
-        int removedByOutput = DynamicRecipePatternRegistry.rejectRecursiveCycleAtOutput(requestStack.get(requestIndex),
-                processStack.get(requestIndex).getDetails());
-        if (lastProcessIndex != requestIndex) {
-            removedByOutput += DynamicRecipePatternRegistry.rejectRecursiveCycleAtOutput(
-                    requestStack.get(lastProcessIndex), processStack.get(lastProcessIndex).getDetails());
-        }
-        if (removedByOutput > 0) return;
     }
 }
