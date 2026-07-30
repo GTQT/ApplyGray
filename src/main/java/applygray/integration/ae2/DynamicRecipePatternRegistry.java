@@ -76,8 +76,8 @@ public final class DynamicRecipePatternRegistry {
     private static final int MAX_ROUTE_COST_CALCULATION_EXPANSIONS = 512;
     private static final long MAX_ROUTE_COST_CALCULATION_NANOS = 2_000_000_000L;
     private static final int MAX_REFINED_ROUTE_CANDIDATES = 2;
-    /** Lets route scoring compare the lathe and casting alternatives for one material-shaped output. */
-    private static final int MAX_ROUTE_COST_MATERIAL_FORM_CANDIDATES = 2;
+    /** Bounds generic dynamic-route alternatives during recursive route costing. */
+    private static final int MAX_ROUTE_COST_DYNAMIC_CANDIDATES = 2;
     private static final int MAX_NORMAL_PATTERNS_PER_TARGET = 32;
     private static final int MAX_ROUTE_COST_INPUT_ALTERNATIVES = 16;
     private static final long BOUNDED_ROUTE_COST_PENALTY = Long.MAX_VALUE / 4;
@@ -89,6 +89,12 @@ public final class DynamicRecipePatternRegistry {
 
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
+    /** 
+     * Cooldown: skip refreshProvider if called more often than this (500 ms). 
+     * Prevents rapid onMainNodeStateChanged + update() cycles from doing duplicate work.
+     */
+    private static final long REFRESH_DEBOUNCE_NANOS = 500_000_000L;
+    private static final Map<String, Long> LAST_REFRESH_NANOS = new ConcurrentHashMap<>();
     private static final ThreadLocal<Boolean> RECURSIVE_CYCLE_RECOVERY_REQUIRED = new ThreadLocal<>();
     private static final ThreadLocal<CraftingCalculation> ACTIVE_CRAFTING_CALCULATION = new ThreadLocal<>();
     /**
@@ -225,8 +231,15 @@ public final class DynamicRecipePatternRegistry {
     }
 
     public static void refreshProvider(MetaTileEntityMERecipeMapPatternProvider provider) {
-        ProviderSnapshot snapshot = provider.createDynamicSnapshot();
         String providerId = provider.getDynamicProviderId();
+        long now = System.nanoTime();
+        Long lastRefresh = LAST_REFRESH_NANOS.get(providerId);
+        if (lastRefresh != null && (now - lastRefresh) < REFRESH_DEBOUNCE_NANOS) {
+            return;
+        }
+        LAST_REFRESH_NANOS.put(providerId, now);
+
+        ProviderSnapshot snapshot = provider.createDynamicSnapshot();
         IGrid oldGrid = PROVIDER_GRIDS.get(providerId);
 
         if (snapshot == null) {
@@ -797,6 +810,14 @@ public final class DynamicRecipePatternRegistry {
         private final Map<String, DynamicRecipePatternDetails> patternsByRecipe = new ConcurrentHashMap<>();
         private final Map<AEKey, Set<String>> rejectedRecipeKeysByTarget = new ConcurrentHashMap<>();
         /**
+         * Caches the expensive candidate list produced by {@link #collectPatternCandidates} for targets queried by
+         * {@link #getCandidatesForRouteCost}. Avoids re-encoding recipes when the same intermediate output is scored
+         * by multiple RouteCostEstimator instances within one crafting calculation. Cleared in {@link #clearGenerated()}
+         * and expired by TTL.
+         */
+        private static final long ROUTE_CANDIDATE_CACHE_TTL_NANOS = 5_000_000_000L;
+        private final Map<AEKey, CachedCandidates> routeCandidateCache = new HashMap<>();
+        /**
          * Resolves a requested output to its producing recipes without rescanning every RecipeMap for every node in a
          * recursive crafting calculation. It is cleared whenever the set of providers changes. ApplyGray's explicit
          * rebuild action marks the complete active set for one eager rescan before candidate selection resumes.
@@ -949,28 +970,27 @@ public final class DynamicRecipePatternRegistry {
             return available;
         }
 
-        /**
-         * Supplies dynamic dependency edges to the route estimator without recursively invoking CraftingService.
-         * Material-form routes retain their two cheapest alternatives so a round can follow either its lathe or
-         * casting chain to a producible input. All other targets keep one edge to bound recursive scoring.
-         */
+        /** Supplies bounded dynamic dependency edges without recursively invoking CraftingService. */
         private List<PatternCandidate> getCandidatesForRouteCost(AEKey target) {
             if (target == null || isExternalOreInput(target) || isElementalDust(target)) {
                 return Collections.emptyList();
             }
+            CachedCandidates cached = routeCandidateCache.get(target);
+            if (cached != null && (System.nanoTime() - cached.cachedAtNanos) < ROUTE_CANDIDATE_CACHE_TTL_NANOS) {
+                return cached.candidates;
+            }
             List<PatternCandidate> candidates = collectPatternCandidates(target,
-                    MAX_ROUTE_COST_MATERIAL_FORM_CANDIDATES);
-            if (candidates.isEmpty() ||
-                    candidates.get(0).cost.routePriority != CandidateRoutePriority.MATERIAL_FORM_CHANGE) {
-                return candidates.isEmpty() ? candidates : Collections.singletonList(candidates.get(0));
+                    MAX_ROUTE_COST_DYNAMIC_CANDIDATES);
+            if (candidates.size() > 1 && getActiveOptimalRebuild() != null && ApplyGrayMod.LOGGER.isDebugEnabled()) {
+                List<String> recipeMaps = new ArrayList<>(candidates.size());
+                for (PatternCandidate candidate : candidates) {
+                    recipeMaps.add(candidate.recipeMap.getUnlocalizedName());
+                }
+                ApplyGrayMod.LOGGER.debug("Retained {} generic RecipeMap dependency route candidates for {}: {}",
+                        candidates.size(), target, recipeMaps);
             }
-
-            List<PatternCandidate> formChangeCandidates = new ArrayList<>(candidates.size());
-            for (PatternCandidate candidate : candidates) {
-                if (candidate.cost.routePriority != CandidateRoutePriority.MATERIAL_FORM_CHANGE) break;
-                formChangeCandidates.add(candidate);
-            }
-            return formChangeCandidates;
+            routeCandidateCache.put(target, new CachedCandidates(candidates, System.nanoTime()));
+            return candidates;
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
@@ -1568,6 +1588,7 @@ public final class DynamicRecipePatternRegistry {
             patternsByTarget.clear();
             patternsByRecipe.clear();
             rejectedRecipeKeysByTarget.clear();
+            routeCandidateCache.clear();
             invalidateRecipeOutputIndexes();
             providersByPattern.clear();
         }
@@ -1581,6 +1602,16 @@ public final class DynamicRecipePatternRegistry {
             recipeOutputIndexEpoch++;
             recipeOutputIndexes.clear();
             pendingFullRecipeOutputIndexEpoch = 0;
+        }
+
+        private static final class CachedCandidates {
+            private final List<PatternCandidate> candidates;
+            private final long cachedAtNanos;
+
+            private CachedCandidates(List<PatternCandidate> candidates, long cachedAtNanos) {
+                this.candidates = candidates;
+                this.cachedAtNanos = cachedAtNanos;
+            }
         }
     }
 

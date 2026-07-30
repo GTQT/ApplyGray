@@ -117,8 +117,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     protected final int bufferCount;
     private List<PatternBuffer> bufferPool;
 
-    // Signature hash -> list of buffers with that signature, for O(1) lookup
-    private final Map<Integer, List<PatternBuffer>> signatureMap = new HashMap<>();
+    // Signature -> list of buffers with that signature, for O(1) lookup
+    private final Map<BufferSignature, List<PatternBuffer>> signatureMap = new HashMap<>();
 
     // ==================== 双向注册：从属节点列表 ====================
     private final List<MetaTileEntityPatternProviderMappingSlave> mappingSlaves = new ArrayList<>();
@@ -354,9 +354,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
      */
     @Nullable
     private PatternBuffer findOrAllocateBuffer(BufferSignature signature) {
-        // Step 1: Use HashMap for O(1) lookup of buffers with matching signature hash
-        int hash = signature.hashCode();
-        List<PatternBuffer> candidates = signatureMap.get(hash);
+        List<PatternBuffer> candidates = signatureMap.get(signature);
         if (candidates != null) {
             for (PatternBuffer buffer : candidates) {
                 if (!buffer.isEmpty() && buffer.matchesSignature(signature) && !buffer.full()) {
@@ -370,7 +368,6 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 return buffer;
             }
         }
-        // All buffers are occupied or no free buffer available
         return null;
     }
 
@@ -759,17 +756,15 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     private void registerBufferInSignatureMap(PatternBuffer buffer) {
         BufferSignature sig = buffer.getSignature();
         if (sig == null) return;
-        int hash = sig.hashCode();
-        signatureMap.computeIfAbsent(hash, k -> new ArrayList<>(2)).add(buffer);
+        signatureMap.computeIfAbsent(sig, k -> new ArrayList<>(2)).add(buffer);
     }
 
     private void unregisterBufferFromSignatureMap(PatternBuffer buffer, BufferSignature oldSig) {
-        int hash = oldSig.hashCode();
-        List<PatternBuffer> list = signatureMap.get(hash);
+        List<PatternBuffer> list = signatureMap.get(oldSig);
         if (list != null) {
             list.remove(buffer);
             if (list.isEmpty()) {
-                signatureMap.remove(hash);
+                signatureMap.remove(oldSig);
             }
         }
     }
@@ -1469,6 +1464,13 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             }
 
             return true;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof BufferSignature other)) return false;
+            return matches(other);
         }
 
         /**
