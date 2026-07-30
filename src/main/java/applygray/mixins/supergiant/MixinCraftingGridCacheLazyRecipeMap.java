@@ -49,7 +49,7 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
         List<IPatternDetails> cachedDynamicPatterns = new ArrayList<>();
         for (IPatternDetails detail : cir.getReturnValue()) {
             if (detail instanceof DynamicRecipePatternDetails) {
-                if (DynamicRecipePatternRegistry.isPatternAvailableFor(requested, detail)) {
+                if (DynamicRecipePatternRegistry.isRegisteredPatternAvailableFor(grid, requested, detail)) {
                     cachedDynamicPatterns.add(detail);
                 }
                 continue;
@@ -57,18 +57,35 @@ public abstract class MixinCraftingGridCacheLazyRecipeMap {
             normalPatterns.add(detail);
         }
 
+        // CraftingCalculation builds its root node before its worker-thread context exists. Returning a dynamic
+        // route here would freeze a provisional choice in AE2's per-calculation cache before an optimal rebuild
+        // can refresh RecipeMap indexes. The cache is cleared when run() starts and the route is then evaluated.
+        if (DynamicRecipePatternRegistry.isCraftingCalculationConstruction()) {
+            cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
+            return;
+        }
+
         if (DynamicRecipePatternRegistry.isNormalPatternCostLookup()) {
             cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
             return;
         }
 
-        // RecipeMap patterns are a fallback. A regular AE2 pattern must completely suppress the virtual route.
+        // A regular synthesis pattern remains authoritative. A same-material form conversion such as block -> plate
+        // is only a fallback and may yield to a direct RecipeMap source.
         if (!normalPatterns.isEmpty()) {
+            List<IPatternDetails> preferredDynamicPatterns =
+                    DynamicRecipePatternRegistry.findDynamicPatternsForMaterialFormFallback(grid, requested,
+                            normalPatterns);
+            if (!preferredDynamicPatterns.isEmpty()) {
+                cir.setReturnValue(java.util.Collections.unmodifiableList(preferredDynamicPatterns));
+                return;
+            }
             cir.setReturnValue(java.util.Collections.unmodifiableList(normalPatterns));
             return;
         }
 
-        // A cached virtual pattern is already a materialized answer. Do not scan its RecipeMap again.
+        // A cached virtual pattern is reusable only while the registry still owns it. An optimal rebuild can evict
+        // a detail before AE2 refreshes its own cache, in which case a fresh RecipeMap scan is required.
         if (cachedDynamicPatterns.isEmpty()) {
             cachedDynamicPatterns.addAll(DynamicRecipePatternRegistry.findPatterns(grid, requested));
         }

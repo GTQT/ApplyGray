@@ -98,12 +98,39 @@ public final class DynamicRecipePatternRegistry {
     private static final ThreadLocal<OptimalRebuildRequest> ACTIVE_OPTIMAL_REBUILD_REQUEST = new ThreadLocal<>();
     /** Present only for the crafting calculation started by ApplyGray's explicit optimal rebuild action. */
     private static final ThreadLocal<OptimalRebuildContext> ACTIVE_OPTIMAL_REBUILD = new ThreadLocal<>();
+    /**
+     * AE2 asks for the root pattern while constructing {@link CraftingCalculation}, before its worker-thread run
+     * context exists. Dynamic results from that probe would be cached before an optimal rebuild can refresh them.
+     */
+    private static final ThreadLocal<Integer> CRAFTING_CALCULATION_CONSTRUCTION_DEPTH = new ThreadLocal<>();
     /** Prevents a normal-pattern probe used by route costing from recursively appending dynamic patterns. */
     private static final ThreadLocal<Boolean> NORMAL_PATTERN_COST_LOOKUP = new ThreadLocal<>();
     /** Caps all recursive route refinement performed by one AE crafting calculation. */
     private static final ThreadLocal<RouteCostBudget> ROUTE_COST_BUDGET = new ThreadLocal<>();
 
     private DynamicRecipePatternRegistry() {}
+
+    /** Marks the short constructor-time pattern probe so dynamic routes can be evaluated after the calculation starts. */
+    public static void beginCraftingCalculationConstruction() {
+        Integer depth = CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.get();
+        CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.set(depth == null ? 1 : depth + 1);
+    }
+
+    /** Ends the constructor-time pattern probe. */
+    public static void endCraftingCalculationConstruction() {
+        Integer depth = CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.get();
+        if (depth == null || depth <= 1) {
+            CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.remove();
+        } else {
+            CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.set(depth - 1);
+        }
+    }
+
+    /** Returns whether AE2 is prefetching root patterns during {@link CraftingCalculation} construction. */
+    public static boolean isCraftingCalculationConstruction() {
+        Integer depth = CRAFTING_CALCULATION_CONSTRUCTION_DEPTH.get();
+        return depth != null && depth > 0;
+    }
 
     /** Marks the calculation currently performing a lazy pattern lookup on this thread. */
     public static void enterCraftingCalculation(CraftingCalculation calculation) {
@@ -174,6 +201,47 @@ public final class DynamicRecipePatternRegistry {
         if (optimalRebuild != null && plan != null) {
             optimalRebuild.recordFinalPlan(plan);
         }
+    }
+
+    /**
+     * Resolves dynamic source routes only when every regular alternative is a same-material form conversion.
+     *
+     * <p>The registry owns both the normal-form classification and the rule-driven dynamic selection so AE2 callers
+     * cannot combine stale cache entries with the legacy priority helpers.</p>
+     */
+    public static List<IPatternDetails> findDynamicPatternsForMaterialFormFallback(
+            IGrid grid, AEKey target, Collection<? extends IPatternDetails> normalPatterns) {
+        if (grid == null || target == null || normalPatterns == null || normalPatterns.isEmpty() ||
+                !areOnlyMaterialFormChanges(target, normalPatterns)) {
+            return Collections.emptyList();
+        }
+
+        List<IPatternDetails> dynamicPatterns = new ArrayList<>(findPatterns(grid, target));
+        if (!containsDirectMaterialSource(dynamicPatterns)) return Collections.emptyList();
+        sortPatternsForCrafting(grid, target, dynamicPatterns);
+        return dynamicPatterns;
+    }
+
+    private static boolean areOnlyMaterialFormChanges(AEKey target,
+                                                       Collection<? extends IPatternDetails> patterns) {
+        for (IPatternDetails pattern : patterns) {
+            if (!isMaterialFormChangePattern(target, pattern)) return false;
+        }
+        return true;
+    }
+
+    private static boolean containsDirectMaterialSource(Collection<? extends IPatternDetails> patterns) {
+        for (IPatternDetails pattern : patterns) {
+            DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
+            if (dynamic == null) continue;
+            CandidateRoutePriority priority = dynamic.getRoutePriority();
+            if (priority == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS ||
+                    priority == CandidateRoutePriority.DUST_OR_FLUID_INPUT ||
+                    priority == CandidateRoutePriority.INGOT_INPUT) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static OptimalRebuildContext getActiveOptimalRebuild() {
@@ -426,17 +494,18 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Checks a dynamic detail against its requested output and any recursive-cycle rejection recorded for it.
+     * Validates a dynamic detail retrieved from AE2's own crafting cache.
+     *
+     * <p>AE2 can retain a detail after an optimal rebuild has evicted it from this registry. Such a detail must not
+     * suppress a fresh RecipeMap scan, or the rebuild will reuse its old route instead of considering new candidates.</p>
      */
-    public static boolean isPatternAvailableFor(AEKey target, IPatternDetails details) {
+    public static boolean isRegisteredPatternAvailableFor(IGrid grid, AEKey target, IPatternDetails details) {
         DynamicRecipePatternDetails dynamic = getDynamicPattern(details);
         if (dynamic == null) return true;
-        if (target == null || !dynamic.netProduces(target)) return false;
+        if (grid == null || target == null || !dynamic.netProduces(target)) return false;
 
-        for (GridState state : GRIDS.values()) {
-            if (state.isRejectedFor(target, dynamic)) return false;
-        }
-        return true;
+        GridState state = GRIDS.get(grid);
+        return state != null && state.isRegisteredPatternAvailableFor(target, dynamic);
     }
 
     /** Orders virtual patterns by their material route, then by input required per requested net output. */
@@ -647,6 +716,7 @@ public final class DynamicRecipePatternRegistry {
         boolean usesPriorityFluid = false;
         boolean usesElementalFluid = false;
         boolean usesIngot = false;
+        boolean usesPolymerDust = false;
         boolean hasMaterialInput = false;
         boolean hasTargetMaterialInput = false;
         boolean hasNonTargetMaterialInput = false;
@@ -667,7 +737,10 @@ public final class DynamicRecipePatternRegistry {
                 if (entry != null && entry.orePrefix != null) {
                     String prefixName = entry.orePrefix.name();
                     inputOrePrefixes.add(prefixName);
-                    usesDust |= isDustPrefix(prefixName);
+                    boolean dustInput = isDustPrefix(prefixName);
+                    usesDust |= dustInput;
+                    usesPolymerDust |= dustInput && entry.material != null &&
+                            entry.material.hasProperty(PropertyKey.POLYMER);
                     usesIngot |= isIngotPrefix(prefixName);
                 }
             }
@@ -706,6 +779,7 @@ public final class DynamicRecipePatternRegistry {
         facts.put("craftTweakerRecipe", recipe.getIsCTRecipe());
         facts.put("groovyRecipe", recipe.isGroovyRecipe());
         facts.put("usesDustInput", usesDust);
+        facts.put("usesPolymerDustInput", usesPolymerDust);
         facts.put("usesPriorityFluidInput", usesPriorityFluid);
         facts.put("usesIngotInput", usesIngot);
         facts.put("hasMaterialInput", hasMaterialInput);
@@ -768,11 +842,6 @@ public final class DynamicRecipePatternRegistry {
                 "dustPure".equals(prefixName));
     }
 
-    static boolean isOreBackedDust(String prefixName, boolean materialHasOreProperty) {
-        return materialHasOreProperty && ("dust".equals(prefixName) || "dustSmall".equals(prefixName) ||
-                "dustTiny".equals(prefixName) || "dustImpure".equals(prefixName) || "dustPure".equals(prefixName));
-    }
-
     private static boolean isExternalOreInput(AEKey target) {
         return target instanceof AEItemKey itemKey && isExternalOreInput(itemKey.toStack());
     }
@@ -795,13 +864,6 @@ public final class DynamicRecipePatternRegistry {
             }
         }
         return false;
-    }
-
-    private static boolean isOreBackedDust(AEKey target) {
-        if (!(target instanceof AEItemKey itemKey)) return false;
-        UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
-        return entry != null && isOreBackedDust(entry.orePrefix.name(),
-                entry.material != null && entry.material.hasProperty(PropertyKey.ORE));
     }
 
     /**
@@ -856,6 +918,22 @@ public final class DynamicRecipePatternRegistry {
         if (!(key instanceof AEItemKey itemKey)) return null;
         UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
         return entry == null || entry.orePrefix == null ? null : entry.orePrefix.name();
+    }
+
+    private static boolean isMaterialFormChangePattern(AEKey target, IPatternDetails pattern) {
+        Material targetMaterial = getMaterialForKey(target);
+        if (targetMaterial == null || pattern == null) return false;
+
+        boolean hasTargetMaterialInput = false;
+        for (IPatternDetails.IInput input : pattern.getInputs()) {
+            for (GenericStack option : input.possibleInputs()) {
+                Material inputMaterial = getMaterialForKey(option.what());
+                if (inputMaterial == null) continue;
+                if (!targetMaterial.equals(inputMaterial)) return false;
+                hasTargetMaterialInput = true;
+            }
+        }
+        return hasTargetMaterialInput;
     }
 
     static boolean isElementalMaterial(Material material) {
@@ -2064,6 +2142,10 @@ public final class DynamicRecipePatternRegistry {
 
         private boolean isPatternAvailableFor(AEKey target, DynamicRecipePatternDetails detail) {
             return detail.netProduces(target) && !isRejectedFor(target, detail);
+        }
+
+        private boolean isRegisteredPatternAvailableFor(AEKey target, DynamicRecipePatternDetails detail) {
+            return patternsByRecipe.get(detail.getRecipeKey()) == detail && isPatternAvailableFor(target, detail);
         }
 
         private boolean isRejectedFor(AEKey target, DynamicRecipePatternDetails detail) {

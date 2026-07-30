@@ -13,10 +13,11 @@ import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 
 import ae2.api.stacks.AEKey;
 
-import java.io.Reader;
-import java.io.Writer;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,7 +36,6 @@ import java.util.stream.Stream;
 public final class RecipePatternRules {
 
     private static final String DEFAULTS_RESOURCE = "/assets/applygray/recipe-pattern-rules/defaults.json";
-    private static final String DISTILLATION_TOWER_DEFAULT_RULE = "core.distillation-tower-disabled";
     private static final Gson RULE_FILE_GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final AtomicReference<RuleSet> ACTIVE = new AtomicReference<>(RuleSet.empty());
     private static final List<RecipePatternFactContributor> FACT_CONTRIBUTORS = new CopyOnWriteArrayList<>();
@@ -182,54 +182,118 @@ public final class RecipePatternRules {
         return UNSAFE_MODE;
     }
 
-    /**
-     * Adds newly introduced bundled defaults to the managed defaults file without replacing pack-specific rules.
-     * A pack can still deliberately re-enable a default-denied map through a higher-priority {@code allow} rule.
-     */
+    /** Adds missing bundled defaults without replacing existing rule definitions or custom budget values. */
     private static void migrateDefaultRules(Path defaults) throws IOException {
-        JsonObject document;
-        try (Reader reader = Files.newBufferedReader(defaults, StandardCharsets.UTF_8)) {
-            JsonElement root = JsonParser.parseReader(reader);
-            if (root == null || !root.isJsonObject()) {
-                throw new IOException("Default rule file is not a JSON object: " + defaults);
-            }
-            document = root.getAsJsonObject();
-        } catch (RuntimeException exception) {
-            throw new IOException("Could not parse default rule file " + defaults, exception);
+        JsonObject document = readRuleDocument(defaults, defaults.toString());
+        JsonObject bundled = readBundledDefaultRules();
+        JsonArray rules = getRulesArray(document, defaults.toString());
+        JsonArray bundledRules = getRulesArray(bundled, "bundled defaults");
+
+        List<String> addedRuleIds = new ArrayList<>();
+        for (JsonElement bundledRule : bundledRules) {
+            if (!bundledRule.isJsonObject()) continue;
+            JsonObject bundledRuleObject = bundledRule.getAsJsonObject();
+            if (!bundledRuleObject.has("id") || !bundledRuleObject.get("id").isJsonPrimitive()) continue;
+            String ruleId = bundledRuleObject.get("id").getAsString();
+            if (containsRuleId(rules, ruleId)) continue;
+            rules.add(bundledRule);
+            addedRuleIds.add(ruleId);
         }
 
-        JsonElement rulesElement = document.get("rules");
-        if (rulesElement == null || !rulesElement.isJsonArray()) {
-            throw new IOException("Default rule file has no rules array: " + defaults);
+        JsonObject bundledBudget = getPlanningBudgetObject(bundled, "bundled defaults");
+        JsonElement bundledDynamicCandidateLimit = bundledBudget.get("maxDynamicCandidatesForCost");
+        if (bundledDynamicCandidateLimit == null) {
+            throw new IOException("Bundled defaults have no maxDynamicCandidatesForCost");
         }
-        JsonArray rules = rulesElement.getAsJsonArray();
-        for (JsonElement ruleElement : rules) {
-            if (ruleElement.isJsonObject() && ruleElement.getAsJsonObject().has("id") &&
-                    DISTILLATION_TOWER_DEFAULT_RULE.equals(ruleElement.getAsJsonObject().get("id").getAsString())) {
-                return;
-            }
+        JsonObject budget = getOrCreatePlanningBudget(document, defaults.toString());
+        JsonElement currentDynamicCandidateLimit = budget.get("maxDynamicCandidatesForCost");
+        boolean upgradedLegacyDynamicCandidateLimit = currentDynamicCandidateLimit == null ||
+                isLegacyDynamicCandidateLimit(currentDynamicCandidateLimit);
+        if (upgradedLegacyDynamicCandidateLimit) {
+            budget.add("maxDynamicCandidatesForCost", bundledDynamicCandidateLimit);
         }
 
-        JsonObject rule = new JsonObject();
-        rule.addProperty("id", DISTILLATION_TOWER_DEFAULT_RULE);
-        rule.addProperty("priority", 10);
-        JsonObject when = new JsonObject();
-        when.addProperty("recipeMap", "distillation_tower");
-        rule.add("when", when);
-        JsonArray effects = new JsonArray();
-        JsonObject deny = new JsonObject();
-        deny.addProperty("deny", "RECIPE_MAP_DISABLED");
-        effects.add(deny);
-        rule.add("effects", effects);
-        rules.add(rule);
-
+        if (addedRuleIds.isEmpty() && !upgradedLegacyDynamicCandidateLimit) return;
         try (Writer writer = Files.newBufferedWriter(defaults, StandardCharsets.UTF_8,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             RULE_FILE_GSON.toJson(document, writer);
             writer.write(System.lineSeparator());
         }
-        ApplyGrayMod.LOGGER.info("Migrated RecipeMap pattern default rules at {} with {}", defaults,
-                DISTILLATION_TOWER_DEFAULT_RULE);
+        ApplyGrayMod.LOGGER.info("Migrated RecipeMap pattern defaults at {}: addedRules={}, " +
+                        "maxDynamicCandidatesForCost={}.",
+                defaults, addedRuleIds, bundledDynamicCandidateLimit.getAsInt());
+    }
+
+    private static JsonObject readBundledDefaultRules() throws IOException {
+        try (InputStream input = RecipePatternRules.class.getResourceAsStream(DEFAULTS_RESOURCE)) {
+            if (input == null) throw new IOException("Missing bundled rule resource " + DEFAULTS_RESOURCE);
+            try (Reader reader = new InputStreamReader(input, StandardCharsets.UTF_8)) {
+                JsonElement root = JsonParser.parseReader(reader);
+                if (root == null || !root.isJsonObject()) {
+                    throw new IOException("Bundled default rules are not a JSON object");
+                }
+                return root.getAsJsonObject();
+            }
+        } catch (RuntimeException exception) {
+            throw new IOException("Could not parse bundled RecipeMap pattern defaults", exception);
+        }
+    }
+
+    private static JsonObject readRuleDocument(Path source, String description) throws IOException {
+        try (Reader reader = Files.newBufferedReader(source, StandardCharsets.UTF_8)) {
+            JsonElement root = JsonParser.parseReader(reader);
+            if (root == null || !root.isJsonObject()) {
+                throw new IOException("Default rule file is not a JSON object: " + description);
+            }
+            return root.getAsJsonObject();
+        } catch (RuntimeException exception) {
+            throw new IOException("Could not parse default rule file " + description, exception);
+        }
+    }
+
+    private static JsonArray getRulesArray(JsonObject document, String description) throws IOException {
+        JsonElement rulesElement = document.get("rules");
+        if (rulesElement == null || !rulesElement.isJsonArray()) {
+            throw new IOException("Default rule file has no rules array: " + description);
+        }
+        return rulesElement.getAsJsonArray();
+    }
+
+    private static JsonObject getPlanningBudgetObject(JsonObject document, String description) throws IOException {
+        JsonElement planningBudget = document.get("planningBudget");
+        if (planningBudget == null || !planningBudget.isJsonObject()) {
+            throw new IOException("Default rule file has no planningBudget object: " + description);
+        }
+        return planningBudget.getAsJsonObject();
+    }
+
+    private static JsonObject getOrCreatePlanningBudget(JsonObject document, String description) throws IOException {
+        JsonElement planningBudget = document.get("planningBudget");
+        if (planningBudget == null) {
+            JsonObject created = new JsonObject();
+            document.add("planningBudget", created);
+            return created;
+        }
+        if (!planningBudget.isJsonObject()) {
+            throw new IOException("Default rule file has an invalid planningBudget: " + description);
+        }
+        return planningBudget.getAsJsonObject();
+    }
+
+    private static boolean containsRuleId(JsonArray rules, String ruleId) {
+        for (JsonElement ruleElement : rules) {
+            if (!ruleElement.isJsonObject()) continue;
+            JsonElement existingId = ruleElement.getAsJsonObject().get("id");
+            if (existingId != null && existingId.isJsonPrimitive() && ruleId.equals(existingId.getAsString())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isLegacyDynamicCandidateLimit(JsonElement value) {
+        return value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() &&
+                "2".equals(value.getAsString());
     }
 
     private static String getDirectoryState(Path directory) throws IOException {

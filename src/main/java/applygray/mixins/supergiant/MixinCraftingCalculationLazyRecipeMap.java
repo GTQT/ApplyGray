@@ -18,6 +18,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
+import java.util.Collection;
+import java.util.Map;
 
 /** Removes lazy RecipeMap details selected by a recursion that cannot produce its requested key positively. */
 @Mixin(value = CraftingCalculation.class, remap = false)
@@ -29,9 +31,25 @@ public abstract class MixinCraftingCalculationLazyRecipeMap {
     @Shadow @Final
     private List<CraftingTreeProcess> processStack;
 
+    @Shadow @Final
+    private Map<AEKey, Collection<IPatternDetails>> patternCache;
+
+    @Inject(method = "<init>", at = @At("HEAD"))
+    private void applygray$beginLazyRecipeMapConstruction(CallbackInfo ci) {
+        DynamicRecipePatternRegistry.beginCraftingCalculationConstruction();
+    }
+
+    @Inject(method = "<init>", at = @At("RETURN"))
+    private void applygray$endLazyRecipeMapConstruction(CallbackInfo ci) {
+        DynamicRecipePatternRegistry.endCraftingCalculationConstruction();
+    }
+
     @Inject(method = "run", at = @At("HEAD"))
     private void applygray$enterLazyRecipeMapCalculation(CallbackInfoReturnable<ICraftingPlan> cir) {
         DynamicRecipePatternRegistry.enterCraftingCalculation((CraftingCalculation) (Object) this);
+        // The constructor probes the root output before this worker context exists. Re-query it after the rebuild
+        // context and active RecipeMap providers are available.
+        patternCache.clear();
     }
 
     @Inject(method = "finish", at = @At("HEAD"))

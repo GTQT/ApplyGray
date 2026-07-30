@@ -4,7 +4,7 @@
     "priority": 0,
     "maxRecipesPerTarget": 512,
     "maxCandidatesPerTarget": 8,
-    "maxDynamicCandidatesForCost": 2,
+    "maxDynamicCandidatesForCost": 8,
     "maxRefinedCandidates": 2,
     "maxNormalPatternsPerTarget": 32,
     "maxInputAlternatives": 16,
@@ -67,6 +67,15 @@
       ]
     },
     {
+      "id": "core.polymer-dust-fallback",
+      "priority": 20,
+      "when": { "fact": { "key": "usesPolymerDustInput", "equals": true } },
+      "effects": [
+        { "tag": "route.polymer_dust" },
+        { "penalize": { "routePriority": 750 } }
+      ]
+    },
+    {
       "id": "core.ingot-route",
       "priority": 10,
       "when": { "fact": { "key": "usesIngotInput", "equals": true } },
@@ -95,6 +104,20 @@
       "effects": [
         { "tag": "route.material_form_change" },
         { "penalize": { "routePriority": 100 } }
+      ]
+    },
+    {
+      "id": "core.cutter-form-change",
+      "priority": 20,
+      "when": {
+        "all": [
+          { "recipeMap": "cutter" },
+          { "fact": { "key": "hasTargetMaterialInput", "equals": true } }
+        ]
+      },
+      "effects": [
+        { "tag": "route.material_form_change" },
+        { "penalize": { "routePriority": 700 } }
       ]
     },
     {
