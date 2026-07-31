@@ -1,5 +1,10 @@
 package applygray.integration.ae2;
 
+import applygray.integration.ae2.recipe.NonConsumableTokenLayout;
+import applygray.integration.ae2.recipe.RecipeBinding;
+import applygray.integration.ae2.rules.CyclePolicy;
+import applygray.integration.ae2.rules.PlanningMode;
+
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.crafting.PatternDetailsHelper;
 import ae2.api.stacks.AEItemKey;
@@ -31,15 +36,29 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
     private final long rawMaterialCost;
     private final int stepCost;
     private final DynamicRecipePatternRegistry.CandidateRoutePriority routePriority;
+    private final long ruleRoutePriority;
+    private final CyclePolicy cyclePolicy;
+    private final long cycleRiskPenalty;
+    private final int maxPatternsForTarget;
+    private final PlanningMode planningMode;
+    private final String pinGroup;
+    private final List<GenericStack> hiddenActualOutputs;
+    private final RecipeBinding recipeBinding;
+    private final NonConsumableTokenLayout tokenLayout;
+    private final List<String> explanation;
     private final AEItemKey definition;
 
     DynamicRecipePatternDetails(String recipeKey, String recipeMapName,
                                 List<GenericStack> inputs, List<List<GenericStack>> alternatives,
                                 List<GenericStack> outputs, int circuitConfiguration,
                                 long rawMaterialCost, int stepCost,
-                                DynamicRecipePatternRegistry.CandidateRoutePriority routePriority) {
-        if (inputs.isEmpty() || outputs.isEmpty()) {
-            throw new IllegalArgumentException("Dynamic RecipeMap pattern requires inputs and outputs");
+                                DynamicRecipePatternRegistry.CandidateRoutePriority routePriority,
+                                long ruleRoutePriority, CyclePolicy cyclePolicy, long cycleRiskPenalty,
+                                int maxPatternsForTarget, PlanningMode planningMode, String pinGroup,
+                                List<GenericStack> hiddenActualOutputs, RecipeBinding recipeBinding,
+                                NonConsumableTokenLayout tokenLayout, List<String> explanation) {
+        if (inputs.isEmpty() || outputs.size() != 1 || recipeBinding == null) {
+            throw new IllegalArgumentException("Dynamic RecipeMap pattern requires inputs, one output, and a binding");
         }
 
         this.recipeKey = recipeKey;
@@ -51,6 +70,16 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         this.stepCost = stepCost;
         this.routePriority = routePriority == null ?
                 DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL : routePriority;
+        this.ruleRoutePriority = ruleRoutePriority;
+        this.cyclePolicy = cyclePolicy == null ? CyclePolicy.BREAK_AT_EXTERNAL_SEED : cyclePolicy;
+        this.cycleRiskPenalty = Math.max(0, cycleRiskPenalty);
+        this.maxPatternsForTarget = Math.max(1, maxPatternsForTarget);
+        this.planningMode = planningMode == null ? PlanningMode.STOCK_FIRST : planningMode;
+        this.pinGroup = pinGroup == null ? "" : pinGroup;
+        this.hiddenActualOutputs = Collections.unmodifiableList(new ArrayList<>(hiddenActualOutputs));
+        this.recipeBinding = recipeBinding;
+        this.tokenLayout = tokenLayout == null ? NonConsumableTokenLayout.EMPTY : tokenLayout;
+        this.explanation = Collections.unmodifiableList(new ArrayList<>(explanation));
 
         ItemStack encoded = PatternDetailsHelper.encodeProcessingPattern(
                 primaryInputs(inputs), this.outputs, recipeMapName);
@@ -84,14 +113,66 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         return routePriority;
     }
 
+    public long getRuleRoutePriority() {
+        return ruleRoutePriority;
+    }
+
+    public CyclePolicy getCyclePolicy() {
+        return cyclePolicy;
+    }
+
+    public long getCycleRiskPenalty() {
+        return cycleRiskPenalty;
+    }
+
+    public int getMaxPatternsForTarget() {
+        return maxPatternsForTarget;
+    }
+
+    public PlanningMode getPlanningMode() {
+        return planningMode;
+    }
+
+    public String getPinGroup() {
+        return pinGroup;
+    }
+
+    public List<GenericStack> getHiddenActualOutputs() {
+        return hiddenActualOutputs;
+    }
+
+    public RecipeBinding getRecipeBinding() {
+        return recipeBinding;
+    }
+
+    public NonConsumableTokenLayout getTokenLayout() {
+        return tokenLayout;
+    }
+
+    public List<String> getExplanation() {
+        return explanation;
+    }
+
     boolean matchesRecipeDefinition(String expectedRecipeMapName, List<GenericStack> expectedPrimaryInputs,
                                     List<List<GenericStack>> expectedAlternatives,
                                     List<GenericStack> expectedOutputs, int expectedCircuitConfiguration,
                                     long expectedRawMaterialCost, int expectedStepCost,
-                                    DynamicRecipePatternRegistry.CandidateRoutePriority expectedRoutePriority) {
+                                    DynamicRecipePatternRegistry.CandidateRoutePriority expectedRoutePriority,
+                                    long expectedRuleRoutePriority, CyclePolicy expectedCyclePolicy,
+                                    long expectedCycleRiskPenalty, int expectedMaxPatternsForTarget,
+                                    PlanningMode expectedPlanningMode, String expectedPinGroup,
+                                    List<GenericStack> expectedHiddenActualOutputs,
+                                    RecipeBinding expectedBinding,
+                                    NonConsumableTokenLayout expectedTokenLayout) {
         if (!recipeMapName.equals(expectedRecipeMapName) || !outputs.equals(expectedOutputs) ||
                 circuitConfiguration != expectedCircuitConfiguration || rawMaterialCost != expectedRawMaterialCost ||
-                stepCost != expectedStepCost || routePriority != expectedRoutePriority) {
+                stepCost != expectedStepCost || routePriority != expectedRoutePriority ||
+                ruleRoutePriority != expectedRuleRoutePriority || cyclePolicy != expectedCyclePolicy ||
+                cycleRiskPenalty != expectedCycleRiskPenalty ||
+                maxPatternsForTarget != expectedMaxPatternsForTarget ||
+                planningMode != expectedPlanningMode || !pinGroup.equals(expectedPinGroup == null ? "" : expectedPinGroup) ||
+                !hiddenActualOutputs.equals(expectedHiddenActualOutputs) || !recipeBinding.equals(expectedBinding) ||
+                !tokenLayout.equals(expectedTokenLayout)) {
             return false;
         }
 
@@ -176,8 +257,25 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         data.setLong("RawCost", rawMaterialCost);
         data.setInteger("StepCost", stepCost);
         data.setInteger("RoutePriority", routePriority.ordinal());
+        data.setLong("RuleRoutePriority", ruleRoutePriority);
+        data.setString("CyclePolicy", cyclePolicy.name());
+        data.setLong("CycleRiskPenalty", cycleRiskPenalty);
+        data.setInteger("MaxPatterns", maxPatternsForTarget);
+        data.setString("PlanningMode", planningMode.name());
+        data.setString("PinGroup", pinGroup);
         data.setTag("Inputs", GenericStack.writeList(primaryInputs()));
         data.setTag("Outputs", GenericStack.writeList(outputs));
+        data.setTag("HiddenOutputs", GenericStack.writeList(hiddenActualOutputs));
+        data.setTag("Binding", recipeBinding.writeToNBT());
+        data.setTag("TokenLayout", tokenLayout.writeToNBT());
+
+        NBTTagList explanationList = new NBTTagList();
+        for (String entry : explanation) {
+            NBTTagCompound explanationData = new NBTTagCompound();
+            explanationData.setString("Value", entry);
+            explanationList.appendTag(explanationData);
+        }
+        data.setTag("Explanation", explanationList);
 
         NBTTagList alternativeList = new NBTTagList();
         for (Input input : inputs) {
@@ -191,15 +289,22 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
 
     @Nullable
     public static DynamicRecipePatternDetails readFromNBT(NBTTagCompound data) {
-        if (!data.hasKey("RecipeKey", 8) || !data.hasKey("RecipeMap", 8)) {
+        if (!data.hasKey("RecipeKey", 8) || !data.hasKey("RecipeMap", 8) ||
+                !data.hasKey("Binding", Constants.NBT.TAG_COMPOUND) ||
+                !data.hasKey("TokenLayout", Constants.NBT.TAG_COMPOUND)) {
             return null;
         }
 
         List<GenericStack> inputs = nonNull(GenericStack.readList(data.getTagList("Inputs", 10)));
         List<GenericStack> outputs = nonNull(GenericStack.readList(data.getTagList("Outputs", 10)));
-        if (inputs.isEmpty() || outputs.isEmpty()) {
+        if (inputs.isEmpty() || outputs.size() != 1) {
             return null;
         }
+
+        RecipeBinding binding = RecipeBinding.readFromNBT(data.getCompoundTag("Binding"));
+        NonConsumableTokenLayout tokenLayout = NonConsumableTokenLayout.readFromNBT(
+                data.getCompoundTag("TokenLayout"));
+        if (binding == null || tokenLayout == null) return null;
 
         List<List<GenericStack>> alternatives = new ArrayList<>();
         NBTTagList alternativeList = data.getTagList("Alternatives", 10);
@@ -213,9 +318,18 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
             }
         }
 
+        List<GenericStack> hiddenOutputs = nonNull(GenericStack.readList(data.getTagList("HiddenOutputs", 10)));
+        List<String> explanation = new ArrayList<>();
+        NBTTagList explanationList = data.getTagList("Explanation", Constants.NBT.TAG_COMPOUND);
+        for (int i = 0; i < explanationList.tagCount(); i++) {
+            explanation.add(explanationList.getCompoundTagAt(i).getString("Value"));
+        }
         return new DynamicRecipePatternDetails(data.getString("RecipeKey"), data.getString("RecipeMap"),
                 inputs, alternatives, outputs, data.getInteger("Circuit"), data.getLong("RawCost"),
-                data.getInteger("StepCost"), readRoutePriority(data));
+                data.getInteger("StepCost"), readRoutePriority(data), data.getLong("RuleRoutePriority"),
+                readCyclePolicy(data), data.getLong("CycleRiskPenalty"), Math.max(1, data.getInteger("MaxPatterns")),
+                readPlanningMode(data), data.getString("PinGroup"),
+                hiddenOutputs, binding, tokenLayout, explanation);
     }
 
     private static DynamicRecipePatternRegistry.CandidateRoutePriority readRoutePriority(NBTTagCompound data) {
@@ -227,6 +341,26 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
                 DynamicRecipePatternRegistry.CandidateRoutePriority.values();
         return ordinal >= 0 && ordinal < priorities.length ? priorities[ordinal] :
                 DynamicRecipePatternRegistry.CandidateRoutePriority.GENERAL;
+    }
+
+    private static CyclePolicy readCyclePolicy(NBTTagCompound data) {
+        if (!data.hasKey("CyclePolicy", Constants.NBT.TAG_STRING)) {
+            return CyclePolicy.BREAK_AT_EXTERNAL_SEED;
+        }
+        try {
+            return CyclePolicy.valueOf(data.getString("CyclePolicy"));
+        } catch (IllegalArgumentException ignored) {
+            return CyclePolicy.BREAK_AT_EXTERNAL_SEED;
+        }
+    }
+
+    private static PlanningMode readPlanningMode(NBTTagCompound data) {
+        if (!data.hasKey("PlanningMode", Constants.NBT.TAG_STRING)) return PlanningMode.STOCK_FIRST;
+        try {
+            return PlanningMode.valueOf(data.getString("PlanningMode"));
+        } catch (IllegalArgumentException ignored) {
+            return PlanningMode.STOCK_FIRST;
+        }
     }
 
     @Override

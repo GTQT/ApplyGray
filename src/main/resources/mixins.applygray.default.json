@@ -9,7 +9,9 @@
     "gregtech.MixinBlockMachine",
     "gregtech.MixinIGTTool",
     "gregtech.MixinMetaTileEntityHolder",
-    "gregtech.MixinMetaTileEntityHull"
+    "gregtech.MixinMetaTileEntityHull",
+    "gregtech.MixinMultiblockRecipeLogicRecipeBinding",
+    "gregtech.MixinRecipeMapBindingInvalidation"
   ],
   "client": [
     "supergiant.MixinGuiScreenButtonListAccessor"

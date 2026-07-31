@@ -35,7 +35,9 @@ import java.util.concurrent.Future;
 public abstract class MixinCraftingGridCacheLazyRecipeMap {
 
     private static final int MAX_RECURSIVE_CYCLE_RECOVERY_ATTEMPTS = 16;
-    private static final int MAX_DYNAMIC_PATTERNS_PER_TARGET = 1;
+    // GridState and the active rule package already apply the per-target exposure cap. Keep this as a hard ceiling
+    // only, so a rule can deliberately expose a bounded Pareto frontier instead of being silently reduced to one.
+    private static final int MAX_DYNAMIC_PATTERNS_PER_TARGET = 8;
 
     @Shadow @Final
     private IGrid grid;

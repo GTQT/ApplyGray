@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "planningBudget": {
+    "priority": 0,
+    "maxRecipesPerTarget": 512,
+    "maxCandidatesPerTarget": 8,
+    "maxDynamicCandidatesForCost": 2,
+    "maxRefinedCandidates": 2,
+    "maxNormalPatternsPerTarget": 32,
+    "maxInputAlternatives": 16,
+    "maxRouteDepth": 16,
+    "maxRouteExpansionsPerTarget": 64,
+    "maxRouteExpansionsPerCalculation": 512,
+    "maxRouteCalculationMillis": 2000,
+    "maxSccNodes": 128,
+    "maxSccEdges": 512,
+    "maxSccAnalysisMillis": 250,
+    "maxPersistedPatternsPerProvider": 64,
+    "onExhaustion": "DEGRADE"
+  },
+  "rules": [
+    {
+      "id": "core.default-output-policy",
+      "priority": 0,
+      "effects": [
+        { "outputPolicy": "DETERMINISTIC_ONLY" },
+        { "cyclePolicy": "BREAK_AT_EXTERNAL_SEED" }
+      ]
+    },
+    {
+      "id": "core.distillation-tower-disabled",
+      "priority": 10,
+      "when": { "recipeMap": "distillation_tower" },
+      "effects": [
+        { "deny": "RECIPE_MAP_DISABLED" }
+      ]
+    },
+    {
+      "id": "core.chemical-synthesis",
+      "priority": 10,
+      "when": {
+        "all": [
+          { "fact": { "key": "targetIsFluid", "equals": true } },
+          { "fact": { "key": "targetIsPolymer", "equals": true } },
+          { "fact": { "key": "hasTargetMaterialInput", "equals": false } },
+          { "fact": { "key": "hasNonTargetMaterialInput", "equals": true } },
+          { "recipeMap": ["chemical_reactor", "large_chemical_reactor", "polymerization_tank"] }
+        ]
+      },
+      "effects": [
+        { "tag": "route.chemical_synthesis" },
+        { "score": { "routePriority": 800 } }
+      ]
+    },
+    {
+      "id": "core.dust-or-fluid-route",
+      "priority": 10,
+      "when": {
+        "any": [
+          { "fact": { "key": "usesDustInput", "equals": true } },
+          { "fact": { "key": "usesPriorityFluidInput", "equals": true } }
+        ]
+      },
+      "effects": [
+        { "tag": "route.dust_or_fluid" },
+        { "score": { "routePriority": 600 } }
+      ]
+    },
+    {
+      "id": "core.ingot-route",
+      "priority": 10,
+      "when": { "fact": { "key": "usesIngotInput", "equals": true } },
+      "effects": [
+        { "tag": "route.ingot" },
+        { "score": { "routePriority": 500 } }
+      ]
+    },
+    {
+      "id": "core.general-route",
+      "priority": 10,
+      "effects": [
+        { "tag": "route.general" },
+        { "score": { "routePriority": 400 } }
+      ]
+    },
+    {
+      "id": "core.form-change-route",
+      "priority": 10,
+      "when": {
+        "all": [
+          { "fact": { "key": "hasMaterialInput", "equals": true } },
+          { "fact": { "key": "onlyTargetMaterialInputs", "equals": true } }
+        ]
+      },
+      "effects": [
+        { "tag": "route.material_form_change" },
+        { "penalize": { "routePriority": 100 } }
+      ]
+    },
+    {
+      "id": "core.recycling-route",
+      "priority": 10,
+      "when": { "fact": { "key": "recycling", "equals": true } },
+      "effects": [
+        { "tag": "route.recycling" },
+        { "cyclePolicy": "RECYCLE_ONLY" },
+        { "penalize": { "routePriority": 250, "cycleRisk": 500 } }
+      ]
+    }
+  ]
+}

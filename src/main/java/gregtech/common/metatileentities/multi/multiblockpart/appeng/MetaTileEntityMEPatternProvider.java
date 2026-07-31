@@ -1,14 +1,17 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.ApplyGrayMod;
 import applygray.api.mui.ApplyGrayGuiTextures;
 import applygray.client.renderer.texture.ApplyGrayTextures;
+import applygray.integration.ae2.IRecipeBoundInput;
+import applygray.integration.ae2.recipe.NonConsumableTokenLayout;
+import applygray.integration.ae2.recipe.RecipeBinding;
 
 import gregtech.api.GTValues;
 import gregtech.api.capability.DualHandler;
 import gregtech.api.capability.IMultipleNotifiableHandler;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.INotifiableHandler;
-import gregtech.api.capability.IRecipeMapBoundInput;
 import gregtech.api.capability.impl.FluidTankList;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.capability.impl.ItemHandlerList;
@@ -133,6 +136,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     private static final int MATERIAL_SLOT_CAPACITY = Integer.MAX_VALUE;
     // 缓冲区配方消耗后延迟释放的 tick 数（防止不同配方抢占同一缓冲区）
     private static final int DEFAULT_UNLOCK_DELAY = 10;
+    private static final int BUFFER_POOL_NBT_VERSION = 3;
 
     public MetaTileEntityMEPatternProvider(ResourceLocation metaTileEntityId, int tier) {
         super(metaTileEntityId, tier, false);
@@ -274,12 +278,15 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 inputHolder[i].add(stack.what(), stack.amount());
             }
         }
-        return extractSignature(inputHolder, patternKey, recipeMapName, null);
+        return extractSignature(inputHolder, patternKey, recipeMapName, null, null,
+                NonConsumableTokenLayout.EMPTY);
     }
 
     @Nullable
     private BufferSignature extractSignature(KeyCounter[] inputHolder, @Nullable String patternKey,
-                                             @Nullable String recipeMapName, @Nullable ItemStack extraCircuit) {
+                                             @Nullable String recipeMapName, @Nullable ItemStack extraCircuit,
+                                             @Nullable RecipeBinding recipeBinding,
+                                             NonConsumableTokenLayout tokenLayout) {
         if (inputHolder == null) {
             return null;
         }
@@ -306,7 +313,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             }
         }
 
-        return new BufferSignature(signatureInputs, patternKey, recipeMapName);
+        return new BufferSignature(signatureInputs, patternKey, recipeMapName, recipeBinding, tokenLayout);
     }
 
     private static void addItemRequirement(List<ItemStack> itemTypes, ItemStack stack) {
@@ -395,12 +402,38 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
                                    @Nullable String recipeMapName) {
-        return pushToBuffer(inputHolder, patternKey, recipeMapName, null);
+        return pushToBuffer(inputHolder, patternKey, recipeMapName, null, null, NonConsumableTokenLayout.EMPTY);
     }
 
     protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
                                    @Nullable String recipeMapName, @Nullable ItemStack extraCircuit) {
-        BufferSignature signature = extractSignature(inputHolder, patternKey, recipeMapName, extraCircuit);
+        return pushToBuffer(inputHolder, patternKey, recipeMapName, extraCircuit, null,
+                NonConsumableTokenLayout.EMPTY);
+    }
+
+    protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
+                                   @Nullable String recipeMapName, @Nullable ItemStack extraCircuit,
+                                   @Nullable RecipeBinding recipeBinding,
+                                   NonConsumableTokenLayout tokenLayout) {
+        NonConsumableTokenLayout effectiveTokenLayout = tokenLayout == null ?
+                NonConsumableTokenLayout.EMPTY : tokenLayout;
+        List<ItemStack> decodedTokens = recipeBinding == null ? null : effectiveTokenLayout.decode(inputHolder);
+        if (recipeBinding != null && decodedTokens == null) {
+            logPatternPushRejected("non-consumable circuit token layout does not match the bound recipe");
+            return false;
+        }
+        if (decodedTokens != null && extraCircuit != null && !extraCircuit.isEmpty()) {
+            ItemStack wrapped = ProgrammableCircuit.getWrappedItem(extraCircuit).orElse(ItemStack.EMPTY);
+            if (wrapped.isEmpty()) {
+                logPatternPushRejected("bound circuit metadata could not be decoded");
+                return false;
+            }
+            decodedTokens = new ArrayList<>(decodedTokens);
+            wrapped.setCount(1);
+            decodedTokens.add(wrapped);
+        }
+        BufferSignature signature = extractSignature(inputHolder, patternKey, recipeMapName, extraCircuit,
+                recipeBinding, effectiveTokenLayout);
         if (signature == null) {
             logPatternPushRejected("input signature is invalid");
             return false;
@@ -426,8 +459,20 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             logPatternPushRejected("selected pattern buffer cannot accept all inputs");
             return false;
         }
+        if (decodedTokens != null) {
+            if (!buffer.setBoundCircuits(decodedTokens)) {
+                if (allocated) {
+                    buffer.clear();
+                    unregisterBufferFromSignatureMap(buffer, signature);
+                }
+                logPatternPushRejected("bound non-consumable circuit tokens do not fit the virtual circuit slots");
+                return false;
+            }
+        }
         insertKeyCounters(buffer, inputHolder);
-        applyCircuitMetadata(buffer, inputHolder, extraCircuit);
+        if (decodedTokens == null) {
+            applyCircuitMetadata(buffer, inputHolder, extraCircuit);
+        }
 
         // 标记缓冲区已绑定配方
         buffer.setRecipeLocked(true);
@@ -548,6 +593,10 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                               @Nullable String patternKey, @Nullable String recipeMapName) {
         // 第一步：一次性提取签名（避免重复创建对象）
         BufferSignature signature = extractSignature(table, patternKey, recipeMapName);
+        if (signature == null) {
+            logPatternPushRejected("batch input signature is invalid");
+            return new int[]{0};
+        }
 
         // 第二步：一次性查找或分配缓冲区
         PatternBuffer buffer = findOrAllocateBuffer(signature);
@@ -712,6 +761,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             bufferListTag.appendTag(buffer.writeToNBT());
         }
         data.setTag("BufferPool", bufferListTag);
+        data.setInteger("BufferPoolVersion", BUFFER_POOL_NBT_VERSION);
 
         return data;
     }
@@ -736,11 +786,15 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         setShowName(data.getString("showName"));
 
         // 反序列化缓冲区池
-        if (data.hasKey("BufferPool", Constants.NBT.TAG_LIST)) {
+        int persistedBufferVersion = data.getInteger("BufferPoolVersion");
+        if (persistedBufferVersion == BUFFER_POOL_NBT_VERSION &&
+                data.hasKey("BufferPool", Constants.NBT.TAG_LIST)) {
             NBTTagList bufferListTag = data.getTagList("BufferPool", Constants.NBT.TAG_COMPOUND);
             for (int i = 0; i < Math.min(bufferListTag.tagCount(), bufferPool.size()); i++) {
                 bufferPool.get(i).readFromNBT(bufferListTag.getCompoundTagAt(i));
             }
+        } else if (data.hasKey("BufferPool", Constants.NBT.TAG_LIST)) {
+            ApplyGrayMod.LOGGER.info("Discarded incompatible RecipeMap pattern buffer data at {}", getPos());
         }
         // Rebuild signature map after deserialization
         rebuildSignatureMap();
@@ -1402,6 +1456,9 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         private final String patternKey;
         @Nullable
         private final String recipeMapName;
+        @Nullable
+        private final RecipeBinding recipeBinding;
+        private final NonConsumableTokenLayout tokenLayout;
 
         // These views are derived from inputCounters and are never serialized.
         private transient List<ItemStack> itemTypes;
@@ -1410,9 +1467,17 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         public BufferSignature(KeyCounter[] inputCounters, @Nullable String patternKey,
                                @Nullable String recipeMapName) {
+            this(inputCounters, patternKey, recipeMapName, null, NonConsumableTokenLayout.EMPTY);
+        }
+
+        public BufferSignature(KeyCounter[] inputCounters, @Nullable String patternKey,
+                               @Nullable String recipeMapName, @Nullable RecipeBinding recipeBinding,
+                               NonConsumableTokenLayout tokenLayout) {
             this.inputCounters = copyInputCounters(inputCounters);
             this.patternKey = patternKey;
             this.recipeMapName = recipeMapName;
+            this.recipeBinding = recipeBinding;
+            this.tokenLayout = tokenLayout == null ? NonConsumableTokenLayout.EMPTY : tokenLayout;
         }
 
         /**
@@ -1448,6 +1513,15 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             return recipeMapName;
         }
 
+        @Nullable
+        public RecipeBinding getRecipeBinding() {
+            return recipeBinding;
+        }
+
+        public NonConsumableTokenLayout getTokenLayout() {
+            return tokenLayout;
+        }
+
         /**
          * 比较两个签名是否匹配。输入槽位的顺序必须一致，但每个 KeyCounter 内部的遍历顺序不影响结果。
          */
@@ -1455,6 +1529,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             if (other == null) return false;
             if (!Objects.equals(this.patternKey, other.patternKey)) return false;
             if (!Objects.equals(this.recipeMapName, other.recipeMapName)) return false;
+            if (!Objects.equals(this.recipeBinding, other.recipeBinding)) return false;
+            if (!this.tokenLayout.equals(other.tokenLayout)) return false;
             if (this.inputCounters.length != other.inputCounters.length) return false;
 
             for (int i = 0; i < this.inputCounters.length; i++) {
@@ -1481,6 +1557,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             int hash = 1;
             hash = 31 * hash + Objects.hashCode(patternKey);
             hash = 31 * hash + Objects.hashCode(recipeMapName);
+            hash = 31 * hash + Objects.hashCode(recipeBinding);
+            hash = 31 * hash + tokenLayout.hashCode();
             for (KeyCounter counter : inputCounters) {
                 hash = 31 * hash + getCounterHash(counter);
             }
@@ -1500,6 +1578,8 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             tag.setTag("InputCounters", counterList);
             if (patternKey != null) tag.setString("PatternKey", patternKey);
             if (recipeMapName != null) tag.setString("RecipeMap", recipeMapName);
+            if (recipeBinding != null) tag.setTag("RecipeBinding", recipeBinding.writeToNBT());
+            if (!tokenLayout.isEmpty()) tag.setTag("TokenLayout", tokenLayout.writeToNBT());
 
             return tag;
         }
@@ -1519,7 +1599,16 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
             String patternKey = tag.hasKey("PatternKey") ? tag.getString("PatternKey") : null;
             String recipeMapName = tag.hasKey("RecipeMap") ? tag.getString("RecipeMap") : null;
-            return new BufferSignature(inputCounters, patternKey, recipeMapName);
+            RecipeBinding recipeBinding = tag.hasKey("RecipeBinding", Constants.NBT.TAG_COMPOUND) ?
+                    RecipeBinding.readFromNBT(tag.getCompoundTag("RecipeBinding")) : null;
+            NonConsumableTokenLayout tokenLayout = tag.hasKey("TokenLayout", Constants.NBT.TAG_COMPOUND) ?
+                    NonConsumableTokenLayout.readFromNBT(tag.getCompoundTag("TokenLayout")) :
+                    NonConsumableTokenLayout.EMPTY;
+            if (tag.hasKey("RecipeBinding", Constants.NBT.TAG_COMPOUND) && recipeBinding == null ||
+                    tag.hasKey("TokenLayout", Constants.NBT.TAG_COMPOUND) && tokenLayout == null) {
+                return null;
+            }
+            return new BufferSignature(inputCounters, patternKey, recipeMapName, recipeBinding, tokenLayout);
         }
 
         private static KeyCounter[] copyInputCounters(KeyCounter[] source) {
@@ -1828,6 +1917,23 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             }
         }
 
+        /** Writes a positional NC-token decode without deduplicating equal catalysts. */
+        public boolean setBoundCircuits(List<ItemStack> decodedTokens) {
+            if (decodedTokens == null || decodedTokens.size() > circuitSlot.getSlots()) return false;
+            for (ItemStack token : decodedTokens) {
+                if (token == null || token.isEmpty()) return false;
+            }
+            clearCircuit();
+            for (int index = 0; index < decodedTokens.size(); index++) {
+                ItemStack token = decodedTokens.get(index);
+                ItemStack copy = token.copy();
+                copy.setCount(1);
+                circuitSlot.setStackInSlot(index, copy);
+            }
+            isolatedHandler.onContentsChanged();
+            return true;
+        }
+
         /**
          * 清空缓冲区的所有电路槽。
          * 用于空白可编程电路重置虚拟电路槽。
@@ -1856,6 +1962,18 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         @Nullable
         public String getBoundRecipeMapName() {
             return signature == null ? null : signature.getRecipeMapName();
+        }
+
+        @Nullable
+        public RecipeBinding getRecipeBinding() {
+            return signature == null ? null : signature.getRecipeBinding();
+        }
+
+        public boolean isRecipeBindingCurrent() {
+            RecipeBinding binding = getRecipeBinding();
+            if (binding == null) return true;
+            return owner instanceof MetaTileEntityMERecipeMapPatternProvider &&
+                    ((MetaTileEntityMERecipeMapPatternProvider) owner).isRecipeBindingCurrent(binding);
         }
 
         public void setSignature(BufferSignature signature) {
@@ -2138,7 +2256,12 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         public void readFromNBT(NBTTagCompound tag) {
             boolean hasSignature = tag.hasKey("Signature", Constants.NBT.TAG_COMPOUND);
             if (hasSignature) {
-                setSignature(BufferSignature.readFromNBT(tag.getCompoundTag("Signature")));
+                BufferSignature loadedSignature = BufferSignature.readFromNBT(tag.getCompoundTag("Signature"));
+                if (loadedSignature == null) {
+                    clear();
+                    return;
+                }
+                setSignature(loadedSignature);
             } else {
                 setSignature(null);
             }
@@ -2228,7 +2351,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         private static class IsolatedPatternBufferHandler implements IItemHandlerModifiable, IMultipleTankHandler,
                                                                     INotifiableHandler, IMultipleNotifiableHandler,
-                                                                    IRecipeMapBoundInput {
+                                                                    IRecipeBoundInput {
 
             private final PatternBuffer buffer;
             private final List<MetaTileEntity> notifiableEntities = new ArrayList<>();
@@ -2240,6 +2363,16 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             @Override
             public @Nullable String getBoundRecipeMapName() {
                 return buffer.getBoundRecipeMapName();
+            }
+
+            @Override
+            public @Nullable RecipeBinding getRecipeBinding() {
+                return buffer.getRecipeBinding();
+            }
+
+            @Override
+            public boolean isRecipeBindingCurrent() {
+                return buffer.isRecipeBindingCurrent();
             }
 
             @Override

@@ -1,6 +1,20 @@
 package applygray.integration.ae2;
 
 import applygray.ApplyGrayMod;
+import applygray.integration.ae2.recipe.MachineCapabilityProfile;
+import applygray.integration.ae2.recipe.NonConsumableTokenLayout;
+import applygray.integration.ae2.recipe.NormalizedRecipe;
+import applygray.integration.ae2.recipe.RecipeFingerprint;
+import applygray.integration.ae2.recipe.RecipeBindingResolver;
+import applygray.integration.ae2.recipe.TargetedRecipe;
+import applygray.integration.ae2.rules.BudgetExhaustionPolicy;
+import applygray.integration.ae2.rules.CyclePolicy;
+import applygray.integration.ae2.rules.OutputPolicy;
+import applygray.integration.ae2.rules.PlanningBudget;
+import applygray.integration.ae2.rules.PlanningMode;
+import applygray.integration.ae2.rules.RecipePatternRules;
+import applygray.integration.ae2.rules.RuleContext;
+import applygray.integration.ae2.rules.RuleDecision;
 import applygray.mixins.supergiant.InvokerCraftingCalculation;
 
 import gregtech.api.GTValues;
@@ -11,6 +25,8 @@ import gregtech.api.unification.material.Material;
 import gregtech.api.unification.material.properties.PropertyKey;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
+import gregtech.api.recipes.chance.output.impl.ChancedFluidOutput;
+import gregtech.api.recipes.chance.output.impl.ChancedItemOutput;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.api.unification.stack.MaterialStack;
@@ -60,35 +76,13 @@ import java.util.function.Function;
 public final class DynamicRecipePatternRegistry {
 
     private static final int STANDARD_FLUID_MILLIBUCKETS_PER_UNIT = 1000;
-    /**
-     * A RecipeMap can have hundreds of valid variants for one common output. Keep only this many lightweight
-     * candidates for scoring, then materialize a single winner for AE2.
-     */
-    private static final int MAX_ROUTE_CANDIDATES_PER_TARGET = 8;
-    private static final int MAX_MATERIALIZED_PATTERNS_PER_TARGET = 1;
-    /**
-     * Limits the work for a pathological common output even before candidates have been encoded. The output index is
-     * ordered by RecipeMap registration order, so this is deliberately much larger than the exposed pattern limit.
-     */
-    private static final int MAX_RECIPES_PER_TARGET = 512;
-    private static final int MAX_ROUTE_COST_DEPTH = 16;
-    private static final int MAX_ROUTE_COST_EXPANSIONS = 64;
-    private static final int MAX_ROUTE_COST_CALCULATION_EXPANSIONS = 512;
-    private static final long MAX_ROUTE_COST_CALCULATION_NANOS = 2_000_000_000L;
-    private static final int MAX_REFINED_ROUTE_CANDIDATES = 2;
-    /** Bounds generic dynamic-route alternatives during recursive route costing. */
-    private static final int MAX_ROUTE_COST_DYNAMIC_CANDIDATES = 2;
-    private static final int MAX_NORMAL_PATTERNS_PER_TARGET = 32;
-    private static final int MAX_ROUTE_COST_INPUT_ALTERNATIVES = 16;
     private static final long BOUNDED_ROUTE_COST_PENALTY = Long.MAX_VALUE / 4;
     private static final String GENERAL_CIRCUIT_TRANSLATION_KEY_PREFIX = "metaitem.general_circuit.";
-    private static final String DISTILLATION_TOWER_RECIPE_MAP = "distillation_tower";
-    /** Only polymer synthesis in these RecipeMaps may outrank a powder-to-fluid recycling route. */
-    private static final Set<String> CHEMICAL_PRODUCT_SYNTHESIS_RECIPE_MAPS = Set.of(
-            "chemical_reactor", "large_chemical_reactor", "polymerization_tank");
-
     private static final Map<IGrid, GridState> GRIDS = new ConcurrentHashMap<>();
     private static final Map<String, IGrid> PROVIDER_GRIDS = new ConcurrentHashMap<>();
+    private static final int MAX_PROVIDER_DIAGNOSTIC_EVENTS = 24;
+    private static final Map<String, ProviderDiagnosticLog> PROVIDER_DIAGNOSTICS = new ConcurrentHashMap<>();
+    private static final RecipePatternPlanningMetrics PLANNING_METRICS = new RecipePatternPlanningMetrics();
     /** 
      * Cooldown: skip refreshProvider if called more often than this (500 ms). 
      * Prevents rapid onMainNodeStateChanged + update() cycles from doing duplicate work.
@@ -231,10 +225,19 @@ public final class DynamicRecipePatternRegistry {
     }
 
     public static void refreshProvider(MetaTileEntityMERecipeMapPatternProvider provider) {
+        refreshProvider(provider, false);
+    }
+
+    /** Replaces a provider snapshot immediately after an administrator changes its planning configuration. */
+    public static void refreshProviderImmediately(MetaTileEntityMERecipeMapPatternProvider provider) {
+        refreshProvider(provider, true);
+    }
+
+    private static void refreshProvider(MetaTileEntityMERecipeMapPatternProvider provider, boolean force) {
         String providerId = provider.getDynamicProviderId();
         long now = System.nanoTime();
         Long lastRefresh = LAST_REFRESH_NANOS.get(providerId);
-        if (lastRefresh != null && (now - lastRefresh) < REFRESH_DEBOUNCE_NANOS) {
+        if (!force && lastRefresh != null && (now - lastRefresh) < REFRESH_DEBOUNCE_NANOS) {
             return;
         }
         LAST_REFRESH_NANOS.put(providerId, now);
@@ -261,6 +264,7 @@ public final class DynamicRecipePatternRegistry {
 
     public static void unregister(MetaTileEntityMERecipeMapPatternProvider provider) {
         String providerId = provider.getDynamicProviderId();
+        PROVIDER_DIAGNOSTICS.remove(providerId);
         IGrid grid = PROVIDER_GRIDS.remove(providerId);
         if (grid == null) return;
         GridState state = GRIDS.get(grid);
@@ -285,6 +289,30 @@ public final class DynamicRecipePatternRegistry {
 
     public static DynamicRecipePatternDetails getDynamicPattern(IPatternDetails details) {
         return details instanceof DynamicRecipePatternDetails ? (DynamicRecipePatternDetails) details : null;
+    }
+
+    /** Returns a stable copy of the most recent rule/candidate decisions for one Provider diagnostics view. */
+    public static List<ProviderDiagnosticEvent> getProviderDiagnostics(String providerId) {
+        ProviderDiagnosticLog diagnostics = PROVIDER_DIAGNOSTICS.get(providerId);
+        return diagnostics == null ? Collections.emptyList() : diagnostics.snapshot();
+    }
+
+    /** Formats a compact, UI-safe summary of the last candidate decision without exposing mutable planner state. */
+    public static String getProviderDiagnosticsText(String providerId, int maximumEvents) {
+        List<ProviderDiagnosticEvent> events = getProviderDiagnostics(providerId);
+        if (events.isEmpty()) return "尚无路线诊断";
+        StringBuilder text = new StringBuilder();
+        int start = Math.max(0, events.size() - Math.max(1, maximumEvents));
+        for (int index = start; index < events.size(); index++) {
+            if (text.length() > 0) text.append('\n');
+            text.append(events.get(index).toDisplayString());
+        }
+        return text.toString();
+    }
+
+    /** Returns an allocation-safe, global summary for the Provider diagnostics panel. */
+    public static String getPlanningMetricsSummary() {
+        return PLANNING_METRICS.snapshot().summarize();
     }
 
     /** Returns whether the current lookup may inspect only already-mounted, non-dynamic AE patterns. */
@@ -427,11 +455,35 @@ public final class DynamicRecipePatternRegistry {
     /** Orders virtual patterns by their material route, then by input required per requested net output. */
     public static int compareDynamicPatternPriority(AEKey requested, DynamicRecipePatternDetails left,
                                                     DynamicRecipePatternDetails right) {
+        PlanningMode mode = left.getPlanningMode() == right.getPlanningMode() ?
+                left.getPlanningMode() : PlanningMode.STOCK_FIRST;
+        return compareDynamicPatternPriority(requested, left, right, mode);
+    }
+
+    private static int compareDynamicPatternPriority(AEKey requested, DynamicRecipePatternDetails left,
+                                                     DynamicRecipePatternDetails right, PlanningMode mode) {
         long leftOutput = requested == null ? 0 : left.getNetOutputAmount(requested);
         long rightOutput = requested == null ? 0 : right.getNetOutputAmount(requested);
-        return compareDynamicPatternPriority(left.getRoutePriority(), left.getRawMaterialCost(), leftOutput,
-                left.getStepCost(), left.getRecipeKey(), right.getRoutePriority(), right.getRawMaterialCost(),
-                rightOutput, right.getStepCost(), right.getRecipeKey());
+        int comparison;
+        if (mode == PlanningMode.SAFE_FIRST) {
+            comparison = Integer.compare(left.getHiddenActualOutputs().size(), right.getHiddenActualOutputs().size());
+            if (comparison != 0) return comparison;
+            comparison = Long.compare(left.getCycleRiskPenalty(), right.getCycleRiskPenalty());
+            if (comparison != 0) return comparison;
+        } else if (mode == PlanningMode.THROUGHPUT_FIRST) {
+            comparison = Integer.compare(left.getStepCost(), right.getStepCost());
+            if (comparison != 0) return comparison;
+        } else if (mode == PlanningMode.STOCK_FIRST || mode == PlanningMode.PINNED) {
+            comparison = compareDynamicRoutePolicy(left, right);
+            if (comparison != 0) return comparison;
+        }
+        int efficiency = compareInputOutputEfficiency(left.getRawMaterialCost(), leftOutput,
+                right.getRawMaterialCost(), rightOutput);
+        if (efficiency != 0) return efficiency;
+        int steps = Integer.compare(left.getStepCost(), right.getStepCost());
+        if (steps != 0) return steps;
+        comparison = compareDynamicRoutePolicy(left, right);
+        return comparison != 0 ? comparison : left.getRecipeKey().compareTo(right.getRecipeKey());
     }
 
     /**
@@ -448,6 +500,7 @@ public final class DynamicRecipePatternRegistry {
 
         long startedAt = System.nanoTime();
         RouteCostEstimator estimator = new RouteCostEstimator(grid, state, getRouteCostBudget());
+        PlanningMode planningMode = resolveDetailPlanningMode(patterns);
         Map<IPatternDetails, DirectRouteCost> quickCosts = new IdentityHashMap<>();
         for (IPatternDetails pattern : patterns) {
             quickCosts.put(pattern, estimator.estimateDirect(pattern));
@@ -455,25 +508,27 @@ public final class DynamicRecipePatternRegistry {
         patterns.sort((left, right) -> {
             DynamicRecipePatternDetails leftDynamic = (DynamicRecipePatternDetails) left;
             DynamicRecipePatternDetails rightDynamic = (DynamicRecipePatternDetails) right;
-            int mandatoryRoute = compareMandatoryRoutePriority(leftDynamic.getRoutePriority(),
-                    rightDynamic.getRoutePriority());
-            if (mandatoryRoute != 0) return mandatoryRoute;
+            int staticCost = compareDynamicPatternPriority(requested, leftDynamic, rightDynamic, planningMode);
             int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
-            if (quickCost != 0) return quickCost;
-            return compareDynamicPatternPriority(requested, leftDynamic, rightDynamic);
+            if (planningMode == PlanningMode.STOCK_FIRST) {
+                if (quickCost != 0) return quickCost;
+                return staticCost;
+            }
+            if (staticCost != 0) return staticCost;
+            return quickCost;
         });
 
         boolean stockOnlySelection = quickCosts.get(patterns.get(0)).isFullyStocked();
         Map<IPatternDetails, RouteCost> refinedCosts = new IdentityHashMap<>();
         if (!stockOnlySelection) {
-            List<IPatternDetails> refined = new ArrayList<>(MAX_REFINED_ROUTE_CANDIDATES);
+            List<IPatternDetails> refined = new ArrayList<>(getPlanningBudget().getMaxRefinedCandidates());
             refined.add(patterns.get(0));
 
             IPatternDetails staticBest = patterns.get(0);
             for (int index = 1; index < patterns.size(); index++) {
                 IPatternDetails candidate = patterns.get(index);
                 if (compareDynamicPatternPriority(requested, (DynamicRecipePatternDetails) candidate,
-                        (DynamicRecipePatternDetails) staticBest) < 0) {
+                        (DynamicRecipePatternDetails) staticBest, planningMode) < 0) {
                     staticBest = candidate;
                 }
             }
@@ -487,14 +542,15 @@ public final class DynamicRecipePatternRegistry {
                 refinedCosts.put(pattern, estimator.estimateRoot(pattern, requested));
             }
             refined.sort((left, right) -> {
-                int mandatoryRoute = compareMandatoryRoutePriority(
-                        ((DynamicRecipePatternDetails) left).getRoutePriority(),
-                        ((DynamicRecipePatternDetails) right).getRoutePriority());
-                if (mandatoryRoute != 0) return mandatoryRoute;
+                int staticCost = compareDynamicPatternPriority(requested, (DynamicRecipePatternDetails) left,
+                        (DynamicRecipePatternDetails) right, planningMode);
                 int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
-                if (routeCost != 0) return routeCost;
-                return compareDynamicPatternPriority(requested, (DynamicRecipePatternDetails) left,
-                        (DynamicRecipePatternDetails) right);
+                if (planningMode == PlanningMode.STOCK_FIRST) {
+                    if (routeCost != 0) return routeCost;
+                    return staticCost;
+                }
+                if (staticCost != 0) return staticCost;
+                return routeCost;
             });
 
             IPatternDetails selected = refined.get(0);
@@ -551,12 +607,172 @@ public final class DynamicRecipePatternRegistry {
         if (requested == null || recipeOutputs.isEmpty()) {
             return Collections.emptyList();
         }
+        long amount = 0;
         for (GenericStack output : recipeOutputs) {
             if (requested.matches(output)) {
-                return Collections.singletonList(output);
+                amount = addSaturated(amount, output.amount());
             }
         }
-        return Collections.emptyList();
+        return amount <= 0 ? Collections.emptyList() :
+                Collections.singletonList(new GenericStack(requested, amount));
+    }
+
+    private static List<GenericStack> selectHiddenActualOutputs(AEKey target, List<GenericStack> actualOutputs) {
+        List<GenericStack> hidden = new ArrayList<>();
+        for (GenericStack output : actualOutputs) {
+            if (output != null && output.amount() > 0 && !target.matches(output)) {
+                hidden.add(output);
+            }
+        }
+        return Collections.unmodifiableList(hidden);
+    }
+
+    private static PlanningMode getPlanningMode(@Nullable ProviderSnapshot source) {
+        if (source != null && source.planningMode == PlanningMode.PINNED) return PlanningMode.PINNED;
+        if (isOptimalRebuildCalculation()) return PlanningMode.RESOURCE_FIRST;
+        return source == null ? PlanningMode.STOCK_FIRST : source.planningMode;
+    }
+
+    /** A Provider's explicit pinned mode is administrative and cannot be loosened by a lower rule profile. */
+    private static PlanningMode resolveCandidatePlanningMode(ProviderSnapshot source, RuleDecision decision) {
+        PlanningMode providerMode = getPlanningMode(source);
+        if (providerMode == PlanningMode.PINNED || decision.getPlanningModeOverride() == null) {
+            return providerMode;
+        }
+        return decision.getPlanningModeOverride();
+    }
+
+    /** Returns the active immutable budget; worker sessions capture it in {@link RouteCostBudget} on first use. */
+    private static PlanningBudget getPlanningBudget() {
+        return RecipePatternRules.getActive().getPlanningBudget();
+    }
+
+    /**
+     * Exposes material relationships as neutral facts. Route ordering is intentionally left to the rule package;
+     * this method must not choose a route group or assign a priority.
+     */
+    private static Map<String, Object> createRuleFacts(AEKey target, RecipeMap<?> recipeMap, Recipe recipe,
+                                                        NormalizedRecipe normalized, EncodedRecipe encoded,
+                                                        KeyCounter storedItems) {
+        Map<String, Object> facts = new HashMap<>();
+        Material targetMaterial = getMaterialForKey(target);
+        boolean usesDust = false;
+        boolean usesPriorityFluid = false;
+        boolean usesElementalFluid = false;
+        boolean usesIngot = false;
+        boolean hasMaterialInput = false;
+        boolean hasTargetMaterialInput = false;
+        boolean hasNonTargetMaterialInput = false;
+        boolean onlyTargetMaterialInputs = targetMaterial != null;
+        Set<String> inputMaterials = new HashSet<>();
+        Set<String> inputOrePrefixes = new HashSet<>();
+        Set<String> deterministicOutputMaterials = new HashSet<>();
+        Set<String> chancedOutputMaterials = new HashSet<>();
+
+        for (GenericStack input : encoded.inputs) {
+            AEKey inputKey = input.what();
+            Material inputMaterial = getMaterialForKey(inputKey);
+            if (inputKey instanceof AEFluidKey) {
+                usesPriorityFluid |= isPriorityFluidInput(targetMaterial, inputMaterial);
+                usesElementalFluid |= isElementalMaterial(inputMaterial);
+            } else if (inputKey instanceof AEItemKey itemKey) {
+                UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
+                if (entry != null && entry.orePrefix != null) {
+                    String prefixName = entry.orePrefix.name();
+                    inputOrePrefixes.add(prefixName);
+                    usesDust |= isDustPrefix(prefixName);
+                    usesIngot |= isIngotPrefix(prefixName);
+                }
+            }
+
+            if (inputMaterial != null) {
+                inputMaterials.add(inputMaterial.getName());
+                hasMaterialInput = true;
+                if (targetMaterial != null && targetMaterial.equals(inputMaterial)) {
+                    hasTargetMaterialInput = true;
+                } else {
+                    onlyTargetMaterialInputs = false;
+                    hasNonTargetMaterialInput = true;
+                }
+            }
+        }
+        for (GenericStack output : normalized.getDeterministicOutputs()) {
+            Material material = getMaterialForKey(output.what());
+            if (material != null) deterministicOutputMaterials.add(material.getName());
+        }
+        for (GenericStack output : normalized.getChancedOutputStacks()) {
+            Material material = getMaterialForKey(output.what());
+            if (material != null) chancedOutputMaterials.add(material.getName());
+        }
+
+        usesPriorityFluid |= !isElementalMaterial(targetMaterial) &&
+                isPrimaryElementalFluidRoute(usesElementalFluid, usesDust, usesIngot, hasTargetMaterialInput);
+        facts.put("recycling", isRecyclingRecipe(recipe));
+        facts.put("targetIsFluid", target instanceof AEFluidKey);
+        facts.put("targetIsPolymer", targetMaterial != null && targetMaterial.hasProperty(PropertyKey.POLYMER));
+        facts.put("targetMaterial", targetMaterial == null ? "" : targetMaterial.getName());
+        facts.put("targetOrePrefix", getOrePrefixForKey(target));
+        facts.put("inputMaterials", Collections.unmodifiableSet(inputMaterials));
+        facts.put("inputOrePrefixes", Collections.unmodifiableSet(inputOrePrefixes));
+        facts.put("deterministicOutputMaterials", Collections.unmodifiableSet(deterministicOutputMaterials));
+        facts.put("chancedOutputMaterials", Collections.unmodifiableSet(chancedOutputMaterials));
+        facts.put("craftTweakerRecipe", recipe.getIsCTRecipe());
+        facts.put("groovyRecipe", recipe.isGroovyRecipe());
+        facts.put("usesDustInput", usesDust);
+        facts.put("usesPriorityFluidInput", usesPriorityFluid);
+        facts.put("usesIngotInput", usesIngot);
+        facts.put("hasMaterialInput", hasMaterialInput);
+        facts.put("hasTargetMaterialInput", hasTargetMaterialInput);
+        facts.put("hasNonTargetMaterialInput", hasNonTargetMaterialInput);
+        facts.put("onlyTargetMaterialInputs", onlyTargetMaterialInputs);
+        // These aliases retain neutral material facts for pack rules without affecting Java-side candidate ordering.
+        facts.put("dustOrFluidInput", usesDust || usesPriorityFluid);
+        facts.put("ingotInput", usesIngot);
+        facts.put("materialFormChange", hasMaterialInput && onlyTargetMaterialInputs);
+        facts.put("generalRoute", true);
+        facts.put("hasChancedOutputs", normalized.hasChancedOutputs());
+        facts.put("nonConsumableFluid", normalized.getFluidInputs().stream()
+                .anyMatch(NormalizedRecipe.NormalizedInput::isNonConsumable));
+        facts.put("recipeMap", recipeMap.getUnlocalizedName());
+        facts.put("recipeCategory", normalized.getCategory());
+        facts.put("target", RecipeFingerprint.describeKey(target));
+        long storedTargetAmount = storedItems == null ? 0 : Math.max(0, storedItems.get(target));
+        facts.put("targetStoredAmount", storedTargetAmount);
+        facts.put("targetInStock", storedTargetAmount > 0);
+        facts.put("tokenSlots", encoded.tokenLayout.getRequiredVirtualSlots());
+        facts.put("eut", normalized.getEUt());
+        facts.put("duration", normalized.getDuration());
+        return facts;
+    }
+
+    /** Legacy display category derived from rule tags; it must never influence candidate ordering. */
+    private static CandidateRoutePriority getDiagnosticRoutePriority(RuleDecision decision) {
+        Set<String> tags = decision.getTags();
+        if (tags.contains("route.recycling")) return CandidateRoutePriority.RECYCLING;
+        if (tags.contains("route.chemical_synthesis")) return CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
+        if (tags.contains("route.dust_or_fluid")) return CandidateRoutePriority.DUST_OR_FLUID_INPUT;
+        if (tags.contains("route.ingot")) return CandidateRoutePriority.INGOT_INPUT;
+        if (tags.contains("route.material_form_change")) return CandidateRoutePriority.MATERIAL_FORM_CHANGE;
+        return CandidateRoutePriority.GENERAL;
+    }
+
+    private static void logCandidateDecision(ProviderSnapshot source, AEKey target, RecipeMap<?> recipeMap,
+                                             NormalizedRecipe normalized, RuleDecision decision,
+                                             String decisionName, String reasonCode, long startedAtNanos) {
+        long elapsedMillis = startedAtNanos <= 0 ? 0 : Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000L);
+        PlanningMode planningMode = resolveCandidatePlanningMode(source, decision);
+        ProviderDiagnosticEvent event = new ProviderDiagnosticEvent(source.providerId, source.position,
+                source.dimension, String.valueOf(target), recipeMap.getUnlocalizedName(),
+                normalized.getRecipeFingerprint(), source.ruleSetVersion, planningMode, decisionName, reasonCode,
+                elapsedMillis);
+        PROVIDER_DIAGNOSTICS.computeIfAbsent(source.providerId, ignored -> new ProviderDiagnosticLog()).record(event);
+        if (!ApplyGrayMod.LOGGER.isDebugEnabled()) return;
+        ApplyGrayMod.LOGGER.debug("Recipe-pattern decision providerId={} position={} dimension={} target={} " +
+                        "recipeMapId={} recipeFingerprint={} ruleSetVersion={} planningMode={} decision={} " +
+                        "reasonCode={} elapsedMs={}",
+                source.providerId, source.position, source.dimension, target, recipeMap.getUnlocalizedName(),
+                normalized.getRecipeFingerprint(), source.ruleSetVersion, planningMode, decisionName,
+                reasonCode, elapsedMillis);
     }
 
     static boolean isOreInputPrefix(String prefixName) {
@@ -602,88 +818,6 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * Orders automatic material routes before their cost is considered. A recipe that breaks an existing material
-     * form apart must never outrank a recipe that actually synthesizes the requested material from dusts, fluids,
-     * or ingots merely because the former is a smaller batch.
-     */
-    private static CandidateRoutePriority getCandidateRoutePriority(AEKey target, RecipeMap<?> recipeMap,
-                                                                      Recipe recipe, EncodedRecipe encoded) {
-        if (isRecyclingRecipe(recipe)) {
-            return CandidateRoutePriority.RECYCLING;
-        }
-
-        boolean usesDust = false;
-        boolean usesPriorityFluid = false;
-        boolean usesElementalFluid = false;
-        boolean usesIngot = false;
-        Material targetMaterial = getMaterialForKey(target);
-        boolean hasMaterialInput = false;
-        boolean hasTargetMaterialInput = false;
-        boolean hasNonTargetMaterialInput = false;
-        boolean onlyTargetMaterialInputs = targetMaterial != null;
-
-        for (GenericStack input : encoded.inputs) {
-            AEKey inputKey = input.what();
-            Material inputMaterial = getMaterialForKey(inputKey);
-            if (inputKey instanceof AEFluidKey) {
-                usesPriorityFluid |= isPriorityFluidInput(targetMaterial, inputMaterial);
-                usesElementalFluid |= isElementalMaterial(inputMaterial);
-            } else if (inputKey instanceof AEItemKey itemKey) {
-                UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
-                if (entry != null) {
-                    String prefixName = entry.orePrefix.name();
-                    usesDust |= isDustPrefix(prefixName);
-                    usesIngot |= isIngotPrefix(prefixName);
-                }
-            }
-
-            if (inputMaterial != null) {
-                hasMaterialInput = true;
-                if (targetMaterial != null && targetMaterial.equals(inputMaterial)) {
-                    hasTargetMaterialInput = true;
-                } else {
-                    onlyTargetMaterialInputs = false;
-                    hasNonTargetMaterialInput = true;
-                }
-            }
-        }
-
-        // Element-to-element fusion is a fallback for an elemental target. Keeping it below an ingot route lets
-        // metal fluids follow the shorter dust -> ingot -> fluid chain. Elemental fluids remain primary inputs for
-        // non-element reactions such as hydrogen plus fluorine to hydrofluoric acid.
-        usesPriorityFluid |= !isElementalMaterial(targetMaterial) &&
-                isPrimaryElementalFluidRoute(usesElementalFluid, usesDust, usesIngot, hasTargetMaterialInput);
-        CandidateRoutePriority fallback = classifyCandidateRoute(usesDust, usesPriorityFluid, usesIngot,
-                hasMaterialInput, onlyTargetMaterialInputs);
-        return promoteChemicalProductSynthesis(target instanceof AEFluidKey,
-                targetMaterial != null && targetMaterial.hasProperty(PropertyKey.POLYMER),
-                recipeMap == null ? null : recipeMap.getUnlocalizedName(), hasTargetMaterialInput,
-                hasNonTargetMaterialInput, fallback);
-    }
-
-    /**
-     * Polymer fluids have an automatic extractor-recycling conversion from their dust form. That conversion is
-     * useful for recycling, but it must not replace the actual chemical synthesis chain. Other fluid products retain
-     * their existing route priority.
-     */
-    static CandidateRoutePriority promoteChemicalProductSynthesis(boolean targetIsFluid, boolean targetIsPolymer,
-                                                                   @Nullable String recipeMapName,
-                                                                   boolean hasTargetMaterialInput,
-                                                                   boolean hasNonTargetMaterialInput,
-                                                                   CandidateRoutePriority fallback) {
-        boolean polymerSynthesis = targetIsFluid && targetIsPolymer && !hasTargetMaterialInput &&
-                hasNonTargetMaterialInput;
-        if (polymerSynthesis && isChemicalProductSynthesisRecipeMap(recipeMapName)) {
-            return CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
-        }
-        return fallback;
-    }
-
-    static boolean isChemicalProductSynthesisRecipeMap(@Nullable String recipeMapName) {
-        return recipeMapName != null && CHEMICAL_PRODUCT_SYNTHESIS_RECIPE_MAPS.contains(recipeMapName);
-    }
-
-    /**
      * Molten forms of the requested material are only a form change, while elemental fluids such as the
      * automatically-added Arc Furnace oxygen are processing auxiliaries. Neither may hide an ingot route.
      */
@@ -699,22 +833,6 @@ public final class DynamicRecipePatternRegistry {
     static boolean isPrimaryElementalFluidRoute(boolean usesElementalFluid, boolean usesDust, boolean usesIngot,
                                                 boolean hasTargetMaterialInput) {
         return usesElementalFluid && !usesDust && !usesIngot && !hasTargetMaterialInput;
-    }
-
-    static CandidateRoutePriority classifyCandidateRoute(boolean usesDust, boolean usesPriorityFluid,
-                                                         boolean usesIngot,
-                                                         boolean hasMaterialInput,
-                                                         boolean onlyTargetMaterialInputs) {
-        if (usesDust || usesPriorityFluid) {
-            return CandidateRoutePriority.DUST_OR_FLUID_INPUT;
-        }
-        if (usesIngot) {
-            return CandidateRoutePriority.INGOT_INPUT;
-        }
-        if (hasMaterialInput && onlyTargetMaterialInputs) {
-            return CandidateRoutePriority.MATERIAL_FORM_CHANGE;
-        }
-        return CandidateRoutePriority.GENERAL;
     }
 
     private static boolean isRecyclingRecipe(Recipe recipe) {
@@ -746,12 +864,19 @@ public final class DynamicRecipePatternRegistry {
         return null;
     }
 
+    @Nullable
+    private static String getOrePrefixForKey(AEKey key) {
+        if (!(key instanceof AEItemKey itemKey)) return null;
+        UnificationEntry entry = OreDictUnifier.getUnificationEntry(itemKey.toStack());
+        return entry == null || entry.orePrefix == null ? null : entry.orePrefix.name();
+    }
+
     static boolean isElementalMaterial(Material material) {
         return material != null && material.isElement();
     }
 
     static boolean isDynamicRecipeMapEnabled(String recipeMapName) {
-        return !DISTILLATION_TOWER_RECIPE_MAP.equals(recipeMapName);
+        return recipeMapName != null && !recipeMapName.isEmpty();
     }
 
     private static boolean isDynamicRecipeMapEnabled(RecipeMap<?> recipeMap) {
@@ -777,7 +902,7 @@ public final class DynamicRecipePatternRegistry {
         if (target == null) {
             throw new IllegalArgumentException("Dynamic RecipeMap pattern target cannot be null");
         }
-        return recipeKey + ":target:" + target.getType().getId() + ':' + target.toTag().toString();
+        return recipeKey + ":target:" + RecipeFingerprint.describeKey(target);
     }
 
     public static final class ProviderSnapshot {
@@ -786,21 +911,195 @@ public final class DynamicRecipePatternRegistry {
         private final String providerId;
         private final long epoch;
         private final RecipeMap<?>[] recipeMaps;
+        private final MachineCapabilityProfile machineProfile;
+        private final String ruleSetVersion;
+        private final PlanningMode planningMode;
+        private final String pinnedRouteGroup;
+        private final String position;
+        private final int dimension;
         private final MetaTileEntityMERecipeMapPatternProvider provider;
 
         public ProviderSnapshot(IGrid grid, String providerId, long epoch, RecipeMap<?>[] recipeMaps,
+                                MachineCapabilityProfile machineProfile,
+                                PlanningMode planningMode, String pinnedRouteGroup,
                                 MetaTileEntityMERecipeMapPatternProvider provider) {
             this.grid = grid;
             this.providerId = providerId;
             this.epoch = epoch;
             this.recipeMaps = Arrays.copyOf(recipeMaps, recipeMaps.length);
+            this.machineProfile = machineProfile;
+            this.ruleSetVersion = RecipePatternRules.getActive().getVersion();
+            this.planningMode = planningMode == null ? PlanningMode.STOCK_FIRST : planningMode;
+            this.pinnedRouteGroup = pinnedRouteGroup == null ? "" : pinnedRouteGroup;
+            this.position = provider.getPos().toString();
+            this.dimension = machineProfile.getDimension();
             this.provider = provider;
         }
 
         private boolean sameDefinition(ProviderSnapshot other) {
             return other != null && epoch == other.epoch && Arrays.equals(recipeMaps, other.recipeMaps) &&
-                    provider == other.provider;
+                    machineProfile.getVersion().equals(other.machineProfile.getVersion()) &&
+                    ruleSetVersion.equals(other.ruleSetVersion) && planningMode == other.planningMode &&
+                    pinnedRouteGroup.equals(other.pinnedRouteGroup) && provider == other.provider;
         }
+    }
+
+    /** Immutable, structured candidate decision retained for the Provider diagnostics view. */
+    public static final class ProviderDiagnosticEvent {
+
+        private final String providerId;
+        private final String position;
+        private final int dimension;
+        private final String target;
+        private final String recipeMapId;
+        private final String recipeFingerprint;
+        private final String ruleSetVersion;
+        private final PlanningMode planningMode;
+        private final String decision;
+        private final String reasonCode;
+        private final long elapsedMillis;
+
+        private ProviderDiagnosticEvent(String providerId, String position, int dimension, String target,
+                                        String recipeMapId, String recipeFingerprint, String ruleSetVersion,
+                                        PlanningMode planningMode, String decision, String reasonCode,
+                                        long elapsedMillis) {
+            this.providerId = providerId;
+            this.position = position;
+            this.dimension = dimension;
+            this.target = target;
+            this.recipeMapId = recipeMapId;
+            this.recipeFingerprint = recipeFingerprint;
+            this.ruleSetVersion = ruleSetVersion;
+            this.planningMode = planningMode;
+            this.decision = decision;
+            this.reasonCode = reasonCode;
+            this.elapsedMillis = elapsedMillis;
+        }
+
+        public String getProviderId() {
+            return providerId;
+        }
+
+        public String getPosition() {
+            return position;
+        }
+
+        public int getDimension() {
+            return dimension;
+        }
+
+        public String getTarget() {
+            return target;
+        }
+
+        public String getRecipeMapId() {
+            return recipeMapId;
+        }
+
+        public String getRecipeFingerprint() {
+            return recipeFingerprint;
+        }
+
+        public String getRuleSetVersion() {
+            return ruleSetVersion;
+        }
+
+        public PlanningMode getPlanningMode() {
+            return planningMode;
+        }
+
+        public String getDecision() {
+            return decision;
+        }
+
+        public String getReasonCode() {
+            return reasonCode;
+        }
+
+        public long getElapsedMillis() {
+            return elapsedMillis;
+        }
+
+        private String toDisplayString() {
+            String fingerprint = recipeFingerprint == null ? "?" :
+                    recipeFingerprint.substring(0, Math.min(8, recipeFingerprint.length()));
+            return decision + ' ' + reasonCode + " " + recipeMapId + '#' + fingerprint + " " + elapsedMillis +
+                    "ms";
+        }
+    }
+
+    private static final class ProviderDiagnosticLog {
+
+        private final Deque<ProviderDiagnosticEvent> events = new ArrayDeque<>();
+
+        private synchronized void record(ProviderDiagnosticEvent event) {
+            events.addLast(event);
+            while (events.size() > MAX_PROVIDER_DIAGNOSTIC_EVENTS) events.removeFirst();
+        }
+
+        private synchronized List<ProviderDiagnosticEvent> snapshot() {
+            return Collections.unmodifiableList(new ArrayList<>(events));
+        }
+    }
+
+    /** Called by the RecipeMap mixin whenever scripts or reloads mutate a registered RecipeMap. */
+    public static void invalidateRecipeMapContents(RecipeMap<?> recipeMap) {
+        if (recipeMap == null) return;
+        RecipeBindingResolver.invalidate(recipeMap);
+        int discardedCachedPatterns = 0;
+        for (GridState state : GRIDS.values()) {
+            discardedCachedPatterns += state.invalidateRecipeMapContents(recipeMap);
+        }
+        ApplyGrayMod.LOGGER.info("Invalidated dynamic RecipeMap pattern indexes after {} changed; discarded {} " +
+                        "stale provider cache entries",
+                recipeMap.getUnlocalizedName(), discardedCachedPatterns);
+    }
+
+    /** Called after an atomic rule-set swap so no new request can consume candidates scored by the old rules. */
+    public static void invalidateRuleSetContents(String previousVersion, String currentVersion) {
+        if (currentVersion == null || currentVersion.equals(previousVersion)) return;
+        int discardedCachedPatterns = 0;
+        for (GridState state : GRIDS.values()) {
+            discardedCachedPatterns += state.invalidateRuleSetContents();
+        }
+        ApplyGrayMod.LOGGER.info("Invalidated dynamic RecipeMap pattern indexes after rule set changed {} -> {}; " +
+                        "discarded {} stale provider cache entries",
+                abbreviateVersion(previousVersion), abbreviateVersion(currentVersion), discardedCachedPatterns);
+    }
+
+    /** Invalidates candidate facts when an adapter is registered after providers have already started planning. */
+    public static void invalidateRuleEngineContents(String source) {
+        int discardedCachedPatterns = 0;
+        for (GridState state : GRIDS.values()) {
+            discardedCachedPatterns += state.invalidateRuleSetContents();
+        }
+        ApplyGrayMod.LOGGER.info("Invalidated dynamic RecipeMap pattern indexes after {} changed; discarded {} " +
+                        "stale provider cache entries",
+                source == null || source.isEmpty() ? "a rule-engine extension" : source, discardedCachedPatterns);
+    }
+
+    private static String abbreviateVersion(String version) {
+        if (version == null) return "<none>";
+        return version.substring(0, Math.min(12, version.length()));
+    }
+
+    private static int compareDynamicRoutePolicy(DynamicRecipePatternDetails left,
+                                                 DynamicRecipePatternDetails right) {
+        return Long.compare(right.getRuleRoutePriority(), left.getRuleRoutePriority());
+    }
+
+    private static PlanningMode resolveDetailPlanningMode(List<IPatternDetails> patterns) {
+        PlanningMode selected = null;
+        for (IPatternDetails pattern : patterns) {
+            DynamicRecipePatternDetails detail = getDynamicPattern(pattern);
+            if (detail == null) continue;
+            if (selected == null) {
+                selected = detail.getPlanningMode();
+            } else if (selected != detail.getPlanningMode()) {
+                return PlanningMode.STOCK_FIRST;
+            }
+        }
+        return selected == null ? PlanningMode.STOCK_FIRST : selected;
     }
 
     private static final class GridState {
@@ -816,7 +1115,7 @@ public final class DynamicRecipePatternRegistry {
          * and expired by TTL.
          */
         private static final long ROUTE_CANDIDATE_CACHE_TTL_NANOS = 5_000_000_000L;
-        private final Map<AEKey, CachedCandidates> routeCandidateCache = new HashMap<>();
+        private final Map<AEKey, CachedCandidates> routeCandidateCache = new ConcurrentHashMap<>();
         /**
          * Resolves a requested output to its producing recipes without rescanning every RecipeMap for every node in a
          * recursive crafting calculation. It is cleared whenever the set of providers changes. ApplyGray's explicit
@@ -879,8 +1178,13 @@ public final class DynamicRecipePatternRegistry {
                     updated.removeIf(candidate -> candidate.getRecipeKey().equals(detail.getRecipeKey()));
                     updated.add(detail);
                     updated.sort((left, right) -> compareDynamicPatternPriority(target, left, right));
-                    if (updated.size() > MAX_MATERIALIZED_PATTERNS_PER_TARGET) {
-                        updated = new ArrayList<>(updated.subList(0, MAX_MATERIALIZED_PATTERNS_PER_TARGET));
+                    int patternLimit = 1;
+                    for (DynamicRecipePatternDetails candidate : updated) {
+                        patternLimit = Math.max(patternLimit, candidate.getMaxPatternsForTarget());
+                    }
+                    patternLimit = Math.min(getPlanningBudget().getMaxCandidatesPerTarget(), patternLimit);
+                    if (updated.size() > patternLimit) {
+                        updated = new ArrayList<>(updated.subList(0, patternLimit));
                     }
                     return Collections.unmodifiableList(updated);
                 });
@@ -888,9 +1192,14 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private static boolean isRecipeMapAvailable(ProviderSnapshot snapshot, DynamicRecipePatternDetails detail) {
+            if (!snapshot.ruleSetVersion.equals(detail.getRecipeBinding().getRuleSetVersion()) ||
+                    !snapshot.machineProfile.getVersion().equals(detail.getRecipeBinding().getMachineProfileVersion())) {
+                return false;
+            }
             for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
                 if (isDynamicRecipeMapEnabled(recipeMap) &&
-                        recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) {
+                        recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName()) &&
+                        RecipeBindingResolver.resolve(detail.getRecipeBinding(), recipeMap).isResolved()) {
                     return true;
                 }
             }
@@ -901,8 +1210,10 @@ public final class DynamicRecipePatternRegistry {
          * @return whether no active providers remain on this grid.
          */
         private synchronized boolean removeProvider(String providerId) {
-            if (providers.remove(providerId) != null) {
+            ProviderSnapshot removed = providers.remove(providerId);
+            if (removed != null) {
                 clearGenerated();
+                removeProviderBindings(removed.provider);
                 bindAllCachedPatterns();
             }
             return providers.isEmpty();
@@ -924,50 +1235,58 @@ public final class DynamicRecipePatternRegistry {
                 }
                 return Collections.emptyList();
             }
-            if (!cooperateWithCraftingCalculation()) {
-                return Collections.emptyList();
-            }
-            if (!ensureFullRecipeOutputIndexRebuild()) {
-                return Collections.emptyList();
-            }
-            OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
-            if (optimalRebuild != null) {
-                optimalRebuild.requestedOutputs++;
-            }
-
-            List<DynamicRecipePatternDetails> existing = patternsByTarget.get(target);
-            if (existing == null) {
-                long startedAt = System.nanoTime();
-                List<DynamicRecipePatternDetails> generated = createPatterns(target);
-                if (Thread.currentThread().isInterrupted()) {
-                    abortCancelledCalculation();
-                    return Collections.emptyList();
-                }
-                long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
-                if (elapsedMillis >= 1_000L) {
-                    ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup for {} took {} ms and found {} patterns",
-                            target, elapsedMillis, generated.size());
-                }
-
-                synchronized (this) {
-                    existing = patternsByTarget.get(target);
-                    if (existing == null) {
-                        patternsByTarget.put(target, generated);
-                        existing = generated;
-                    }
-                }
-            }
-            List<IPatternDetails> available = new ArrayList<>(existing.size());
-            for (int index = 0; index < existing.size(); index++) {
+            long lookupStartedAt = System.nanoTime();
+            try {
                 if (!cooperateWithCraftingCalculation()) {
                     return Collections.emptyList();
                 }
-                DynamicRecipePatternDetails detail = existing.get(index);
-                if (isPatternAvailableFor(target, detail)) {
-                    available.add(detail);
+                if (!ensureFullRecipeOutputIndexRebuild()) {
+                    return Collections.emptyList();
                 }
+                OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
+                if (optimalRebuild != null) {
+                    optimalRebuild.requestedOutputs++;
+                }
+
+                List<DynamicRecipePatternDetails> existing = patternsByTarget.get(target);
+                if (existing == null) {
+                    PLANNING_METRICS.recordTargetCacheMiss();
+                    long startedAt = System.nanoTime();
+                    List<DynamicRecipePatternDetails> generated = createPatterns(target);
+                    if (Thread.currentThread().isInterrupted()) {
+                        abortCancelledCalculation();
+                        return Collections.emptyList();
+                    }
+                    long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
+                    if (elapsedMillis >= 1_000L) {
+                        ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup for {} took {} ms and found {} patterns",
+                                target, elapsedMillis, generated.size());
+                    }
+
+                    synchronized (this) {
+                        existing = patternsByTarget.get(target);
+                        if (existing == null) {
+                            patternsByTarget.put(target, generated);
+                            existing = generated;
+                        }
+                    }
+                } else {
+                    PLANNING_METRICS.recordTargetCacheHit();
+                }
+                List<IPatternDetails> available = new ArrayList<>(existing.size());
+                for (int index = 0; index < existing.size(); index++) {
+                    if (!cooperateWithCraftingCalculation()) {
+                        return Collections.emptyList();
+                    }
+                    DynamicRecipePatternDetails detail = existing.get(index);
+                    if (isPatternAvailableFor(target, detail)) {
+                        available.add(detail);
+                    }
+                }
+                return available;
+            } finally {
+                PLANNING_METRICS.recordPlanningDuration(System.nanoTime() - lookupStartedAt);
             }
-            return available;
         }
 
         /** Supplies bounded dynamic dependency edges without recursively invoking CraftingService. */
@@ -977,10 +1296,12 @@ public final class DynamicRecipePatternRegistry {
             }
             CachedCandidates cached = routeCandidateCache.get(target);
             if (cached != null && (System.nanoTime() - cached.cachedAtNanos) < ROUTE_CANDIDATE_CACHE_TTL_NANOS) {
+                PLANNING_METRICS.recordRouteCandidateCacheHit();
                 return cached.candidates;
             }
+            PLANNING_METRICS.recordRouteCandidateCacheMiss();
             List<PatternCandidate> candidates = collectPatternCandidates(target,
-                    MAX_ROUTE_COST_DYNAMIC_CANDIDATES);
+                    getPlanningBudget().getMaxDynamicCandidatesForCost());
             if (candidates.size() > 1 && getActiveOptimalRebuild() != null && ApplyGrayMod.LOGGER.isDebugEnabled()) {
                 List<String> recipeMaps = new ArrayList<>(candidates.size());
                 for (PatternCandidate candidate : candidates) {
@@ -994,14 +1315,29 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private List<DynamicRecipePatternDetails> createPatterns(AEKey target) {
-            List<PatternCandidate> candidates = collectPatternCandidates(target, MAX_ROUTE_CANDIDATES_PER_TARGET);
+            List<PatternCandidate> candidates = collectPatternCandidates(target,
+                    getPlanningBudget().getMaxCandidatesPerTarget());
             if (candidates.isEmpty()) {
                 return Collections.emptyList();
             }
 
-            PatternCandidate selected = selectBestCandidate(target, candidates);
-            DynamicRecipePatternDetails detail = materializePattern(target, selected);
-            return detail == null ? Collections.emptyList() : Collections.singletonList(detail);
+            selectBestCandidate(target, candidates);
+            if (candidates.isEmpty()) {
+                return Collections.emptyList();
+            }
+            // A cap is merged within each matching rule decision. A route-specific exposure rule must be able to
+            // broaden the target's Pareto frontier even when another valid route has the default cap of one.
+            int materializedLimit = 1;
+            for (PatternCandidate candidate : candidates) {
+                materializedLimit = Math.max(materializedLimit, candidate.decision.getMaxPatternsForTarget());
+            }
+            materializedLimit = Math.min(getPlanningBudget().getMaxCandidatesPerTarget(), materializedLimit);
+            List<DynamicRecipePatternDetails> details = new ArrayList<>(materializedLimit);
+            for (int index = 0; index < Math.min(materializedLimit, candidates.size()); index++) {
+                DynamicRecipePatternDetails detail = materializePattern(target, candidates.get(index));
+                if (detail != null) details.add(detail);
+            }
+            return Collections.unmodifiableList(details);
         }
 
         private List<PatternCandidate> collectPatternCandidates(AEKey target, int candidateLimit) {
@@ -1009,7 +1345,7 @@ public final class DynamicRecipePatternRegistry {
             List<ProviderSnapshot> sources = new ArrayList<>(providers.values());
             Set<String> seenRecipeKeys = new HashSet<>();
             OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
-            boolean inspectAllCandidates = optimalRebuild != null;
+            PlanningBudget planningBudget = getPlanningBudget();
             long inspectedRecipes = 0;
             boolean cappedRecipeScan = false;
 
@@ -1025,10 +1361,11 @@ public final class DynamicRecipePatternRegistry {
                         return Collections.emptyList();
                     }
                     for (Recipe recipe : outputIndex.getRecipes(target)) {
+                        long candidateStartedAt = System.nanoTime();
                         if (!cooperateWithCraftingCalculation()) {
                             return Collections.emptyList();
                         }
-                        if (!inspectAllCandidates && inspectedRecipes >= MAX_RECIPES_PER_TARGET) {
+                        if (inspectedRecipes >= planningBudget.getMaxRecipesPerTarget()) {
                             cappedRecipeScan = true;
                             break scan;
                         }
@@ -1036,24 +1373,92 @@ public final class DynamicRecipePatternRegistry {
                         if (optimalRebuild != null) {
                             optimalRebuild.matchingRecipeCandidates++;
                         }
+                        NormalizedRecipe normalized = outputIndex.normalize(recipe);
+                        if (normalized == null) continue;
                         EncodedRecipe encoded = encodeRecipe(recipe, storedItems);
                         if (encoded == null) continue;
-                        List<GenericStack> patternOutputs = selectRequestedPatternOutputs(target, encoded.outputs);
-                        if (patternOutputs.isEmpty()) continue;
+                        List<GenericStack> actualOutputs = encoded.outputs;
+                        List<GenericStack> deterministicPatternOutputs = selectRequestedPatternOutputs(target,
+                                actualOutputs);
+                        List<GenericStack> chancedTargetOutputs = deterministicPatternOutputs.isEmpty() ?
+                                selectRequestedPatternOutputs(target, normalized.getChancedOutputStacks()) :
+                                Collections.emptyList();
+                        if (deterministicPatternOutputs.isEmpty() && chancedTargetOutputs.isEmpty()) continue;
+                        boolean chancedTarget = deterministicPatternOutputs.isEmpty();
+                        List<GenericStack> hiddenOutputs = new ArrayList<>(selectHiddenActualOutputs(target,
+                                actualOutputs));
+                        for (GenericStack chancedOutput : normalized.getChancedOutputStacks()) {
+                            if (!chancedTarget || !target.matches(chancedOutput)) hiddenOutputs.add(chancedOutput);
+                        }
+                        Map<String, Object> facts = new HashMap<>(source.machineProfile.getAdapterFacts());
+                        facts.putAll(createRuleFacts(target, recipeMap, recipe, normalized, encoded, storedItems));
+                        for (var contributor : RecipePatternRules.getFactContributors()) {
+                            try {
+                                contributor.contributeRecipeFacts(recipe, facts);
+                            } catch (RuntimeException exception) {
+                                ApplyGrayMod.LOGGER.warn("Recipe-pattern fact contributor {} failed for {} in {}",
+                                        contributor.getClass().getName(), target, recipeMap.getUnlocalizedName(),
+                                        exception);
+                            }
+                        }
+                        RuleContext ruleContext = new RuleContext(normalized, source.machineProfile, target,
+                                getPlanningMode(source), Collections.emptySet(), facts, hiddenOutputs.size(),
+                                encoded.tokenLayout.getRequiredVirtualSlots());
+                        RuleDecision decision = RecipePatternRules.evaluate(ruleContext);
+                        if (!decision.isAllowed() || decision.getCyclePolicy() == CyclePolicy.FORBID) {
+                            String reason = !decision.isAllowed() ? decision.getDenialCode() : "CYCLE_POLICY_FORBID";
+                            logCandidateDecision(source, target, recipeMap, normalized, decision, "rejected", reason,
+                                    candidateStartedAt);
+                            continue;
+                        }
+                        List<GenericStack> patternOutputs = deterministicPatternOutputs;
+                        if (chancedTarget) {
+                            if (decision.getOutputPolicy() != OutputPolicy.GUARANTEED_LOWER_BOUND) {
+                                logCandidateDecision(source, target, recipeMap, normalized, decision, "rejected",
+                                        "CHANCED_TARGET_UNSAFE", candidateStartedAt);
+                                continue;
+                            }
+                            long physicalMaximum = chancedTargetOutputs.get(0).amount();
+                            long guaranteedLowerBound = RecipePatternRules.getGuaranteedOutputLowerBound(ruleContext,
+                                    target);
+                            if (guaranteedLowerBound <= 0 || guaranteedLowerBound > physicalMaximum) {
+                                logCandidateDecision(source, target, recipeMap, normalized, decision, "rejected",
+                                        "CHANCED_TARGET_LOWER_BOUND_UNPROVEN", candidateStartedAt);
+                                continue;
+                            }
+                            patternOutputs = Collections.singletonList(new GenericStack(target, guaranteedLowerBound));
+                            decision.explain("adapter:guaranteedLowerBound=" + guaranteedLowerBound);
+                        }
                         encoded = encoded.withOutputs(patternOutputs);
                         long netOutput = DynamicRecipePatternDetails.getNetOutputAmount(target, encoded.inputs,
                                 encoded.alternatives, encoded.outputs);
                         if (netOutput <= 0) continue;
-                        CandidateRoutePriority routePriority = getCandidateRoutePriority(target, recipeMap, recipe,
-                                encoded);
+                        PlanningMode planningMode = resolveCandidatePlanningMode(source, decision);
+                        if (planningMode == PlanningMode.PINNED &&
+                                !source.pinnedRouteGroup.equals(decision.getPinGroup())) {
+                            String reason = source.pinnedRouteGroup.isEmpty() ? "PINNED_ROUTE_GROUP_UNSET" :
+                                    "PINNED_ROUTE_GROUP_MISMATCH";
+                            logCandidateDecision(source, target, recipeMap, normalized, decision, "rejected", reason,
+                                    candidateStartedAt);
+                            continue;
+                        }
+                        CandidateRoutePriority routePriority = getDiagnosticRoutePriority(decision);
+                        logCandidateDecision(source, target, recipeMap, normalized, decision, "accepted", "OK",
+                                candidateStartedAt);
                         if (optimalRebuild != null) {
                             optimalRebuild.recordCandidate(routePriority);
                         }
                         // This ranking only affects pattern preference. Avoiding recursive cost evaluation keeps
                         // large RecipeMaps from turning one lookup into a full dependency scan.
-                        Cost cost = Cost.fallback(recipe, storedItems, netOutput, routePriority);
-                        PatternCandidate candidate = new PatternCandidate(source, recipeMap, recipe, target, encoded,
-                                cost);
+                        Cost cost = Cost.fallback(recipe, source.machineProfile, storedItems, netOutput,
+                                routePriority, planningMode, decision);
+                        TargetedRecipe targeted = new TargetedRecipe(target, patternOutputs.get(0).amount(),
+                                encoded.inputs, encoded.alternatives, hiddenOutputs,
+                                normalized.createBinding(target, source.ruleSetVersion,
+                                        source.machineProfile.getVersion()), encoded.tokenLayout,
+                                decision.getExplanation());
+                        PatternCandidate candidate = new PatternCandidate(source, recipeMap, normalized, target,
+                                encoded, targeted, decision, cost);
                         if (!seenRecipeKeys.add(candidate.recipeKey)) continue;
                         if (isRejectedFor(target, candidate.recipeKey)) continue;
                         keepBestCandidate(candidates, candidate, candidateLimit);
@@ -1062,38 +1467,62 @@ public final class DynamicRecipePatternRegistry {
             }
 
             if (cappedRecipeScan) {
-                ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup for {} stopped after {} recipe candidates " +
-                                "to keep the crafting calculation bounded",
-                        target, MAX_RECIPES_PER_TARGET);
+                PLANNING_METRICS.recordBudgetExhaustion();
+                ApplyGrayMod.LOGGER.warn("Lazy RecipeMap pattern lookup stopped target={} reasonCode=BUDGET_EXHAUSTED " +
+                                "budgetReason=RECIPE_CANDIDATE_LIMIT limit={}",
+                        target, planningBudget.getMaxRecipesPerTarget());
+                if (planningBudget.getExhaustionPolicy() == BudgetExhaustionPolicy.REJECT) {
+                    ApplyGrayMod.LOGGER.warn("Rejected incomplete RecipeMap candidates target={} " +
+                                    "reasonCode=BUDGET_EXHAUSTED budgetPolicy=REJECT",
+                            target);
+                    return Collections.emptyList();
+                }
             }
             return candidates;
         }
 
-        private PatternCandidate selectBestCandidate(AEKey target, List<PatternCandidate> candidates) {
-            if (candidates.size() < 2) {
-                return candidates.get(0);
-            }
-
+        private void selectBestCandidate(AEKey target, List<PatternCandidate> candidates) {
+            if (candidates.isEmpty()) return;
             long startedAt = System.nanoTime();
-            PatternCandidate staticBest = candidates.get(0);
-            RouteCostEstimator estimator = new RouteCostEstimator(staticBest.source.grid, this,
+            RouteCostEstimator estimator = new RouteCostEstimator(candidates.get(0).source.grid, this,
                     getRouteCostBudget());
+            int rejectedCycleCandidates = estimator.rejectUnsafeRootCandidates(target, candidates);
+            if (candidates.isEmpty()) {
+                ApplyGrayMod.LOGGER.warn("Rejected all dynamic RecipeMap routes target={} reasonCode=CYCLE_NO_EXTERNAL_SEED " +
+                                "rejectedCandidates={}",
+                        target, rejectedCycleCandidates);
+                return;
+            }
+            if (rejectIncompletePlanning(target, candidates, estimator)) return;
+            if (candidates.size() < 2) return;
+
+            PlanningMode planningMode = resolvePlanningMode(candidates);
+            PatternCandidate staticBest = candidates.get(0);
+            for (int index = 1; index < candidates.size(); index++) {
+                PatternCandidate candidate = candidates.get(index);
+                if (candidate.cost.compareTo(staticBest.cost, planningMode) < 0) {
+                    staticBest = candidate;
+                }
+            }
             Map<PatternCandidate, DirectRouteCost> quickCosts = new IdentityHashMap<>();
             for (PatternCandidate candidate : candidates) {
                 quickCosts.put(candidate, estimator.estimateDirect(candidate));
             }
             candidates.sort((left, right) -> {
-                int mandatoryRoute = compareMandatoryRoutePriority(left.cost.routePriority,
-                        right.cost.routePriority);
-                if (mandatoryRoute != 0) return mandatoryRoute;
+                int staticCost = left.cost.compareTo(right.cost, planningMode);
                 int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
+                if (planningMode == PlanningMode.STOCK_FIRST) {
+                    if (quickCost != 0) return quickCost;
+                    return staticCost != 0 ? staticCost : compareCandidates(left, right);
+                }
+                if (staticCost != 0) return staticCost;
                 return quickCost != 0 ? quickCost : compareCandidates(left, right);
             });
 
             boolean stockOnlySelection = quickCosts.get(candidates.get(0)).isFullyStocked();
             Map<PatternCandidate, RouteCost> refinedCosts = new IdentityHashMap<>();
             if (!stockOnlySelection) {
-                List<PatternCandidate> refined = new ArrayList<>(MAX_REFINED_ROUTE_CANDIDATES);
+                List<PatternCandidate> refined = new ArrayList<>(getPlanningBudget().getMaxRefinedCandidates());
                 refined.add(candidates.get(0));
                 if (staticBest != refined.get(0)) {
                     refined.add(staticBest);
@@ -1105,10 +1534,13 @@ public final class DynamicRecipePatternRegistry {
                     refinedCosts.put(candidate, estimator.estimateRoot(candidate, target));
                 }
                 refined.sort((left, right) -> {
-                    int mandatoryRoute = compareMandatoryRoutePriority(left.cost.routePriority,
-                            right.cost.routePriority);
-                    if (mandatoryRoute != 0) return mandatoryRoute;
+                    int staticCost = left.cost.compareTo(right.cost, planningMode);
                     int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
+                    if (planningMode == PlanningMode.STOCK_FIRST) {
+                        if (routeCost != 0) return routeCost;
+                        return staticCost != 0 ? staticCost : compareCandidates(left, right);
+                    }
+                    if (staticCost != 0) return staticCost;
                     return routeCost != 0 ? routeCost : compareCandidates(left, right);
                 });
 
@@ -1119,13 +1551,42 @@ public final class DynamicRecipePatternRegistry {
                 }
             }
 
+            if (rejectIncompletePlanning(target, candidates, estimator)) return;
+
             OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
             if (optimalRebuild != null) {
                 optimalRebuild.inventoryScoredTargets.add(target);
                 optimalRebuild.recordRouteCostEstimator(target, candidates.size(), refinedCosts.size(),
                         stockOnlySelection, System.nanoTime() - startedAt, estimator);
             }
-            return candidates.get(0);
+        }
+
+        /** Applies the configured conservative behavior after a bounded SCC or route-cost search could not finish. */
+        private static boolean rejectIncompletePlanning(AEKey target, List<PatternCandidate> candidates,
+                                                        RouteCostEstimator estimator) {
+            if (getPlanningBudget().getExhaustionPolicy() != BudgetExhaustionPolicy.REJECT ||
+                    !estimator.isIncomplete()) {
+                return false;
+            }
+            candidates.clear();
+            ApplyGrayMod.LOGGER.warn("Rejected incomplete RecipeMap route planning target={} " +
+                            "reasonCode=BUDGET_EXHAUSTED budgetPolicy=REJECT budgetReason={}",
+                    target, estimator.getIncompleteReason());
+            return true;
+        }
+
+        /** Uses a provider-selected profile when all candidates agree; mixed providers retain the stock-safe default. */
+        private static PlanningMode resolvePlanningMode(List<PatternCandidate> candidates) {
+            PlanningMode selected = null;
+            for (PatternCandidate candidate : candidates) {
+                PlanningMode mode = candidate.cost.planningMode;
+                if (selected == null) {
+                    selected = mode;
+                } else if (selected != mode) {
+                    return PlanningMode.STOCK_FIRST;
+                }
+            }
+            return selected == null ? PlanningMode.STOCK_FIRST : selected;
         }
 
         @Nullable
@@ -1140,7 +1601,11 @@ public final class DynamicRecipePatternRegistry {
             if (detail != null && !detail.matchesRecipeDefinition(candidate.recipeMap.getUnlocalizedName(),
                     candidate.encoded.inputs, candidate.encoded.alternatives, candidate.encoded.outputs,
                     candidate.encoded.circuitConfiguration, candidate.cost.rawMaterials, candidate.cost.steps,
-                    candidate.cost.routePriority)) {
+                    candidate.cost.routePriority, candidate.cost.ruleRoutePriority,
+                    candidate.decision.getCyclePolicy(), candidate.cost.cycleRiskPenalty,
+                    candidate.decision.getMaxPatternsForTarget(), candidate.cost.planningMode,
+                    candidate.decision.getPinGroup(), candidate.targeted.getHiddenActualOutputs(),
+                    candidate.targeted.getBinding(), candidate.targeted.getTokenLayout())) {
                 candidate.source.provider.removeCachedDynamicPattern(candidate.recipeKey);
                 detail = null;
             }
@@ -1149,7 +1614,12 @@ public final class DynamicRecipePatternRegistry {
                         candidate.recipeMap.getUnlocalizedName(), candidate.encoded.inputs,
                         candidate.encoded.alternatives, candidate.encoded.outputs,
                         candidate.encoded.circuitConfiguration,
-                        candidate.cost.rawMaterials, candidate.cost.steps, candidate.cost.routePriority);
+                        candidate.cost.rawMaterials, candidate.cost.steps, candidate.cost.routePriority,
+                        candidate.cost.ruleRoutePriority, candidate.decision.getCyclePolicy(),
+                        candidate.cost.cycleRiskPenalty, candidate.decision.getMaxPatternsForTarget(),
+                        candidate.cost.planningMode, candidate.decision.getPinGroup(),
+                        candidate.targeted.getHiddenActualOutputs(), candidate.targeted.getBinding(),
+                        candidate.targeted.getTokenLayout(), candidate.targeted.getExplanation());
                 if (!isPatternAvailableFor(target, detail)) {
                     return null;
                 }
@@ -1160,6 +1630,7 @@ public final class DynamicRecipePatternRegistry {
                 if (optimalRebuild != null) {
                     optimalRebuild.generatedPatterns++;
                 }
+                PLANNING_METRICS.recordGeneratedPattern();
             } else {
                 if (!isPatternAvailableFor(target, detail)) {
                     return null;
@@ -1167,6 +1638,7 @@ public final class DynamicRecipePatternRegistry {
                 if (optimalRebuild != null) {
                     optimalRebuild.reusedPatterns++;
                 }
+                PLANNING_METRICS.recordReusedPattern();
             }
             patternsByRecipe.put(candidate.recipeKey, detail);
             providersByPattern.put(detail, candidate.source.provider);
@@ -1267,10 +1739,12 @@ public final class DynamicRecipePatternRegistry {
             }
 
             long startedAt = System.nanoTime();
-            RecipeOutputIndex indexed = RecipeOutputIndex.create(recipes);
+            RecipeBindingResolver.invalidate(recipeMap);
+            RecipeOutputIndex indexed = RecipeOutputIndex.create(recipeMap);
             if (indexed == null) {
                 return null;
             }
+            PLANNING_METRICS.recordIndex(indexed.recipeCount, System.nanoTime() - startedAt);
 
             RecipeOutputIndex result = indexed;
             synchronized (this) {
@@ -1301,6 +1775,16 @@ public final class DynamicRecipePatternRegistry {
 
         private static void keepBestCandidate(List<PatternCandidate> candidates, PatternCandidate candidate,
                                               int candidateLimit) {
+            for (int index = candidates.size() - 1; index >= 0; index--) {
+                PatternCandidate existing = candidates.get(index);
+                if (dominates(existing, candidate)) {
+                    return;
+                }
+                if (dominates(candidate, existing)) {
+                    candidates.remove(index);
+                }
+            }
+
             int insertionIndex = 0;
             while (insertionIndex < candidates.size() &&
                     compareCandidates(candidates.get(insertionIndex), candidate) <= 0) {
@@ -1314,6 +1798,26 @@ public final class DynamicRecipePatternRegistry {
             if (candidates.size() > candidateLimit) {
                 candidates.remove(candidates.size() - 1);
             }
+        }
+
+        /** Retains non-dominated route alternatives before the configured candidate budget trims the frontier. */
+        private static boolean dominates(PatternCandidate left, PatternCandidate right) {
+            Cost leftCost = left.cost;
+            Cost rightCost = right.cost;
+            boolean routeNoWorse = leftCost.ruleRoutePriority >= rightCost.ruleRoutePriority;
+            boolean rawNoWorse = compareInputOutputEfficiency(leftCost.rawMaterials, leftCost.netOutput,
+                    rightCost.rawMaterials, rightCost.netOutput) <= 0;
+            boolean hiddenNoWorse = leftCost.hiddenOutputPenalty <= rightCost.hiddenOutputPenalty;
+            boolean cycleNoWorse = leftCost.cycleRiskPenalty <= rightCost.cycleRiskPenalty;
+            boolean stepsNoWorse = leftCost.steps <= rightCost.steps;
+            if (!routeNoWorse || !rawNoWorse || !hiddenNoWorse || !cycleNoWorse || !stepsNoWorse) {
+                return false;
+            }
+            return leftCost.ruleRoutePriority > rightCost.ruleRoutePriority ||
+                    compareInputOutputEfficiency(leftCost.rawMaterials, leftCost.netOutput,
+                            rightCost.rawMaterials, rightCost.netOutput) < 0 ||
+                    leftCost.hiddenOutputPenalty < rightCost.hiddenOutputPenalty ||
+                    leftCost.cycleRiskPenalty < rightCost.cycleRiskPenalty || leftCost.steps < rightCost.steps;
         }
 
         private static int compareCandidates(PatternCandidate left, PatternCandidate right) {
@@ -1590,7 +2094,14 @@ public final class DynamicRecipePatternRegistry {
             rejectedRecipeKeysByTarget.clear();
             routeCandidateCache.clear();
             invalidateRecipeOutputIndexes();
-            providersByPattern.clear();
+            // Weak ownership entries deliberately survive cache invalidation so an already-submitted CPU can finish.
+            // Fresh crafting lookups only see patterns in the cleared indexes above.
+        }
+
+        private void removeProviderBindings(ICraftingProvider provider) {
+            synchronized (providersByPattern) {
+                providersByPattern.entrySet().removeIf(entry -> entry.getValue() == provider);
+            }
         }
 
         private void requestFullRecipeOutputIndexRebuild() {
@@ -1601,7 +2112,46 @@ public final class DynamicRecipePatternRegistry {
         private void invalidateRecipeOutputIndexes() {
             recipeOutputIndexEpoch++;
             recipeOutputIndexes.clear();
+            RecipeBindingResolver.invalidateAll();
             pendingFullRecipeOutputIndexEpoch = 0;
+        }
+
+        private synchronized int invalidateRecipeMapContents(RecipeMap<?> recipeMap) {
+            String recipeMapName = recipeMap.getUnlocalizedName();
+            boolean affected = false;
+            int discarded = 0;
+            for (ProviderSnapshot snapshot : providers.values()) {
+                boolean exposesRecipeMap = false;
+                for (RecipeMap<?> exposedRecipeMap : snapshot.recipeMaps) {
+                    if (exposedRecipeMap == recipeMap) {
+                        exposesRecipeMap = true;
+                        break;
+                    }
+                }
+                if (!exposesRecipeMap) continue;
+                affected = true;
+                for (DynamicRecipePatternDetails detail : snapshot.provider.getCachedDynamicPatterns()) {
+                    if (recipeMapName.equals(detail.getRecipeMapName())) {
+                        snapshot.provider.removeCachedDynamicPattern(detail.getRecipeKey());
+                        discarded++;
+                    }
+                }
+            }
+            if (!affected && !recipeOutputIndexes.containsKey(recipeMap)) return 0;
+            clearGenerated();
+            return discarded;
+        }
+
+        private synchronized int invalidateRuleSetContents() {
+            int discarded = 0;
+            for (ProviderSnapshot snapshot : providers.values()) {
+                for (DynamicRecipePatternDetails detail : snapshot.provider.getCachedDynamicPatterns()) {
+                    snapshot.provider.removeCachedDynamicPattern(detail.getRecipeKey());
+                    discarded++;
+                }
+            }
+            clearGenerated();
+            return discarded;
         }
 
         private static final class CachedCandidates {
@@ -1609,37 +2159,38 @@ public final class DynamicRecipePatternRegistry {
             private final long cachedAtNanos;
 
             private CachedCandidates(List<PatternCandidate> candidates, long cachedAtNanos) {
-                this.candidates = candidates;
+                this.candidates = Collections.unmodifiableList(new ArrayList<>(candidates));
                 this.cachedAtNanos = cachedAtNanos;
             }
         }
     }
 
     /**
-     * Immutable, deterministic-output index for one RecipeMap. It is intentionally built only on the crafting worker
-     * and yields through the active calculation after every recipe, so initial indexing cannot monopolize a tick.
+     * Immutable output index for one RecipeMap. Chanced keys are retained only so a proven lower-bound adapter can
+     * inspect them; normal candidate generation still refuses them by default.
      */
     private static final class RecipeOutputIndex {
 
         private final int recipeCount;
         private final int outputCount;
         private final Map<AEKey, List<Recipe>> recipesByOutput;
+        private final RecipeBindingResolver.RecipeMapSnapshot bindingSnapshot;
 
-        private RecipeOutputIndex(int recipeCount, Map<AEKey, List<Recipe>> recipesByOutput) {
+        private RecipeOutputIndex(int recipeCount, Map<AEKey, List<Recipe>> recipesByOutput,
+                                  RecipeBindingResolver.RecipeMapSnapshot bindingSnapshot) {
             this.recipeCount = recipeCount;
             this.outputCount = recipesByOutput.size();
             this.recipesByOutput = recipesByOutput;
+            this.bindingSnapshot = bindingSnapshot;
         }
 
-        private static RecipeOutputIndex create(Collection<Recipe> recipes) {
+        private static RecipeOutputIndex create(RecipeMap<?> recipeMap) {
+            RecipeBindingResolver.RecipeMapSnapshot bindingSnapshot = RecipeBindingResolver.snapshot(recipeMap);
+            Collection<Recipe> recipes = bindingSnapshot.getRecipes();
             Map<AEKey, List<Recipe>> mutableIndex = new HashMap<>();
             for (Recipe recipe : recipes) {
                 if (!GridState.cooperateWithCraftingCalculation()) {
                     return null;
-                }
-                if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
-                        !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) {
-                    continue;
                 }
 
                 for (ItemStack output : recipe.getOutputs()) {
@@ -1648,13 +2199,19 @@ public final class DynamicRecipePatternRegistry {
                 for (FluidStack output : recipe.getFluidOutputs()) {
                     addRecipe(mutableIndex, AEFluidKey.of(output), recipe);
                 }
+                for (ChancedItemOutput output : recipe.getChancedOutputs().getChancedEntries()) {
+                    addRecipe(mutableIndex, AEItemKey.of(output.getIngredient()), recipe);
+                }
+                for (ChancedFluidOutput output : recipe.getChancedFluidOutputs().getChancedEntries()) {
+                    addRecipe(mutableIndex, AEFluidKey.of(output.getIngredient()), recipe);
+                }
             }
 
             Map<AEKey, List<Recipe>> immutableIndex = new HashMap<>(mutableIndex.size());
             for (Map.Entry<AEKey, List<Recipe>> entry : mutableIndex.entrySet()) {
                 immutableIndex.put(entry.getKey(), Collections.unmodifiableList(entry.getValue()));
             }
-            return new RecipeOutputIndex(recipes.size(), Collections.unmodifiableMap(immutableIndex));
+            return new RecipeOutputIndex(recipes.size(), Collections.unmodifiableMap(immutableIndex), bindingSnapshot);
         }
 
         private static void addRecipe(Map<AEKey, List<Recipe>> index, AEKey output, Recipe recipe) {
@@ -1668,6 +2225,11 @@ public final class DynamicRecipePatternRegistry {
         private List<Recipe> getRecipes(AEKey target) {
             List<Recipe> recipes = recipesByOutput.get(target);
             return recipes == null ? Collections.emptyList() : recipes;
+        }
+
+        @Nullable
+        private NormalizedRecipe normalize(Recipe recipe) {
+            return bindingSnapshot.normalize(recipe);
         }
     }
 
@@ -1685,28 +2247,23 @@ public final class DynamicRecipePatternRegistry {
 
     private static EncodedRecipe encodeRecipe(Recipe recipe, KeyCounter storedItems,
                                               Function<ItemStack, ItemStack> programmableCircuitFactory) {
-        if (!recipe.getChancedOutputs().getChancedEntries().isEmpty() ||
-                !recipe.getChancedFluidOutputs().getChancedEntries().isEmpty()) return null;
         if (producesGeneralCircuitBoard(recipe)) return null;
 
         List<GenericStack> inputs = new ArrayList<>();
         List<List<GenericStack>> alternatives = new ArrayList<>();
+        List<NonConsumableTokenLayout.Slot> tokenSlots = new ArrayList<>();
         int circuitConfiguration = -1;
         for (GTRecipeInput input : recipe.getInputs()) {
-            if (input instanceof IntCircuitIngredient) {
-                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems,
+            if (input instanceof IntCircuitIngredient || input.isNonConsumable()) {
+                NonConsumableTokenEncoding token = encodeNonConsumableItem(input, storedItems,
                         programmableCircuitFactory);
-                if (programmableOptions == null) return null;
-                inputs.add(programmableOptions.get(0));
-                alternatives.add(programmableOptions);
-                continue;
-            }
-            if (input.isNonConsumable()) {
-                List<GenericStack> programmableOptions = encodeNonConsumableItem(input, storedItems,
-                        programmableCircuitFactory);
-                if (programmableOptions == null) return null;
-                inputs.add(programmableOptions.get(0));
-                alternatives.add(programmableOptions);
+                if (token == null) return null;
+                for (int tokenIndex = 0; tokenIndex < input.getAmount(); tokenIndex++) {
+                    int inputIndex = inputs.size();
+                    inputs.add(token.programmableOptions.get(0));
+                    alternatives.add(token.programmableOptions);
+                    tokenSlots.add(new NonConsumableTokenLayout.Slot(inputIndex, token.originalChoices));
+                }
                 continue;
             }
 
@@ -1757,18 +2314,19 @@ public final class DynamicRecipePatternRegistry {
             GenericStack genericOutput = GenericStack.fromFluidStack(output);
             if (genericOutput != null) outputs.add(genericOutput);
         }
-        if (inputs.isEmpty() || outputs.isEmpty() || inputs.size() > 81 || outputs.size() > 27) return null;
-        return new EncodedRecipe(inputs, alternatives, outputs, circuitConfiguration);
+        if (inputs.isEmpty() || outputs.isEmpty() || inputs.size() > 81) return null;
+        return new EncodedRecipe(inputs, alternatives, outputs, circuitConfiguration,
+                new NonConsumableTokenLayout(tokenSlots));
     }
 
     /**
      * Converts one non-consumable item requirement into the corresponding programmable circuit.
-     * Non-consumable fluids and multi-count item requirements have no equivalent virtual circuit representation.
+     * A multi-count requirement expands into separate token inputs at the caller so every required virtual slot is
+     * represented explicitly to AE2 and to the isolated execution buffer.
      */
-    private static List<GenericStack> encodeNonConsumableItem(GTRecipeInput input, KeyCounter storedItems,
-                                                               Function<ItemStack, ItemStack> programmableCircuitFactory) {
-        if (input.getInputFluidStack() != null || input.getAmount() != 1 ||
-                programmableCircuitFactory == null) {
+    private static NonConsumableTokenEncoding encodeNonConsumableItem(GTRecipeInput input, KeyCounter storedItems,
+                                                                       Function<ItemStack, ItemStack> programmableCircuitFactory) {
+        if (input.getInputFluidStack() != null || input.getAmount() <= 0 || programmableCircuitFactory == null) {
             return null;
         }
 
@@ -1776,14 +2334,22 @@ public final class DynamicRecipePatternRegistry {
         if (choices == null || choices.length == 0) return null;
         if (containsExternalOreInput(choices)) return null;
 
+        List<ItemStack> originalChoices = new ArrayList<>();
         List<GenericStack> programmableOptions = new ArrayList<>();
         for (ItemStack choice : prioritizeItemChoices(choices, storedItems)) {
+            ItemStack original = choice.copy();
+            original.setCount(1);
             ItemStack programmable = programmableCircuitFactory.apply(choice);
             if (programmable == null || programmable.isEmpty()) return null;
             GenericStack genericProgrammable = GenericStack.fromItemStack(programmable);
-            if (genericProgrammable != null) programmableOptions.add(genericProgrammable);
+            if (genericProgrammable != null) {
+                originalChoices.add(original);
+                programmableOptions.add(genericProgrammable);
+            }
         }
-        return programmableOptions.isEmpty() ? null : programmableOptions;
+
+        return programmableOptions.isEmpty() ? null :
+                new NonConsumableTokenEncoding(programmableOptions, originalChoices);
     }
 
     @Nullable
@@ -1795,7 +2361,9 @@ public final class DynamicRecipePatternRegistry {
         if (programmable.isEmpty()) {
             return null;
         }
-        return ProgrammableCircuit.wrap(choice, programmable);
+        ItemStack original = choice.copy();
+        original.setCount(1);
+        return ProgrammableCircuit.wrap(original, programmable);
     }
 
     /**
@@ -1923,12 +2491,12 @@ public final class DynamicRecipePatternRegistry {
 
     private static RouteCostBudget getRouteCostBudget() {
         if (ACTIVE_CRAFTING_CALCULATION.get() == null) {
-            return new RouteCostBudget();
+            return new RouteCostBudget(getPlanningBudget());
         }
 
         RouteCostBudget budget = ROUTE_COST_BUDGET.get();
         if (budget == null) {
-            budget = new RouteCostBudget();
+            budget = new RouteCostBudget(getPlanningBudget());
             ROUTE_COST_BUDGET.set(budget);
         }
         return budget;
@@ -1941,12 +2509,12 @@ public final class DynamicRecipePatternRegistry {
             Collection<IPatternDetails> mounted = grid.getCraftingService().getCraftingFor(target);
             if (mounted.isEmpty()) return Collections.emptyList();
 
-            List<IPatternDetails> normal = new ArrayList<>(Math.min(mounted.size(),
-                    MAX_NORMAL_PATTERNS_PER_TARGET));
+            int normalLimit = getPlanningBudget().getMaxNormalPatternsPerTarget();
+            List<IPatternDetails> normal = new ArrayList<>(Math.min(mounted.size(), normalLimit));
             for (IPatternDetails pattern : mounted) {
                 if (!(pattern instanceof DynamicRecipePatternDetails)) {
                     normal.add(pattern);
-                    if (normal.size() >= MAX_NORMAL_PATTERNS_PER_TARGET) break;
+                    if (normal.size() >= normalLimit) break;
                 }
             }
             return normal;
@@ -1996,12 +2564,46 @@ public final class DynamicRecipePatternRegistry {
         private int normalPatternEdges;
         private int dynamicPatternEdges;
         private int boundedFallbacks;
+        private RouteCycleAnalysis cycleAnalysis;
+        private boolean loggedCycleAnalysisBudget;
+        private boolean loggedRouteCostBudget;
+        private int rejectedCycleEdges;
 
         private RouteCostEstimator(IGrid grid, GridState state, RouteCostBudget budget) {
             this.grid = grid;
             this.state = state;
             this.budget = budget;
             inventory = new InventorySnapshot(grid.getStorageService().getCachedInventory());
+        }
+
+        private PlanningBudget getLimits() {
+            return budget.getLimits();
+        }
+
+        private boolean isIncomplete() {
+            return budget.isExhausted() || cycleAnalysis != null && !cycleAnalysis.isComplete();
+        }
+
+        private String getIncompleteReason() {
+            if (budget.isExhausted()) return budget.getExhaustionReason();
+            return cycleAnalysis == null ? "UNKNOWN" : cycleAnalysis.getBudgetReason();
+        }
+
+        /** Removes root routes that cannot be part of a seed-reachable SCC before they reach AE2 planning. */
+        private int rejectUnsafeRootCandidates(AEKey target, List<PatternCandidate> candidates) {
+            prepareCycleAnalysis(target);
+            if (cycleAnalysis == null || !cycleAnalysis.isComplete()) return 0;
+
+            int rejected = 0;
+            for (int index = candidates.size() - 1; index >= 0; index--) {
+                PatternCandidate candidate = candidates.get(index);
+                if (!cycleAnalysis.rejects(target, RouteEdge.of(candidate), 0)) continue;
+                candidates.remove(index);
+                rejected++;
+                logCandidateDecision(candidate.source, target, candidate.recipeMap, candidate.normalized,
+                        candidate.decision, "rejected", "CYCLE_NO_EXTERNAL_SEED", 0L);
+            }
+            return rejected;
         }
 
         private DirectRouteCost estimateDirect(IPatternDetails pattern) {
@@ -2018,7 +2620,7 @@ public final class DynamicRecipePatternRegistry {
             for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 DirectRouteChoice best = null;
-                int optionLimit = Math.min(options.length, MAX_ROUTE_COST_INPUT_ALTERNATIVES);
+                int optionLimit = Math.min(options.length, getLimits().getMaxInputAlternatives());
                 for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
                     GenericStack option = options[optionIndex];
                     if (option == null || option.amount() <= 0) continue;
@@ -2055,19 +2657,58 @@ public final class DynamicRecipePatternRegistry {
 
         private RouteCost estimateRoot(RouteEdge edge, AEKey target) {
             currentRootExpansions = 0;
+            rejectedCycleEdges = 0;
             InventoryLedger ledger = new InventoryLedger(inventory);
             Set<AEKey> path = new HashSet<>();
             path.add(target);
-            return estimateEdge(edge, 1, ledger, path, 0);
+            prepareCycleAnalysis(target);
+            RouteCost result = estimateEdge(edge, target, 1, ledger, path, 0);
+            if (rejectedCycleEdges > 0 && ApplyGrayMod.LOGGER.isDebugEnabled()) {
+                ApplyGrayMod.LOGGER.debug("Recipe-pattern SCC guard rejected {} cycle edge(s) target={} " +
+                                "reasonCode=CYCLE_NO_EXTERNAL_SEED",
+                        rejectedCycleEdges, target);
+            }
+            if (budget.isExhausted() && !loggedRouteCostBudget) {
+                loggedRouteCostBudget = true;
+                ApplyGrayMod.LOGGER.warn("Recipe-pattern route scoring stopped target={} reasonCode=BUDGET_EXHAUSTED " +
+                                "budgetReason={} expansions={}",
+                        target, budget.getExhaustionReason(), budget.getExpansions());
+            }
+            return result;
         }
 
-        private RouteCost estimateEdge(RouteEdge edge, long crafts, InventoryLedger ledger,
+        private void prepareCycleAnalysis(AEKey target) {
+            if (cycleAnalysis != null) return;
+            cycleAnalysis = RouteCycleAnalysis.analyze(target, this);
+            if (!cycleAnalysis.isComplete()) {
+                boundedFallbacks++;
+                if (!loggedCycleAnalysisBudget) {
+                    loggedCycleAnalysisBudget = true;
+                    ApplyGrayMod.LOGGER.warn("Recipe-pattern SCC analysis stopped for target={} reasonCode=BUDGET_EXHAUSTED " +
+                                    "budgetReason={} nodes={} edges={}",
+                            target, cycleAnalysis.getBudgetReason(), cycleAnalysis.getNodeCount(),
+                            cycleAnalysis.getEdgeCount());
+                }
+            }
+        }
+
+        private RouteCost estimateEdge(RouteEdge edge, AEKey output, long crafts, InventoryLedger ledger,
                                        Set<AEKey> path, int depth) {
+            if (cycleAnalysis != null && cycleAnalysis.rejects(output, edge, depth)) {
+                rejectedCycleEdges++;
+                return RouteCost.bounded(depth + 1);
+            }
             RouteCost total = RouteCost.executions(crafts, depth + 1);
+            if (cycleAnalysis != null) {
+                long cyclePenalty = cycleAnalysis.getPenalty(output, edge);
+                if (cyclePenalty > 0) {
+                    total = total.plus(RouteCost.cycleRisk(cyclePenalty, depth + 1));
+                }
+            }
             for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 RouteChoice best = null;
-                int optionLimit = Math.min(options.length, MAX_ROUTE_COST_INPUT_ALTERNATIVES);
+                int optionLimit = Math.min(options.length, getLimits().getMaxInputAlternatives());
                 for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
                     GenericStack option = options[optionIndex];
                     if (option == null || option.amount() <= 0) continue;
@@ -2099,7 +2740,8 @@ public final class DynamicRecipePatternRegistry {
             long remaining = amount - fromStock;
             if (remaining <= 0) return stockCost;
 
-            if (depth >= MAX_ROUTE_COST_DEPTH || currentRootExpansions++ >= MAX_ROUTE_COST_EXPANSIONS ||
+            if (depth >= getLimits().getMaxRouteDepth() ||
+                    currentRootExpansions++ >= getLimits().getMaxRouteExpansionsPerTarget() ||
                     !budget.tryExpansion()) {
                 boundedFallbacks++;
                 return stockCost.plus(RouteCost.bounded(depth));
@@ -2115,24 +2757,14 @@ public final class DynamicRecipePatternRegistry {
 
             try {
                 List<RouteEdge> edges = getEdges(key);
-                boolean hasMandatoryRoute = false;
-                for (RouteEdge edge : edges) {
-                    if (edge.hasMandatoryRoutePriority()) {
-                        hasMandatoryRoute = true;
-                        break;
-                    }
-                }
                 RouteChoice best = null;
                 for (RouteEdge edge : edges) {
-                    if (hasMandatoryRoute && !edge.hasMandatoryRoutePriority()) {
-                        continue;
-                    }
                     long netOutput = edge.getNetOutput(key);
                     if (netOutput <= 0) continue;
 
                     long crafts = divideRoundUp(remaining, netOutput);
                     InventoryLedger branch = ledger.copy();
-                    RouteCost patternCost = estimateEdge(edge, crafts, branch, path, depth);
+                    RouteCost patternCost = estimateEdge(edge, key, crafts, branch, path, depth);
                     for (GenericStack output : edge.outputs) {
                         branch.add(output.what(), multiplySaturated(output.amount(), crafts));
                     }
@@ -2198,27 +2830,33 @@ public final class DynamicRecipePatternRegistry {
         private final IPatternDetails.IInput[] inputs;
         private final List<GenericStack> outputs;
         @Nullable private final CandidateRoutePriority routePriority;
+        private final CyclePolicy cyclePolicy;
+        private final long cycleRiskPenalty;
+        private final boolean normalPattern;
 
         private RouteEdge(IPatternDetails.IInput[] inputs, List<GenericStack> outputs,
-                          @Nullable CandidateRoutePriority routePriority) {
+                          @Nullable CandidateRoutePriority routePriority, CyclePolicy cyclePolicy,
+                          long cycleRiskPenalty, boolean normalPattern) {
             this.inputs = inputs;
             this.outputs = outputs;
             this.routePriority = routePriority;
+            this.cyclePolicy = cyclePolicy == null ? CyclePolicy.BREAK_AT_EXTERNAL_SEED : cyclePolicy;
+            this.cycleRiskPenalty = Math.max(0, cycleRiskPenalty);
+            this.normalPattern = normalPattern;
         }
 
         private static RouteEdge of(IPatternDetails pattern) {
             DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
             return new RouteEdge(pattern.getInputs(), pattern.getOutputs(),
-                    dynamic == null ? null : dynamic.getRoutePriority());
+                    dynamic == null ? null : dynamic.getRoutePriority(),
+                    dynamic == null ? CyclePolicy.EXTERNAL_SEED : dynamic.getCyclePolicy(),
+                    dynamic == null ? 0 : dynamic.getCycleRiskPenalty(), dynamic == null);
         }
 
         private static RouteEdge of(PatternCandidate candidate) {
             return new RouteEdge(DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
-                    candidate.encoded.alternatives), candidate.encoded.outputs, candidate.cost.routePriority);
-        }
-
-        private boolean hasMandatoryRoutePriority() {
-            return routePriority == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
+                    candidate.encoded.alternatives), candidate.encoded.outputs, candidate.cost.routePriority,
+                    candidate.decision.getCyclePolicy(), candidate.cost.cycleRiskPenalty, false);
         }
 
         private long getNetOutput(AEKey target) {
@@ -2241,19 +2879,360 @@ public final class DynamicRecipePatternRegistry {
         }
     }
 
+    /**
+     * A bounded Tarjan pass over the currently reachable dynamic dependency graph. Static AE patterns, stock, and
+     * explicitly tagged seed edges terminate graph expansion. The result is deliberately immutable after analysis so
+     * recursive route scoring can consult it without touching world state.
+     */
+    private static final class RouteCycleAnalysis {
+
+        private final RouteCostEstimator estimator;
+        private final Map<AEKey, GraphNode> nodes = new HashMap<>();
+        private final Deque<GraphNode> tarjanStack = new ArrayDeque<>();
+        private final long deadlineNanos;
+        private boolean complete = true;
+        private String budgetReason = "OK";
+        private int edgeCount;
+        private int nextTarjanIndex;
+
+        private RouteCycleAnalysis(RouteCostEstimator estimator) {
+            this.estimator = estimator;
+            this.deadlineNanos = System.nanoTime() + estimator.getLimits().getMaxSccAnalysisNanos();
+        }
+
+        private static RouteCycleAnalysis analyze(AEKey root, RouteCostEstimator estimator) {
+            RouteCycleAnalysis analysis = new RouteCycleAnalysis(estimator);
+            analysis.collect(root);
+            if (analysis.complete) {
+                analysis.buildComponents();
+            }
+            return analysis;
+        }
+
+        private boolean isComplete() {
+            return complete;
+        }
+
+        private String getBudgetReason() {
+            return budgetReason;
+        }
+
+        private int getNodeCount() {
+            return nodes.size();
+        }
+
+        private int getEdgeCount() {
+            return edgeCount;
+        }
+
+        private void collect(AEKey key) {
+            if (!complete || key == null || nodes.containsKey(key)) return;
+            if (!reserveNode()) return;
+
+            GraphNode node = new GraphNode(key);
+            nodes.put(key, node);
+            if (isExternalSeed(key)) {
+                node.directSeed = true;
+                return;
+            }
+
+            List<RouteEdge> edges = estimator.getEdges(key);
+            node.edges = edges;
+            for (RouteEdge edge : edges) {
+                if (!reserveEdge()) return;
+                if (edge.normalPattern || edge.cyclePolicy == CyclePolicy.EXTERNAL_SEED) {
+                    node.directSeed = true;
+                }
+                // Mounted static patterns are explicit AE leaves. Their internals are not part of this dynamic SCC.
+                if (edge.normalPattern) continue;
+
+                for (IPatternDetails.IInput input : edge.inputs) {
+                    GenericStack[] options = input.possibleInputs();
+                    int optionLimit = Math.min(options.length, estimator.getLimits().getMaxInputAlternatives());
+                    for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
+                        GenericStack option = options[optionIndex];
+                        if (option == null || option.amount() <= 0) continue;
+                        AEKey dependency = option.what();
+                        if (isExternalSeed(dependency)) {
+                            node.directSeed = true;
+                        } else {
+                            node.dependencies.add(dependency);
+                            collect(dependency);
+                            if (!complete) return;
+                        }
+                    }
+                }
+            }
+        }
+
+        private boolean rejects(AEKey output, RouteEdge edge, int depth) {
+            if (!complete || edge.normalPattern || edge.cyclePolicy == CyclePolicy.EXTERNAL_SEED) return false;
+            if (edge.cyclePolicy == CyclePolicy.FORBID) return true;
+            if (edge.cyclePolicy == CyclePolicy.RECYCLE_ONLY && depth > 0) return true;
+
+            GraphNode node = nodes.get(output);
+            boolean cyclic = node != null && node.component != null && node.component.cyclic ||
+                    closesCycle(output, edge);
+            if (!cyclic) return false;
+            // BREAKABLE edges are the explicit, data-driven cycle cut. Keeping one merely because another edge in
+            // the component reaches a seed would allow the same dynamic loop to reappear through route scoring.
+            if (edge.cyclePolicy == CyclePolicy.BREAKABLE) return true;
+            boolean reachesSeed = node != null && node.component != null &&
+                    canReachSeed(node.component, new HashSet<>());
+            if (!reachesSeed && !canReachSeedThroughEdge(edge)) return true;
+            return edge.cyclePolicy == CyclePolicy.ALLOW_NET_POSITIVE &&
+                    (edge.getNetOutput(output) <= 0 || !hasImmediateSeedInput(edge));
+        }
+
+        private long getPenalty(AEKey output, RouteEdge edge) {
+            if (!complete || edge.cyclePolicy != CyclePolicy.PENALIZE) return 0;
+            GraphNode node = nodes.get(output);
+            return node != null && node.component != null && node.component.cyclic ? edge.cycleRiskPenalty : 0;
+        }
+
+        private boolean hasImmediateSeedInput(RouteEdge edge) {
+            for (IPatternDetails.IInput input : edge.inputs) {
+                GenericStack[] options = input.possibleInputs();
+                int optionLimit = Math.min(options.length, estimator.getLimits().getMaxInputAlternatives());
+                for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
+                    GenericStack option = options[optionIndex];
+                    if (option == null || option.amount() <= 0) continue;
+                    if (isExternalSeed(option.what())) return true;
+                    GraphNode dependency = nodes.get(option.what());
+                    if (dependency != null && dependency.directSeed) return true;
+                }
+            }
+            return false;
+        }
+
+        /** Detects a root edge that closes a cycle absent from the cached alternative-route subset. */
+        private boolean closesCycle(AEKey output, RouteEdge edge) {
+            for (IPatternDetails.IInput input : edge.inputs) {
+                GenericStack[] options = input.possibleInputs();
+                int optionLimit = Math.min(options.length, estimator.getLimits().getMaxInputAlternatives());
+                for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
+                    GenericStack option = options[optionIndex];
+                    if (option == null || option.amount() <= 0) continue;
+                    AEKey dependency = option.what();
+                    if (output.equals(dependency)) return true;
+                    GraphNode dependencyNode = nodes.get(dependency);
+                    if (dependencyNode != null && reaches(dependencyNode, output, new HashSet<>())) return true;
+                }
+            }
+            return false;
+        }
+
+        /** Allows a cycle only when this candidate can prove an external or graph-reachable seed branch. */
+        private boolean canReachSeedThroughEdge(RouteEdge edge) {
+            for (IPatternDetails.IInput input : edge.inputs) {
+                GenericStack[] options = input.possibleInputs();
+                int optionLimit = Math.min(options.length, estimator.getLimits().getMaxInputAlternatives());
+                for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
+                    GenericStack option = options[optionIndex];
+                    if (option == null || option.amount() <= 0) continue;
+                    if (isExternalSeed(option.what())) return true;
+                    GraphNode dependency = nodes.get(option.what());
+                    if (dependency != null && dependency.component != null &&
+                            canReachSeed(dependency.component, new HashSet<>())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private boolean reaches(GraphNode current, AEKey target, Set<GraphNode> visiting) {
+            if (current.key.equals(target)) return true;
+            if (!visiting.add(current)) return false;
+            try {
+                for (AEKey dependencyKey : current.dependencies) {
+                    GraphNode dependency = nodes.get(dependencyKey);
+                    if (dependency != null && reaches(dependency, target, visiting)) return true;
+                }
+                return false;
+            } finally {
+                visiting.remove(current);
+            }
+        }
+
+        private boolean isExternalSeed(AEKey key) {
+            return key != null && (estimator.inventory.get(key) > 0 || isExternalOreInput(key) ||
+                    isElementalDust(key));
+        }
+
+        private boolean reserveNode() {
+            if (nodes.size() >= estimator.getLimits().getMaxSccNodes()) {
+                exhaust("SCC_NODE_LIMIT");
+                return false;
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                exhaust("SCC_TIME_LIMIT");
+                return false;
+            }
+            return true;
+        }
+
+        private boolean reserveEdge() {
+            if (++edgeCount > estimator.getLimits().getMaxSccEdges()) {
+                exhaust("SCC_EDGE_LIMIT");
+                return false;
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                exhaust("SCC_TIME_LIMIT");
+                return false;
+            }
+            return true;
+        }
+
+        private void exhaust(String reason) {
+            if (!complete) return;
+            complete = false;
+            budgetReason = reason;
+            PLANNING_METRICS.recordBudgetExhaustion();
+        }
+
+        private void buildComponents() {
+            for (GraphNode node : nodes.values()) {
+                if (node.tarjanIndex < 0) strongConnect(node);
+            }
+            for (GraphNode node : nodes.values()) {
+                Component component = node.component;
+                if (component == null) continue;
+                if (node.directSeed) component.directSeed = true;
+                for (AEKey dependencyKey : node.dependencies) {
+                    GraphNode dependency = nodes.get(dependencyKey);
+                    if (dependency == null || dependency.component == null) continue;
+                    if (dependency.component == component) {
+                        component.cyclic |= dependency == node;
+                    } else {
+                        component.dependencies.add(dependency.component);
+                    }
+                }
+            }
+        }
+
+        private void strongConnect(GraphNode node) {
+            node.tarjanIndex = nextTarjanIndex;
+            node.lowLink = nextTarjanIndex++;
+            tarjanStack.push(node);
+            node.onTarjanStack = true;
+
+            for (AEKey dependencyKey : node.dependencies) {
+                GraphNode dependency = nodes.get(dependencyKey);
+                if (dependency == null) continue;
+                if (dependency.tarjanIndex < 0) {
+                    strongConnect(dependency);
+                    node.lowLink = Math.min(node.lowLink, dependency.lowLink);
+                } else if (dependency.onTarjanStack) {
+                    node.lowLink = Math.min(node.lowLink, dependency.tarjanIndex);
+                }
+            }
+
+            if (node.lowLink != node.tarjanIndex) return;
+            Component component = new Component();
+            GraphNode member;
+            do {
+                member = tarjanStack.pop();
+                member.onTarjanStack = false;
+                member.component = component;
+                component.members.add(member);
+            } while (member != node);
+            component.cyclic = component.members.size() > 1;
+        }
+
+        private static boolean canReachSeed(Component component, Set<Component> visiting) {
+            if (component.reachesSeed != null) return component.reachesSeed;
+            if (component.directSeed) {
+                component.reachesSeed = true;
+                return true;
+            }
+            if (!visiting.add(component)) return false;
+            try {
+                for (Component dependency : component.dependencies) {
+                    if (canReachSeed(dependency, visiting)) {
+                        component.reachesSeed = true;
+                        return true;
+                    }
+                }
+                component.reachesSeed = false;
+                return false;
+            } finally {
+                visiting.remove(component);
+            }
+        }
+
+        private static final class GraphNode {
+            private final AEKey key;
+            private final Set<AEKey> dependencies = new HashSet<>();
+            private List<RouteEdge> edges = Collections.emptyList();
+            private boolean directSeed;
+            private int tarjanIndex = -1;
+            private int lowLink;
+            private boolean onTarjanStack;
+            private Component component;
+
+            private GraphNode(AEKey key) {
+                this.key = key;
+            }
+        }
+
+        private static final class Component {
+            private final List<GraphNode> members = new ArrayList<>();
+            private final Set<Component> dependencies = new HashSet<>();
+            private boolean directSeed;
+            private boolean cyclic;
+            @Nullable private Boolean reachesSeed;
+        }
+    }
+
     /** Hard lifetime bound for all recursive route scoring performed by one AE calculation. */
     private static final class RouteCostBudget {
 
-        private final long deadlineNanos = System.nanoTime() + MAX_ROUTE_COST_CALCULATION_NANOS;
+        private final PlanningBudget limits;
+        private final long deadlineNanos;
         private int expansions;
+        private boolean exhausted;
+        private String exhaustionReason = "OK";
+
+        private RouteCostBudget(PlanningBudget limits) {
+            this.limits = limits == null ? PlanningBudget.DEFAULT : limits;
+            this.deadlineNanos = System.nanoTime() + this.limits.getMaxRouteCalculationNanos();
+        }
 
         private boolean tryExpansion() {
-            if (expansions >= MAX_ROUTE_COST_CALCULATION_EXPANSIONS ||
-                    System.nanoTime() >= deadlineNanos) {
+            if (expansions >= limits.getMaxRouteExpansionsPerCalculation()) {
+                exhaust("ROUTE_EXPANSION_LIMIT");
+                return false;
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                exhaust("ROUTE_TIME_LIMIT");
                 return false;
             }
             expansions++;
             return true;
+        }
+
+        private void exhaust(String reason) {
+            if (exhausted) return;
+            exhausted = true;
+            exhaustionReason = reason;
+            PLANNING_METRICS.recordBudgetExhaustion();
+        }
+
+        private boolean isExhausted() {
+            return exhausted;
+        }
+
+        private String getExhaustionReason() {
+            return exhaustionReason;
+        }
+
+        private int getExpansions() {
+            return expansions;
+        }
+
+        private PlanningBudget getLimits() {
+            return limits;
         }
     }
 
@@ -2402,37 +3381,43 @@ public final class DynamicRecipePatternRegistry {
         private final long executions;
         private final long consumedStockMaterials;
         private final int boundedFallbacks;
+        private final long cycleRisk;
 
         private RouteCost(long missingMaterials, int maxDepth, long executions,
-                          long consumedStockMaterials, int boundedFallbacks) {
+                          long consumedStockMaterials, int boundedFallbacks, long cycleRisk) {
             this.missingMaterials = missingMaterials;
             this.maxDepth = maxDepth;
             this.executions = executions;
             this.consumedStockMaterials = consumedStockMaterials;
             this.boundedFallbacks = boundedFallbacks;
+            this.cycleRisk = cycleRisk;
         }
 
         private static RouteCost executions(long executions, int depth) {
-            return new RouteCost(0, depth, executions, 0, 0);
+            return new RouteCost(0, depth, executions, 0, 0, 0);
         }
 
         private static RouteCost stock(long materials) {
-            return new RouteCost(0, 0, 0, materials, 0);
+            return new RouteCost(0, 0, 0, materials, 0, 0);
         }
 
         private static RouteCost missing(AEKey key, long amount, int depth) {
-            return new RouteCost(estimateKeyMaterialAmount(key, amount), depth, 0, 0, 0);
+            return new RouteCost(estimateKeyMaterialAmount(key, amount), depth, 0, 0, 0, 0);
         }
 
         private static RouteCost bounded(int depth) {
-            return new RouteCost(BOUNDED_ROUTE_COST_PENALTY, depth, 0, 0, 1);
+            return new RouteCost(BOUNDED_ROUTE_COST_PENALTY, depth, 0, 0, 1, 0);
+        }
+
+        private static RouteCost cycleRisk(long risk, int depth) {
+            return new RouteCost(0, depth, 0, 0, 0, Math.max(0, risk));
         }
 
         private RouteCost plus(RouteCost other) {
             return new RouteCost(addSaturated(missingMaterials, other.missingMaterials),
                     Math.max(maxDepth, other.maxDepth), addSaturated(executions, other.executions),
                     addSaturated(consumedStockMaterials, other.consumedStockMaterials),
-                    boundedFallbacks + other.boundedFallbacks);
+                    boundedFallbacks + other.boundedFallbacks, addSaturated(cycleRisk, other.cycleRisk));
         }
 
         @Override
@@ -2441,6 +3426,8 @@ public final class DynamicRecipePatternRegistry {
             if (missing != 0) return missing;
             int bounded = Integer.compare(boundedFallbacks, other.boundedFallbacks);
             if (bounded != 0) return bounded;
+            int cycle = Long.compare(cycleRisk, other.cycleRisk);
+            if (cycle != 0) return cycle;
             int depth = Integer.compare(maxDepth, other.maxDepth);
             if (depth != 0) return depth;
             int executionCount = Long.compare(executions, other.executions);
@@ -2451,7 +3438,8 @@ public final class DynamicRecipePatternRegistry {
         @Override
         public String toString() {
             return "[missing=" + missingMaterials + ", depth=" + maxDepth + ", executions=" + executions +
-                    ", stock=" + consumedStockMaterials + ", bounded=" + boundedFallbacks + ']';
+                    ", stock=" + consumedStockMaterials + ", bounded=" + boundedFallbacks +
+                    ", cycle=" + cycleRisk + ']';
         }
     }
 
@@ -2570,35 +3558,56 @@ public final class DynamicRecipePatternRegistry {
         private final List<List<GenericStack>> alternatives;
         private final List<GenericStack> outputs;
         private final int circuitConfiguration;
+        private final NonConsumableTokenLayout tokenLayout;
 
         private EncodedRecipe(List<GenericStack> inputs, List<List<GenericStack>> alternatives,
                               List<GenericStack> outputs,
-                              int circuitConfiguration) {
+                              int circuitConfiguration, NonConsumableTokenLayout tokenLayout) {
             this.inputs = inputs;
             this.alternatives = alternatives;
             this.outputs = outputs;
             this.circuitConfiguration = circuitConfiguration;
+            this.tokenLayout = tokenLayout;
         }
 
         private EncodedRecipe withOutputs(List<GenericStack> patternOutputs) {
-            return new EncodedRecipe(inputs, alternatives, patternOutputs, circuitConfiguration);
+            return new EncodedRecipe(inputs, alternatives, patternOutputs, circuitConfiguration, tokenLayout);
+        }
+    }
+
+    private static final class NonConsumableTokenEncoding {
+
+        private final List<GenericStack> programmableOptions;
+        private final List<ItemStack> originalChoices;
+
+        private NonConsumableTokenEncoding(List<GenericStack> programmableOptions, List<ItemStack> originalChoices) {
+            this.programmableOptions = Collections.unmodifiableList(new ArrayList<>(programmableOptions));
+            this.originalChoices = Collections.unmodifiableList(new ArrayList<>(originalChoices));
         }
     }
 
     private static final class PatternCandidate {
         private final ProviderSnapshot source;
         private final RecipeMap<?> recipeMap;
+        private final NormalizedRecipe normalized;
         private final EncodedRecipe encoded;
+        private final TargetedRecipe targeted;
+        private final RuleDecision decision;
         private final Cost cost;
         private final String recipeKey;
 
-        private PatternCandidate(ProviderSnapshot source, RecipeMap<?> recipeMap, Recipe recipe, AEKey target,
-                                 EncodedRecipe encoded, Cost cost) {
+        private PatternCandidate(ProviderSnapshot source, RecipeMap<?> recipeMap, NormalizedRecipe normalized,
+                                 AEKey target, EncodedRecipe encoded, TargetedRecipe targeted,
+                                 RuleDecision decision, Cost cost) {
             this.source = source;
             this.recipeMap = recipeMap;
+            this.normalized = normalized;
             this.encoded = encoded;
+            this.targeted = targeted;
+            this.decision = decision;
             this.cost = cost;
-            String baseRecipeKey = source.providerId + ':' + recipeMap.getUnlocalizedName() + ':' + recipe.hashCode();
+            String baseRecipeKey = source.providerId + ':' + recipeMap.getUnlocalizedName() + ':' +
+                    normalized.getRecipeFingerprint();
             this.recipeKey = createTargetedRecipeKey(baseRecipeKey, target);
         }
     }
@@ -2616,28 +3625,36 @@ public final class DynamicRecipePatternRegistry {
         return Integer.compare(left.ordinal(), right.ordinal());
     }
 
-    /** Chemical-product synthesis is a policy requirement rather than an inventory-dependent preference. */
-    static int compareMandatoryRoutePriority(CandidateRoutePriority left, CandidateRoutePriority right) {
-        boolean leftMandatory = left == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
-        boolean rightMandatory = right == CandidateRoutePriority.CHEMICAL_PRODUCT_SYNTHESIS;
-        return leftMandatory == rightMandatory ? 0 : leftMandatory ? -1 : 1;
-    }
-
-    private static final class Cost implements Comparable<Cost> {
+    private static final class Cost {
         private final long rawMaterials;
         private final long netOutput;
         private final int steps;
         private final CandidateRoutePriority routePriority;
+        private final long ruleRoutePriority;
+        private final long hiddenOutputPenalty;
+        private final long cycleRiskPenalty;
+        private final long energyCost;
+        private final long throughputCost;
+        private final PlanningMode planningMode;
 
-        private Cost(long rawMaterials, long netOutput, int steps, CandidateRoutePriority routePriority) {
+        private Cost(long rawMaterials, long netOutput, int steps, CandidateRoutePriority routePriority,
+                     long ruleRoutePriority, long hiddenOutputPenalty, long cycleRiskPenalty, long energyCost,
+                     long throughputCost, PlanningMode planningMode) {
             this.rawMaterials = rawMaterials;
             this.netOutput = netOutput;
             this.steps = steps;
             this.routePriority = routePriority;
+            this.ruleRoutePriority = ruleRoutePriority;
+            this.hiddenOutputPenalty = hiddenOutputPenalty;
+            this.cycleRiskPenalty = cycleRiskPenalty;
+            this.energyCost = energyCost;
+            this.throughputCost = throughputCost;
+            this.planningMode = planningMode == null ? PlanningMode.STOCK_FIRST : planningMode;
         }
 
-        private static Cost fallback(Recipe recipe, KeyCounter storedItems, long netOutput,
-                                     CandidateRoutePriority routePriority) {
+        private static Cost fallback(Recipe recipe, MachineCapabilityProfile machine, KeyCounter storedItems,
+                                     long netOutput, CandidateRoutePriority routePriority, PlanningMode planningMode,
+                                     RuleDecision decision) {
             long raw = 0;
             for (GTRecipeInput input : recipe.getInputs()) {
                 if (input instanceof IntCircuitIngredient || input.isNonConsumable()) continue;
@@ -2650,16 +3667,80 @@ public final class DynamicRecipePatternRegistry {
                 FluidStack fluid = input.getInputFluidStack();
                 if (fluid != null) raw = addSaturated(raw, estimateFluidRawMaterialCost(fluid, input.getAmount()));
             }
-            return new Cost(raw, netOutput, 1, routePriority);
+            int parallel = machine == null ? 1 : Math.max(1, machine.getParallelLimit());
+            long duration = Math.max(1, recipe.getDuration());
+            long energy = divideRoundUp(multiplySaturated(Math.max(0, recipe.getEUt()), duration), parallel);
+            long throughput = divideRoundUp(duration, parallel);
+            long hidden = Math.max(0, -decision.getScore("hiddenOutputWaste"));
+            long cycle = Math.max(0, -decision.getScore("cycleRisk"));
+            return new Cost(raw, netOutput, 1, routePriority, decision.getScore("routePriority"), hidden, cycle,
+                    scoreAdjustedCost(energy, decision.getScore("energy")),
+                    scoreAdjustedCost(throughput, decision.getScore("throughput")), planningMode);
         }
 
-        @Override
-        public int compareTo(Cost other) {
-            int route = compareCandidateRoutePriority(routePriority, other.routePriority);
-            if (route != 0) return route;
-            int efficiency = compareInputOutputEfficiency(rawMaterials, netOutput,
+        private int compareRoutePolicy(Cost other) {
+            return Long.compare(other.ruleRoutePriority, ruleRoutePriority);
+        }
+
+        private int compareTo(Cost other) {
+            return compareTo(other, PlanningMode.STOCK_FIRST);
+        }
+
+        private int compareTo(Cost other, PlanningMode mode) {
+            PlanningMode effectiveMode = mode == null ? PlanningMode.STOCK_FIRST : mode;
+            int comparison;
+            switch (effectiveMode) {
+                case RESOURCE_FIRST -> {
+                    comparison = compareInputOutputEfficiency(rawMaterials, netOutput,
+                            other.rawMaterials, other.netOutput);
+                    if (comparison != 0) return comparison;
+                    comparison = Long.compare(energyCost, other.energyCost);
+                    if (comparison != 0) return comparison;
+                    comparison = compareSafety(other);
+                    if (comparison != 0) return comparison;
+                }
+                case THROUGHPUT_FIRST -> {
+                    comparison = Long.compare(throughputCost, other.throughputCost);
+                    if (comparison != 0) return comparison;
+                    comparison = Long.compare(energyCost, other.energyCost);
+                    if (comparison != 0) return comparison;
+                    comparison = Integer.compare(steps, other.steps);
+                    if (comparison != 0) return comparison;
+                }
+                case SAFE_FIRST -> {
+                    comparison = compareSafety(other);
+                    if (comparison != 0) return comparison;
+                    comparison = compareInputOutputEfficiency(rawMaterials, netOutput,
+                            other.rawMaterials, other.netOutput);
+                    if (comparison != 0) return comparison;
+                }
+                case PINNED, STOCK_FIRST -> {
+                    comparison = compareRoutePolicy(other);
+                    if (comparison != 0) return comparison;
+                    comparison = compareSafety(other);
+                    if (comparison != 0) return comparison;
+                }
+            }
+            comparison = compareInputOutputEfficiency(rawMaterials, netOutput,
                     other.rawMaterials, other.netOutput);
-            return efficiency != 0 ? efficiency : Integer.compare(steps, other.steps);
+            if (comparison != 0) return comparison;
+            comparison = Long.compare(energyCost, other.energyCost);
+            if (comparison != 0) return comparison;
+            comparison = Long.compare(throughputCost, other.throughputCost);
+            if (comparison != 0) return comparison;
+            comparison = compareRoutePolicy(other);
+            return comparison != 0 ? comparison : Integer.compare(steps, other.steps);
+        }
+
+        private int compareSafety(Cost other) {
+            int hidden = Long.compare(hiddenOutputPenalty, other.hiddenOutputPenalty);
+            if (hidden != 0) return hidden;
+            return Long.compare(cycleRiskPenalty, other.cycleRiskPenalty);
+        }
+
+        private static long scoreAdjustedCost(long value, long score) {
+            if (score >= 0) return value <= score ? 0 : value - score;
+            return score == Long.MIN_VALUE ? Long.MAX_VALUE : addSaturated(value, -score);
         }
     }
 }
