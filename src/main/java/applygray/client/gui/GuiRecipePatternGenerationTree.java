@@ -98,7 +98,8 @@ public class GuiRecipePatternGenerationTree extends AEBaseGui<ContainerCraftAmou
         boolean generating = awaitingGeneration || current != null &&
                 current.getStatus() == PatternGenerationTreeData.Status.GENERATING;
         refresh.enabled = !generating;
-        next.enabled = !generating;
+        next.enabled = !awaitingGeneration && current != null &&
+                current.getStatus() == PatternGenerationTreeData.Status.READY;
     }
 
     @Override

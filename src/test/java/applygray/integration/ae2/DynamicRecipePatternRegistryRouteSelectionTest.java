@@ -3,6 +3,7 @@ package applygray.integration.ae2;
 import applygray.integration.ae2.rules.PlanningMode;
 import applygray.integration.ae2.rules.CyclePolicy;
 import applygray.integration.ae2.rules.PlanningBudget;
+import ae2.integration.data.CraftingTreeStackRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -93,7 +94,7 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
     }
 
     @Test
-    void chemicallySynthesizedProcessedSolidDemotesItsDustAndIngotFormRoutes() {
+    void chemicallySynthesizedProcessedSolidContinuesItsFluidRouteBeforeIngotAndDust() {
         int directIngotForm = DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, false, true,
                 true, false, "ingot");
         int directDustForm = DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, false, true,
@@ -105,15 +106,22 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
         int directChemicalSource = DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, false, true,
                 false, false, null);
 
-        assertEquals(4, directIngotForm);
-        assertEquals(4, directDustForm);
+        assertEquals(5, directIngotForm);
+        assertEquals(6, directDustForm);
         assertEquals(4, directFluidForm);
-        assertEquals(4, directProcessedForm);
+        assertEquals(7, directProcessedForm);
         assertEquals(3, directChemicalSource);
         assertTrue(directIngotForm > directChemicalSource);
         assertTrue(directDustForm > directChemicalSource);
         assertTrue(directFluidForm > directChemicalSource);
         assertTrue(directProcessedForm > directChemicalSource);
+        assertTrue(directFluidForm < directIngotForm);
+        assertTrue(directIngotForm < directDustForm);
+        assertTrue(directDustForm < directProcessedForm);
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                true, directFluidForm, directIngotForm, false, false, false));
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                true, directIngotForm, directDustForm, false, false, false));
     }
 
     @Test
@@ -157,6 +165,34 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
     }
 
     @Test
+    void standaloneGenerationKeepsCanonicalSolidSourceAheadOfRecursiveRouteCost() {
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                true, 0, 2, false, false, false));
+        assertEquals(1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                true, 2, 0, false, false, false));
+    }
+
+    @Test
+    void standaloneGenerationPrefersDeclaredIngotTransformationOverTargetDustFallback() {
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneDeclaredIngotTransformation(
+                true, true, false));
+        assertEquals(1, DynamicRecipePatternRegistry.compareStandaloneDeclaredIngotTransformation(
+                true, false, true));
+        assertEquals(0, DynamicRecipePatternRegistry.compareStandaloneDeclaredIngotTransformation(
+                false, true, false));
+    }
+
+    @Test
+    void standaloneGenerationKeepsDirectPolymerSynthesisAheadOfPowderExtraction() {
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                false, 0, 0, true, true, false));
+        assertEquals(1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                false, 0, 0, true, false, true));
+        assertEquals(0, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                false, 0, 0, false, true, false));
+    }
+
+    @Test
     void incompleteChemicalBathKeepsItsFairRefinementAheadOfPowderFallback() {
         assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneIncompleteChemicalBath(
                 true, true, true, true, false, false, false));
@@ -174,6 +210,49 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
         assertTrue(DynamicRecipePatternRegistry.shouldContinueFairRouteRefinement(true, 1));
         assertFalse(DynamicRecipePatternRegistry.shouldContinueFairRouteRefinement(true, 2));
         assertFalse(DynamicRecipePatternRegistry.shouldContinueFairRouteRefinement(false, 0));
+    }
+
+    @Test
+    void standaloneDeadlineKeepsMaterializingTheSelectedRoute() {
+        assertEquals(DynamicRecipePatternRegistry.StandaloneTreeMaterializationStep.REFINED,
+                DynamicRecipePatternRegistry.selectStandaloneTreeMaterializationStep(62, 4096, false));
+        assertEquals(DynamicRecipePatternRegistry.StandaloneTreeMaterializationStep.FAST_CONTINUATION,
+                DynamicRecipePatternRegistry.selectStandaloneTreeMaterializationStep(62, 4096, true));
+        assertEquals(DynamicRecipePatternRegistry.StandaloneTreeMaterializationStep.STOP,
+                DynamicRecipePatternRegistry.selectStandaloneTreeMaterializationStep(4096, 4096, true));
+    }
+
+    @Test
+    void standalonePreviewUsesItsOwnConfiguredCapacityUntilTheProtocolLimit() {
+        assertEquals(4096, DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(PlanningBudget.DEFAULT));
+
+        PlanningBudget.Builder builder = PlanningBudget.builder();
+        builder.maxStandaloneRouteExpansionsPerCalculation(16_384, 0, "test");
+        assertEquals(CraftingTreeStackRegistry.MAX_TREE_NODES,
+                DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(builder.build()));
+    }
+
+    @Test
+    void hotIngotUsesDustAsItsCanonicalInputForm() {
+        assertTrue(DynamicRecipePatternRegistry.isIngotPrefix("ingotHot"));
+        assertEquals(0, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false,
+                true, false, "dust"));
+        assertEquals(1, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false,
+                true, false, "ingotHot"));
+    }
+
+    @Test
+    void directSameMaterialDustSmeltingTerminatesOnlyBaseAndHotIngotCycles() {
+        assertTrue(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingot"));
+        assertTrue(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingotHot"));
+        assertFalse(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingotDouble"));
+
+        assertTrue(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
+                "ingotHot", true, false));
+        assertFalse(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
+                "ingot", false, false));
+        assertFalse(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
+                "ingot", true, true));
     }
 
     @Test

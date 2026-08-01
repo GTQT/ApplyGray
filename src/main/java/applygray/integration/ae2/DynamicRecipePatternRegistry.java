@@ -24,6 +24,7 @@ import gregtech.api.fluids.store.FluidStorageKeys;
 import gregtech.api.unification.FluidUnifier;
 import gregtech.api.unification.OreDictUnifier;
 import gregtech.api.unification.material.Material;
+import gregtech.api.unification.material.properties.IngotProperty;
 import gregtech.api.unification.material.properties.PropertyKey;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
@@ -38,6 +39,7 @@ import gregtech.common.items.behaviors.ProgrammableCircuit;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
 
 import net.minecraft.item.ItemStack;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.oredict.OreDictionary;
@@ -52,6 +54,7 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
+import ae2.integration.data.CraftingTreeStackRegistry;
 import ae2.integration.data.LiteCraftTreeNode;
 import ae2.integration.data.LiteCraftTreeProc;
 import org.jetbrains.annotations.Nullable;
@@ -123,12 +126,29 @@ public final class DynamicRecipePatternRegistry {
         thread.setDaemon(true);
         return thread;
     });
-    /** Keep the preview smaller than AE2's packet limit while honoring the active route-search budget. */
-    private static final int MAX_PATTERN_GENERATION_TREE_NODES = 512;
+    /** One standalone generation emits at most one bounded unresolved-leaf diagnostic. */
+    private static final int MAX_PATTERN_GENERATION_NO_PATTERN_LEAF_SAMPLES = 32;
     /** A retry must reject at least one selected dynamic edge; this is only a final hard stop. */
     private static final int MAX_PATTERN_GENERATION_CYCLE_RECOVERY_ATTEMPTS = 32;
     /** A larger quota that exposes no new route frontier is a replay, not useful additional route exploration. */
     private static final int MAX_IDENTICAL_ROUTE_REFINEMENT_REPLAYS = 2;
+
+    /**
+     * The standalone deadline bounds recursive scoring only. Once it expires, the already-reachable selected tree
+     * still needs its direct routes materialized so an intermediate never becomes an accidental leaf.
+     */
+    enum StandaloneTreeMaterializationStep {
+        REFINED,
+        FAST_CONTINUATION,
+        STOP
+    }
+
+    private record StandalonePatternMaterialization(int targetCount, int patternCount, int stalePatternCount) {
+    }
+
+    private record StandalonePatternPublication(int providerCount, int refreshedProviderCount) {
+    }
+
     private DynamicRecipePatternRegistry() {}
 
     /** Marks the short constructor-time pattern probe so dynamic routes can be evaluated after the calculation starts. */
@@ -477,9 +497,9 @@ public final class DynamicRecipePatternRegistry {
                     completion.accept(PatternGenerationTreeData.failed());
                     return;
                 }
-                state.materializePreparedTransientPatterns();
+                StandalonePatternMaterialization materialization = state.materializePreparedTransientPatterns();
                 markStandalonePatternGenerationSucceeded();
-                completion.accept(PatternGenerationTreeData.ready(root));
+                publishStandalonePatternGeneration(world, state, target, amount, root, materialization, completion);
             } catch (RuntimeException exception) {
                 ApplyGrayMod.LOGGER.warn("RecipeMap pattern tree generation failed target={} amount={}",
                         target, amount, exception);
@@ -489,6 +509,63 @@ public final class DynamicRecipePatternRegistry {
                 OPTIMAL_ROUTE_GENERATION.remove();
             }
         });
+    }
+
+    /**
+     * AE2 snapshots a provider's available patterns when it is refreshed. Do not report the generated tree as ready
+     * until that snapshot has been rebuilt on the server thread, otherwise the next GUI action can calculate against
+     * the previous (often empty) provider cache.
+     */
+    private static void publishStandalonePatternGeneration(@Nullable World world, GridState state, AEKey target,
+                                                            long amount, LiteCraftTreeNode root,
+                                                            StandalonePatternMaterialization materialization,
+                                                            Consumer<PatternGenerationTreeData> completion) {
+        if (world == null || world.isRemote) {
+            ApplyGrayMod.LOGGER.warn("Could not publish standalone RecipeMap patterns without a server world root={} " +
+                    "amount={}", target, amount);
+            completion.accept(PatternGenerationTreeData.failed());
+            return;
+        }
+        MinecraftServer server = world.getMinecraftServer();
+        if (server == null) {
+            ApplyGrayMod.LOGGER.warn("Could not publish standalone RecipeMap patterns because the server is unavailable " +
+                    "root={} amount={}", target, amount);
+            completion.accept(PatternGenerationTreeData.failed());
+            return;
+        }
+
+        try {
+            server.addScheduledTask(() -> {
+                try {
+                    StandalonePatternPublication publication = state.publishStandalonePatternGeneration();
+                    if (publication.refreshedProviderCount() == 0) {
+                        ApplyGrayMod.LOGGER.warn("Could not publish standalone RecipeMap pattern generation root={} " +
+                                        "amount={} materializedTargets={} materializedPatterns={} stalePatterns={} " +
+                                        "providers=0/{}",
+                                target, amount, materialization.targetCount(), materialization.patternCount(),
+                                materialization.stalePatternCount(),
+                                publication.providerCount());
+                        completion.accept(PatternGenerationTreeData.failed());
+                        return;
+                    }
+                    ApplyGrayMod.LOGGER.info("Published standalone RecipeMap pattern generation root={} amount={} " +
+                                    "materializedTargets={} materializedPatterns={} stalePatterns={} " +
+                                    "refreshedProviders={}/{}",
+                            target, amount, materialization.targetCount(), materialization.patternCount(),
+                            materialization.stalePatternCount(),
+                            publication.refreshedProviderCount(), publication.providerCount());
+                    completion.accept(PatternGenerationTreeData.ready(root));
+                } catch (RuntimeException exception) {
+                    ApplyGrayMod.LOGGER.warn("Could not publish standalone RecipeMap patterns root={} amount={}",
+                            target, amount, exception);
+                    completion.accept(PatternGenerationTreeData.failed());
+                }
+            });
+        } catch (RuntimeException exception) {
+            ApplyGrayMod.LOGGER.warn("Could not schedule standalone RecipeMap pattern publication root={} amount={}",
+                    target, amount, exception);
+            completion.accept(PatternGenerationTreeData.failed());
+        }
     }
 
     public static ICraftingProvider getProvider(IPatternDetails details) {
@@ -895,6 +972,117 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
+     * A saved standalone tree needs a stable material source before it can compare recursive dependency cost.
+     * Polymer fluids made directly in a chemical route must not collapse into an automatic extraction from their
+     * own dust, while solid outputs retain their canonical dust-to-ingot or ingot-to-shape source form.
+     */
+    static int compareStandaloneSourcePreference(boolean solidMaterialTarget, int leftMaterialFormCost,
+                                                 int rightMaterialFormCost, boolean polymerFluidTarget,
+                                                 boolean leftDirectChemicalSynthesis,
+                                                 boolean rightDirectChemicalSynthesis) {
+        int chemical = compareStandaloneDirectChemicalSynthesis(polymerFluidTarget,
+                leftDirectChemicalSynthesis, rightDirectChemicalSynthesis);
+        if (chemical != 0) return chemical;
+        return solidMaterialTarget ? Integer.compare(leftMaterialFormCost, rightMaterialFormCost) : 0;
+    }
+
+    /** A direct polymer reaction is a source; extracting the same polymer from powder is only a form conversion. */
+    static int compareStandaloneDirectChemicalSynthesis(boolean polymerFluidTarget,
+                                                         boolean leftDirectChemicalSynthesis,
+                                                         boolean rightDirectChemicalSynthesis) {
+        if (!polymerFluidTarget) return 0;
+        return Boolean.compare(rightDirectChemicalSynthesis, leftDirectChemicalSynthesis);
+    }
+
+    private static int compareStandaloneSourcePreference(AEKey target, PatternCandidate left,
+                                                         PatternCandidate right) {
+        int chemical = compareStandaloneDirectChemicalSynthesis(isChemicalProductFluidTarget(target),
+                isDirectChemicalPolymerSynthesis(target, left),
+                isDirectChemicalPolymerSynthesis(target, right));
+        if (chemical != 0) return chemical;
+
+        int ingotTransformation = compareStandaloneDeclaredIngotTransformation(
+                isIngotPrefix(getOrePrefixForKey(target)),
+                isDeclaredIngotTransformationCandidate(target, left),
+                isDeclaredIngotTransformationCandidate(target, right));
+        if (ingotTransformation != 0) return ingotTransformation;
+
+        return compareStandaloneCanonicalSolidForm(isSolidMaterialTarget(target),
+                getCandidateSolidMaterialInputFormCost(target, left),
+                getCandidateSolidMaterialInputFormCost(target, right));
+    }
+
+    /** A material's declared furnace or polarizer transition is its canonical ingot source. */
+    static int compareStandaloneDeclaredIngotTransformation(boolean ingotTarget,
+                                                             boolean leftDeclaredTransformation,
+                                                             boolean rightDeclaredTransformation) {
+        if (!ingotTarget) return 0;
+        return Boolean.compare(rightDeclaredTransformation, leftDeclaredTransformation);
+    }
+
+    private static int compareStandaloneCanonicalSolidForm(boolean solidMaterialTarget, int leftMaterialFormCost,
+                                                            int rightMaterialFormCost) {
+        return solidMaterialTarget ? Integer.compare(leftMaterialFormCost, rightMaterialFormCost) : 0;
+    }
+
+    private static int getCandidateSolidMaterialInputFormCost(AEKey target, PatternCandidate candidate) {
+        return getSolidMaterialInputFormCost(target, DynamicRecipePatternDetails.createScoringInputs(
+                candidate.encoded.inputs, candidate.encoded.alternatives));
+    }
+
+    private static boolean isDirectChemicalPolymerSynthesis(AEKey target, PatternCandidate candidate) {
+        if (!isChemicalProductFluidTarget(target) || !isChemicalSynthesisRecipeMap(candidate.recipeMap)) {
+            return false;
+        }
+
+        Material targetMaterial = getMaterialForKey(target);
+        boolean hasNonTargetMaterialInput = false;
+        for (GenericStack input : candidate.encoded.inputs) {
+            Material inputMaterial = getMaterialForKey(input.what());
+            if (inputMaterial == null) continue;
+            if (targetMaterial.equals(inputMaterial)) return false;
+            hasNonTargetMaterialInput = true;
+        }
+        return hasNonTargetMaterialInput;
+    }
+
+    private static boolean isDeclaredIngotTransformationCandidate(AEKey target, PatternCandidate candidate) {
+        return findDeclaredIngotTransformationInput(target, candidate) != null;
+    }
+
+    @Nullable
+    private static Material findDeclaredIngotTransformationInput(AEKey target, PatternCandidate candidate) {
+        if (!isIngotPrefix(getOrePrefixForKey(target))) return null;
+        Material targetMaterial = getMaterialForKey(target);
+        if (targetMaterial == null) return null;
+
+        for (IPatternDetails.IInput input : DynamicRecipePatternDetails.createScoringInputs(
+                candidate.encoded.inputs, candidate.encoded.alternatives)) {
+            for (GenericStack option : input.possibleInputs()) {
+                if (option == null || option.amount() <= 0) continue;
+                AEKey inputKey = option.what();
+                if (!isIngotPrefix(getOrePrefixForKey(inputKey))) continue;
+                Material inputMaterial = getMaterialForKey(inputKey);
+                if (inputMaterial == null || targetMaterial.equals(inputMaterial)) continue;
+                IngotProperty property = inputMaterial.getProperty(PropertyKey.INGOT);
+                if (property != null && (targetMaterial.equals(property.getSmeltingInto()) ||
+                        targetMaterial.equals(property.getArcSmeltInto()) ||
+                        targetMaterial.equals(property.getMagneticMaterial()))) {
+                    return inputMaterial;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isChemicalSynthesisRecipeMap(RecipeMap<?> recipeMap) {
+        if (recipeMap == null) return false;
+        String recipeMapName = recipeMap.getUnlocalizedName();
+        return "polymerization_tank".equals(recipeMapName) ||
+                (recipeMapName != null && recipeMapName.contains("chemical"));
+    }
+
+    /**
      * A chemical-bath route for a processed polymer solid must not lose only because its current fair probe stopped
      * at a temporary frontier. The next fair grant may reveal its synthesis chain, whereas a completed powder-form
      * conversion has already exhausted its route information.
@@ -911,6 +1099,15 @@ public final class DynamicRecipePatternRegistry {
 
     static boolean shouldContinueFairRouteRefinement(boolean quotaLimited, int identicalReplayCount) {
         return quotaLimited && identicalReplayCount < MAX_IDENTICAL_ROUTE_REFINEMENT_REPLAYS;
+    }
+
+    /** A deadline changes route selection mode; only the explicit selected-tree node limit stops materialization. */
+    static StandaloneTreeMaterializationStep selectStandaloneTreeMaterializationStep(int selectedTargets,
+                                                                                       int routeExpansionLimit,
+                                                                                       boolean scoringDeadlineReached) {
+        if (selectedTargets >= routeExpansionLimit) return StandaloneTreeMaterializationStep.STOP;
+        return scoringDeadlineReached ? StandaloneTreeMaterializationStep.FAST_CONTINUATION :
+                StandaloneTreeMaterializationStep.REFINED;
     }
 
     static int directInputUnresolvedPenalty(long remaining, boolean hasNormalPattern, boolean rawMaterialLeaf) {
@@ -1416,6 +1613,51 @@ public final class DynamicRecipePatternRegistry {
         return prefixName != null && prefixName.startsWith("ingot");
     }
 
+    /** Only the base ingot and its hot form are direct dust-smelting outputs. */
+    static boolean isDirectIngotOrHotIngotPrefix(String prefixName) {
+        return "ingot".equals(prefixName) || "ingotHot".equals(prefixName);
+    }
+
+    /**
+     * A same-material dust input to a direct ingot transition is a terminal material seed for that transition.
+     * Other same-material forms keep the edge inside ordinary cycle handling.
+     */
+    static boolean isCanonicalSameMaterialDustToIngotTransition(String outputPrefix,
+                                                                  boolean hasSameMaterialDustInput,
+                                                                  boolean hasOtherSameMaterialInput) {
+        return isDirectIngotOrHotIngotPrefix(outputPrefix) && hasSameMaterialDustInput &&
+                !hasOtherSameMaterialInput;
+    }
+
+    private static boolean isCanonicalSameMaterialDustToIngotTransition(AEKey output, RouteEdge edge) {
+        if (output == null || edge == null) return false;
+        Material outputMaterial = getMaterialForKey(output);
+        if (outputMaterial == null) return false;
+
+        boolean hasSameMaterialDust = false;
+        boolean hasOtherSameMaterialInput = false;
+        for (IPatternDetails.IInput input : edge.inputs) {
+            for (GenericStack option : input.possibleInputs()) {
+                if (option == null || option.amount() <= 0) continue;
+                AEKey inputKey = option.what();
+                if (!outputMaterial.equals(getMaterialForKey(inputKey))) continue;
+                if (isDustPrefix(getOrePrefixForKey(inputKey))) {
+                    hasSameMaterialDust = true;
+                } else {
+                    hasOtherSameMaterialInput = true;
+                }
+            }
+        }
+        return isCanonicalSameMaterialDustToIngotTransition(getOrePrefixForKey(output), hasSameMaterialDust,
+                hasOtherSameMaterialInput);
+    }
+
+    private static boolean isCanonicalSameMaterialDustInput(AEKey output, AEKey input) {
+        if (output == null || input == null || !isDustPrefix(getOrePrefixForKey(input))) return false;
+        Material outputMaterial = getMaterialForKey(output);
+        return outputMaterial != null && outputMaterial.equals(getMaterialForKey(input));
+    }
+
     /** Same-material powder and ingot inputs are form conversions, not upstream material sources. */
     static boolean isPrioritySolidMaterialInput(boolean solidMaterialInput, boolean targetMaterialInput) {
         return solidMaterialInput && !targetMaterialInput;
@@ -1428,25 +1670,38 @@ public final class DynamicRecipePatternRegistry {
 
     private static final int INDIRECT_SOLID_MATERIAL_SOURCE_COST = 3;
     /**
-     * Polymer materials automatically receive material-form recipes from GregTech. For a processed polymer shape,
-     * every same-material conversion is a fallback behind a direct chemical-production recipe, rather than the
-     * canonical material source used for metals.
+     * Polymer materials automatically receive several equivalent-looking form recipes from GregTech. Keep direct
+     * chemical synthesis ahead of all of them, but retain a stable downstream chain once a solid form is needed:
+     * polymer fluid, then ingot, then dust. Without that ordering, recipe registration order can select a dust-fed
+     * extruder even though the selected chemical route only produces the polymer fluid.
      */
-    private static final int CHEMICAL_PRODUCT_SOLID_FORM_FALLBACK_COST =
+    private static final int CHEMICAL_PRODUCT_SOLID_FLUID_FORM_COST =
             INDIRECT_SOLID_MATERIAL_SOURCE_COST + 1;
+    private static final int CHEMICAL_PRODUCT_SOLID_INGOT_FORM_COST =
+            CHEMICAL_PRODUCT_SOLID_FLUID_FORM_COST + 1;
+    private static final int CHEMICAL_PRODUCT_SOLID_DUST_FORM_COST =
+            CHEMICAL_PRODUCT_SOLID_INGOT_FORM_COST + 1;
+    private static final int CHEMICAL_PRODUCT_SOLID_OTHER_FORM_COST =
+            CHEMICAL_PRODUCT_SOLID_DUST_FORM_COST + 1;
 
     /**
      * Assigns a generic source-form cost for solid material outputs. Powder is the canonical source for ingots;
-     * ingots are the canonical source for processed metal shapes such as plates and foils. Polymer materials receive
-     * automatic same-material form conversions even when their direct chemical-production recipe is the real source,
-     * so all of those conversions are deliberately fallbacks. Molten material otherwise adds a form transition.
+     * ingots are the canonical source for processed metal shapes such as plates and foils. Polymer material-form
+     * conversions stay behind a direct chemical-production recipe, but have an explicit fluid-to-ingot-to-dust order
+     * so they can continue that chemical route rather than inventing a powder demand. Molten material otherwise adds
+     * a form transition.
      */
     static int solidMaterialInputFormCost(boolean solidTarget, boolean ingotTarget,
                                           boolean chemicallySynthesizedTarget, boolean targetMaterialInput,
                                           boolean fluidInput, String prefixName) {
         if (!solidTarget) return 0;
         if (!targetMaterialInput) return INDIRECT_SOLID_MATERIAL_SOURCE_COST;
-        if (chemicallySynthesizedTarget) return CHEMICAL_PRODUCT_SOLID_FORM_FALLBACK_COST;
+        if (chemicallySynthesizedTarget) {
+            if (fluidInput) return CHEMICAL_PRODUCT_SOLID_FLUID_FORM_COST;
+            if (isIngotPrefix(prefixName)) return CHEMICAL_PRODUCT_SOLID_INGOT_FORM_COST;
+            if (isDustPrefix(prefixName)) return CHEMICAL_PRODUCT_SOLID_DUST_FORM_COST;
+            return CHEMICAL_PRODUCT_SOLID_OTHER_FORM_COST;
+        }
         if (ingotTarget) {
             if (isDustPrefix(prefixName)) return 0;
             if (fluidInput || isIngotPrefix(prefixName)) return 1;
@@ -1470,11 +1725,21 @@ public final class DynamicRecipePatternRegistry {
         return isIngotPrefix(prefixName) || isProcessedSolidMaterialForm(true, true, prefixName);
     }
 
-    private static boolean isChemicalProductProcessedSolidTarget(AEKey target) {
-        if (!(target instanceof AEItemKey)) return false;
+    private static boolean isChemicalProductSolidTarget(AEKey target) {
+        if (!isSolidMaterialTarget(target)) return false;
         Material material = getMaterialForKey(target);
-        return material != null && material.hasProperty(PropertyKey.POLYMER) &&
+        return material != null && material.hasProperty(PropertyKey.POLYMER);
+    }
+
+    private static boolean isChemicalProductProcessedSolidTarget(AEKey target) {
+        return isChemicalProductSolidTarget(target) &&
                 isProcessedSolidMaterialForm(true, true, getOrePrefixForKey(target));
+    }
+
+    private static boolean isChemicalProductFluidTarget(AEKey target) {
+        if (!(target instanceof AEFluidKey)) return false;
+        Material material = getMaterialForKey(target);
+        return material != null && material.hasProperty(PropertyKey.POLYMER);
     }
 
     private static int getSolidMaterialInputFormCost(AEKey output, IPatternDetails.IInput[] inputs) {
@@ -2226,7 +2491,8 @@ public final class DynamicRecipePatternRegistry {
                 RouteCostEstimator inputSelector = new RouteCostEstimator(candidate.source.grid, this,
                         newRouteCostBudget());
                 EncodedRecipe frozen = isStandalonePatternGeneration() ?
-                        inputSelector.freezeDirectInputs(candidate) : inputSelector.freezeRootInputs(candidate, target);
+                        inputSelector.freezeDirectInputs(candidate, target) :
+                        inputSelector.freezeRootInputs(candidate, target);
                 DynamicRecipePatternDetails detail = createPatternDetail(candidate, frozen);
                 if (detail != null && isPatternAvailableFor(target, detail)) {
                     details.add(detail);
@@ -2281,16 +2547,16 @@ public final class DynamicRecipePatternRegistry {
                     int primaryCompound = compareStandalonePrimaryCompoundSynthesis(
                             left.primaryCompoundSynthesis, right.primaryCompoundSynthesis);
                     if (primaryCompound != 0) return primaryCompound;
-                }
-                int formCost = Integer.compare(getSolidMaterialInputFormCost(target,
-                        DynamicRecipePatternDetails.createScoringInputs(left.encoded.inputs,
-                                left.encoded.alternatives)), getSolidMaterialInputFormCost(target,
-                        DynamicRecipePatternDetails.createScoringInputs(right.encoded.inputs,
-                                right.encoded.alternatives)));
-                if (formCost != 0) return formCost;
-                if (isStandalonePatternGeneration()) {
+
+                    int sourcePreference = compareStandaloneSourcePreference(target, left, right);
+                    if (sourcePreference != 0) return sourcePreference;
+
                     int recycling = compareStandaloneRecyclingRoute(left.recyclingRoute, right.recyclingRoute);
                     if (recycling != 0) return recycling;
+                } else {
+                    int formCost = Integer.compare(getCandidateSolidMaterialInputFormCost(target, left),
+                            getCandidateSolidMaterialInputFormCost(target, right));
+                    if (formCost != 0) return formCost;
                 }
                 int staticCost = left.cost.compareTo(right.cost, planningMode);
                 return staticCost != 0 ? staticCost : compareCandidates(left, right);
@@ -2305,6 +2571,7 @@ public final class DynamicRecipePatternRegistry {
         private void selectStandaloneTransientCandidate(AEKey target, List<PatternCandidate> candidates) {
             CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
             if (session != null && session.matches(this) && session.shouldStopTransientGraphBuild()) {
+                session.recordStandaloneFastSelection();
                 selectFastTransientCandidate(target, candidates);
                 return;
             }
@@ -2321,23 +2588,55 @@ public final class DynamicRecipePatternRegistry {
 
             boolean hasRelevantRoute = isChemicalProductProcessedSolidTarget(target);
             boolean hasRecyclingRoute = false;
+            boolean hasDirectChemicalSynthesis = false;
+            boolean hasNonChemicalAlternative = false;
+            boolean hasSourceFormConflict = false;
+            int firstSourceForm = -1;
+            boolean solidMaterialTarget = isSolidMaterialTarget(target);
+            boolean polymerFluidTarget = isChemicalProductFluidTarget(target);
             for (PatternCandidate candidate : candidates) {
                 if (candidate.primaryCompoundSynthesis ||
                         "chemical_bath".equals(candidate.recipeMap.getUnlocalizedName())) {
                     hasRelevantRoute = true;
                 }
                 hasRecyclingRoute |= candidate.recyclingRoute;
+                if (polymerFluidTarget) {
+                    if (isDirectChemicalPolymerSynthesis(target, candidate)) {
+                        hasDirectChemicalSynthesis = true;
+                    } else {
+                        hasNonChemicalAlternative = true;
+                    }
+                }
+                if (solidMaterialTarget) {
+                    int sourceForm = getCandidateSolidMaterialInputFormCost(target, candidate);
+                    if (firstSourceForm < 0) {
+                        firstSourceForm = sourceForm;
+                    } else if (firstSourceForm != sourceForm) {
+                        hasSourceFormConflict = true;
+                    }
+                }
             }
-            if (!hasRelevantRoute && !(isSolidMaterialTarget(target) && hasRecyclingRoute)) return;
+            boolean hasChemicalSourceConflict = hasDirectChemicalSynthesis && hasNonChemicalAlternative;
+            if (!hasRelevantRoute && !hasChemicalSourceConflict &&
+                    !(solidMaterialTarget && hasRecyclingRoute)) {
+                return;
+            }
+
+            boolean describeSource = hasChemicalSourceConflict || isChemicalProductSolidTarget(target) ||
+                    (solidMaterialTarget && hasRecyclingRoute && hasSourceFormConflict);
 
             List<String> ranking = new ArrayList<>(candidates.size());
             for (PatternCandidate candidate : candidates) {
-                int formCost = getSolidMaterialInputFormCost(target,
-                        DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
-                                candidate.encoded.alternatives));
+                int formCost = getCandidateSolidMaterialInputFormCost(target, candidate);
+                boolean directChemicalSynthesis = isDirectChemicalPolymerSynthesis(target, candidate);
+                boolean declaredIngotTransformation = isDeclaredIngotTransformationCandidate(target, candidate);
                 ranking.add(candidate.recipeMap.getUnlocalizedName() + '/' + candidate.normalized.getCategory() +
                         "{form=" + formCost +
                         (candidate.primaryCompoundSynthesis ? ", primaryCompound" : "") +
+                        (directChemicalSynthesis ? ", directChemicalSynthesis" : "") +
+                        (declaredIngotTransformation ? ", declaredIngotTransformation" : "") +
+                        (describeSource ?
+                                ", source=" + describeCandidateMaterialSource(target, candidate) : "") +
                         (candidate.recyclingRoute ? ", recycling" : "") +
                         (candidate == candidates.get(0) ? ", selected" : "") + '}');
             }
@@ -2345,6 +2644,31 @@ public final class DynamicRecipePatternRegistry {
             ApplyGrayMod.LOGGER.info("RecipeMap standalone single-path selection material={} prefix={} target={} " +
                             "strategy=SELECTED_ROUTE_ONLY candidates={}",
                     material == null ? "unknown" : material.getName(), getOrePrefixForKey(target), target, ranking);
+        }
+
+        private static String describeCandidateMaterialSource(AEKey target, PatternCandidate candidate) {
+            Material targetMaterial = getMaterialForKey(target);
+            if (targetMaterial == null) return "unknown";
+
+            Material transformationInput = findDeclaredIngotTransformationInput(target, candidate);
+            if (transformationInput != null) return "ingot:" + transformationInput.getName();
+
+            List<String> sourceForms = new ArrayList<>();
+            for (IPatternDetails.IInput input : DynamicRecipePatternDetails.createScoringInputs(
+                    candidate.encoded.inputs, candidate.encoded.alternatives)) {
+                for (GenericStack option : input.possibleInputs()) {
+                    if (option == null || option.amount() <= 0) continue;
+                    AEKey inputKey = option.what();
+                    if (!targetMaterial.equals(getMaterialForKey(inputKey))) continue;
+                    if (inputKey instanceof AEFluidKey) {
+                        sourceForms.add("fluid");
+                        continue;
+                    }
+                    String prefixName = getOrePrefixForKey(inputKey);
+                    sourceForms.add(prefixName == null ? "item" : prefixName);
+                }
+            }
+            return sourceForms.isEmpty() ? "compound" : String.join("+", sourceForms);
         }
 
         private List<IPatternDetails> availableTransientPatterns(CraftingRecoverySession session, AEKey target,
@@ -2458,7 +2782,9 @@ public final class DynamicRecipePatternRegistry {
                     abortCancelledCalculation();
                     return selectedTargets;
                 }
-                if (selectedTargets >= routeExpansionLimit || session.shouldStopTransientGraphBuild()) {
+                StandaloneTreeMaterializationStep step = selectStandaloneTreeMaterializationStep(selectedTargets,
+                        routeExpansionLimit, session.shouldStopTransientGraphBuild());
+                if (step == StandaloneTreeMaterializationStep.STOP) {
                     session.markTransientGraphIncomplete();
                     break;
                 }
@@ -2472,7 +2798,7 @@ public final class DynamicRecipePatternRegistry {
                 if (depth >= budget.getMaxRouteDepth()) continue;
                 if (!selected.isEmpty()) {
                     for (DynamicRecipePatternDetails detail : selected) {
-                        enqueuePatternInputs(pending, depths, detail, depth + 1,
+                        enqueueSelectedPatternInputsDepthFirst(pending, depths, target, detail, depth + 1,
                                 budget.getMaxInputAlternatives());
                     }
                     continue;
@@ -2481,7 +2807,7 @@ public final class DynamicRecipePatternRegistry {
                 // Normal patterns are fixed graph edges, not leaves. Expand their complete input set so a normal
                 // processing pattern can still lead to generated RecipeMap samples further down the same route.
                 for (IPatternDetails detail : getNormalPatternsForRouteCost(session.grid, target)) {
-                    enqueuePatternInputs(pending, depths, detail, depth + 1,
+                    enqueueSelectedPatternInputsDepthFirst(pending, depths, target, detail, depth + 1,
                             budget.getMaxInputAlternatives());
                 }
             }
@@ -2490,11 +2816,16 @@ public final class DynamicRecipePatternRegistry {
         }
 
         /** Persists the already-selected task-local routes only after their complete bounded graph is prepared. */
-        private void materializePreparedTransientPatterns() {
+        private StandalonePatternMaterialization materializePreparedTransientPatterns() {
             CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
-            if (session == null || !session.matches(this) || !session.isTransientGraphPrepared()) return;
+            if (session == null || !session.matches(this) || !session.isTransientGraphPrepared()) {
+                return new StandalonePatternMaterialization(0, 0, 0);
+            }
 
+            Set<AEKey> replacementTargets = getStandaloneReplacementTargets(session);
+            Set<String> selectedRecipeKeys = new HashSet<>();
             int materializedTargets = 0;
+            int materializedPatterns = 0;
             for (AEKey target : session.getTransientCandidateTargets()) {
                 List<DynamicRecipePatternDetails> selected = session.findTransientPatterns(target);
                 List<PatternCandidate> candidates = session.findRouteCandidates(target);
@@ -2510,13 +2841,109 @@ public final class DynamicRecipePatternRegistry {
                 }
                 if (!persisted.isEmpty()) {
                     patternsByTarget.put(target, Collections.unmodifiableList(persisted));
+                    for (DynamicRecipePatternDetails detail : persisted) {
+                        selectedRecipeKeys.add(detail.getRecipeKey());
+                    }
                     materializedTargets++;
+                    materializedPatterns += persisted.size();
                 }
             }
+            int stalePatternCount = discardObsoleteStandalonePatterns(replacementTargets, selectedRecipeKeys);
             if (ApplyGrayMod.LOGGER.isDebugEnabled()) {
                 ApplyGrayMod.LOGGER.debug("Materialized {} selected RecipeMap pattern target(s) after standalone " +
-                                "generation graph preparation", materializedTargets);
+                                "generation graph preparation and discarded {} obsolete pattern(s)",
+                        materializedTargets, stalePatternCount);
             }
+            return new StandalonePatternMaterialization(materializedTargets, materializedPatterns, stalePatternCount);
+        }
+
+        /** Replaces only the dynamic details that could alter the frozen standalone dependency tree. */
+        private static Set<AEKey> getStandaloneReplacementTargets(CraftingRecoverySession session) {
+            Set<AEKey> targets = session.getTransientCandidateTargets();
+            for (AEKey output : new ArrayList<>(targets)) {
+                List<DynamicRecipePatternDetails> selected = session.findTransientPatterns(output);
+                if (selected == null) continue;
+                for (DynamicRecipePatternDetails detail : selected) {
+                    if (!isCanonicalSameMaterialDustToIngotTransition(output, RouteEdge.of(detail))) continue;
+                    for (IPatternDetails.IInput input : detail.getInputs()) {
+                        for (GenericStack option : input.possibleInputs()) {
+                            if (option != null && option.amount() > 0 &&
+                                    isCanonicalSameMaterialDustInput(output, option.what())) {
+                                targets.add(option.what());
+                            }
+                        }
+                    }
+                }
+            }
+            return targets;
+        }
+
+        private int discardObsoleteStandalonePatterns(Set<AEKey> replacementTargets,
+                                                       Set<String> selectedRecipeKeys) {
+            if (replacementTargets.isEmpty()) return 0;
+
+            Set<String> obsoleteRecipeKeys = new HashSet<>();
+            for (ProviderSnapshot snapshot : providers.values()) {
+                for (DynamicRecipePatternDetails detail : snapshot.provider.getCachedDynamicPatterns()) {
+                    if (selectedRecipeKeys.contains(detail.getRecipeKey()) ||
+                            !producesStandaloneReplacementTarget(detail, replacementTargets)) {
+                        continue;
+                    }
+                    snapshot.provider.removeCachedDynamicPattern(detail.getRecipeKey());
+                    obsoleteRecipeKeys.add(detail.getRecipeKey());
+                }
+            }
+            if (obsoleteRecipeKeys.isEmpty()) return 0;
+
+            for (AEKey target : replacementTargets) {
+                patternsByTarget.computeIfPresent(target, (ignored, existing) ->
+                        removePatternsByRecipeKey(existing, obsoleteRecipeKeys));
+                rejectedRecipeKeysByTarget.remove(target);
+                routeCandidateCache.remove(target);
+            }
+            for (String recipeKey : obsoleteRecipeKeys) {
+                patternsByRecipe.remove(recipeKey);
+            }
+            return obsoleteRecipeKeys.size();
+        }
+
+        private static boolean producesStandaloneReplacementTarget(DynamicRecipePatternDetails detail,
+                                                                    Set<AEKey> replacementTargets) {
+            for (GenericStack output : detail.getOutputs()) {
+                if (output != null && output.amount() > 0 && replacementTargets.contains(output.what()) &&
+                        detail.netProduces(output.what())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Nullable
+        private static List<DynamicRecipePatternDetails> removePatternsByRecipeKey(
+                List<DynamicRecipePatternDetails> existing, Set<String> obsoleteRecipeKeys) {
+            List<DynamicRecipePatternDetails> retained = new ArrayList<>(existing.size());
+            for (DynamicRecipePatternDetails detail : existing) {
+                if (!obsoleteRecipeKeys.contains(detail.getRecipeKey())) retained.add(detail);
+            }
+            if (retained.size() == existing.size()) return existing;
+            return retained.isEmpty() ? null : Collections.unmodifiableList(retained);
+        }
+
+        /** Runs on the server thread after the selected graph has been published into this state's indexes. */
+        private StandalonePatternPublication publishStandalonePatternGeneration() {
+            List<ProviderSnapshot> snapshots = new ArrayList<>(providers.values());
+            int refreshedProviders = 0;
+            for (ProviderSnapshot snapshot : snapshots) {
+                try {
+                    if (snapshot.provider.publishCachedPatternsImmediately()) {
+                        refreshedProviders++;
+                    }
+                } catch (RuntimeException exception) {
+                    ApplyGrayMod.LOGGER.warn("Could not refresh RecipeMap pattern provider {} after standalone " +
+                            "generation", snapshot.providerId, exception);
+                }
+            }
+            return new StandalonePatternPublication(snapshots.size(), refreshedProviders);
         }
 
         @Nullable
@@ -2529,8 +2956,7 @@ public final class DynamicRecipePatternRegistry {
 
         /** Builds the UI tree from the same frozen details that AE2 will later query. */
         private PatternGenerationTreeBuilder generatePatternTree(AEKey target, long amount) {
-            int nodeLimit = Math.min(MAX_PATTERN_GENERATION_TREE_NODES,
-                    getPlanningBudget().getMaxRouteExpansionsPerCalculation());
+            int nodeLimit = getPatternGenerationTreeNodeLimit(getPlanningBudget());
             PatternGenerationTreeBuilder builder = new PatternGenerationTreeBuilder(this, getGridForPatternGeneration(),
                     target, nodeLimit, getPlanningBudget().getMaxRouteDepth());
             builder.setRoot(builder.build(target, amount, null, 0, new HashSet<>(), new ArrayList<>()));
@@ -2581,6 +3007,36 @@ public final class DynamicRecipePatternRegistry {
                         pending.addLast(choice.what());
                     }
                 }
+            }
+        }
+
+        /**
+         * A standalone template owns one frozen route, so process one selected branch to completion before unrelated
+         * siblings. This keeps a hot ingot's dust-to-ingot step reachable even when another branch is expensive.
+         */
+        private static void enqueueSelectedPatternInputsDepthFirst(Deque<AEKey> pending,
+                                                                    Map<AEKey, Integer> depths, AEKey output,
+                                                                    IPatternDetails detail, int depth,
+                                                                    int alternativeLimit) {
+            List<AEKey> inputs = new ArrayList<>();
+            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(output,
+                    RouteEdge.of(detail));
+            for (IPatternDetails.IInput input : detail.getInputs()) {
+                GenericStack[] choices = input.possibleInputs();
+                for (int index = 0; index < Math.min(choices.length, alternativeLimit); index++) {
+                    GenericStack choice = choices[index];
+                    if (canonicalDustToIngot && choice != null &&
+                            isCanonicalSameMaterialDustInput(output, choice.what())) {
+                        continue;
+                    }
+                    if (choice != null && choice.amount() > 0 && !depths.containsKey(choice.what())) {
+                        depths.put(choice.what(), depth);
+                        inputs.add(choice.what());
+                    }
+                }
+            }
+            for (int index = inputs.size() - 1; index >= 0; index--) {
+                pending.addFirst(inputs.get(index));
             }
         }
 
@@ -2875,6 +3331,12 @@ public final class DynamicRecipePatternRegistry {
             candidates.sort((left, right) -> {
                 int memoryHint = compareCycleMemoryHint(left.targeted.getBinding(), right.targeted.getBinding());
                 if (memoryHint != 0) return memoryHint;
+                if (isStandalonePatternGeneration()) {
+                    int sourcePreference = compareStandaloneSourcePreference(target, left, right);
+                    if (sourcePreference != 0) return sourcePreference;
+                    int recycling = compareStandaloneRecyclingRoute(left.recyclingRoute, right.recyclingRoute);
+                    if (recycling != 0) return recycling;
+                }
                 int staticCost = left.cost.compareTo(right.cost, planningMode);
                 int quickCost = quickCosts.get(left).compareTo(quickCosts.get(right));
                 int cost = compareRouteAndStaticCost(planningMode, quickCost, staticCost);
@@ -2900,6 +3362,8 @@ public final class DynamicRecipePatternRegistry {
                         RouteCost rightRoute = refinedCosts.get(right);
                         RouteScoringProgress leftProgress = refinedProgress.get(left);
                         RouteScoringProgress rightProgress = refinedProgress.get(right);
+                        int sourcePreference = compareStandaloneSourcePreference(target, left, right);
+                        if (sourcePreference != 0) return sourcePreference;
                         int deferredChemicalBath = compareStandaloneIncompleteChemicalBath(
                                 isChemicalProductProcessedSolidTarget(target),
                                 isChemicalBathRoute(left), leftProgress != null && leftProgress.isQuotaLimited(),
@@ -2907,6 +3371,8 @@ public final class DynamicRecipePatternRegistry {
                                 isChemicalBathRoute(right), rightProgress != null && rightProgress.isQuotaLimited(),
                                 rightRoute != null && rightRoute.hasBoundedFallback());
                         if (deferredChemicalBath != 0) return deferredChemicalBath;
+                        int recycling = compareStandaloneRecyclingRoute(left.recyclingRoute, right.recyclingRoute);
+                        if (recycling != 0) return recycling;
                     }
                     int staticCost = left.cost.compareTo(right.cost, planningMode);
                     int routeCost = refinedCosts.get(left).compareTo(refinedCosts.get(right));
@@ -4099,6 +4565,16 @@ public final class DynamicRecipePatternRegistry {
                 effectiveBudget.getMaxRouteExpansionsPerCalculation();
     }
 
+    /**
+     * The standalone preview follows its own configured selected-tree capacity, not the ordinary crafting-search
+     * budget. The AE2 decoder's node bound is a wire-protocol safety contract, so it remains the only fixed cap.
+     */
+    static int getPatternGenerationTreeNodeLimit(PlanningBudget budget) {
+        PlanningBudget effectiveBudget = budget == null ? PlanningBudget.DEFAULT : budget;
+        return Math.max(1, Math.min(CraftingTreeStackRegistry.MAX_TREE_NODES,
+                effectiveBudget.getMaxStandaloneRouteExpansionsPerCalculation()));
+    }
+
     private static long getRouteCalculationNanos(PlanningBudget budget) {
         PlanningBudget effectiveBudget = budget == null ? PlanningBudget.DEFAULT : budget;
         return isStandalonePatternGeneration() ?
@@ -4143,12 +4619,15 @@ public final class DynamicRecipePatternRegistry {
         private int dynamicProcesses;
         private int normalProcesses;
         private int rawLeaves;
+        private int canonicalDustSeedLeaves;
         private int noPatternLeaves;
         private int depthLeaves;
         private int nodeLimitLeaves;
         private int cycleLeaves;
         private int verificationNodes;
         private boolean verificationLimited;
+        private final Set<AEKey> sampledNoPatternLeaves = new HashSet<>();
+        private final List<String> noPatternLeafSamples = new ArrayList<>();
         @Nullable private LiteCraftTreeNode root;
         private final List<CycleObservation> observedCycles = new ArrayList<>();
         private final Set<String> observedCycleSignatures = new HashSet<>();
@@ -4190,12 +4669,15 @@ public final class DynamicRecipePatternRegistry {
                 IPatternDetails detail = firstPattern(target);
                 if (detail == null) {
                     noPatternLeaves++;
+                    recordNoPatternLeaf(target, "NO_SELECTED_DYNAMIC_OR_NORMAL_PATTERN");
                     return leaf(target, requestedAmount, parent);
                 }
 
-                long outputPerCraft = RouteEdge.of(detail).getNetOutput(target);
+                RouteEdge edge = RouteEdge.of(detail);
+                long outputPerCraft = edge.getNetOutput(target);
                 if (outputPerCraft <= 0) {
                     noPatternLeaves++;
+                    recordNoPatternLeaf(target, "NON_POSITIVE_PATTERN_OUTPUT");
                     return leaf(target, requestedAmount, parent);
                 }
                 if (getDynamicPattern(detail) == null) {
@@ -4207,13 +4689,19 @@ public final class DynamicRecipePatternRegistry {
                 long crafts = divideRoundUp(requestedAmount, outputPerCraft);
                 List<LiteCraftTreeNode> inputs = new ArrayList<>();
                 LiteCraftTreeProc process = new LiteCraftTreeProc(inputs, List.of());
+                boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target, edge);
                 for (IPatternDetails.IInput input : detail.getInputs()) {
                     GenericStack choice = firstInputChoice(input);
                     if (choice == null) continue;
                     long inputAmount = multiplySaturated(
                             multiplySaturated(choice.amount(), input.getMultiplier()), crafts);
                     if (inputAmount > 0) {
-                        inputs.add(build(choice.what(), inputAmount, process, depth + 1, path, routePath));
+                        if (canonicalDustToIngot && isCanonicalSameMaterialDustInput(target, choice.what())) {
+                            canonicalDustSeedLeaves++;
+                            inputs.add(leaf(choice.what(), inputAmount, process));
+                        } else {
+                            inputs.add(build(choice.what(), inputAmount, process, depth + 1, path, routePath));
+                        }
                     }
                 }
 
@@ -4299,9 +4787,14 @@ public final class DynamicRecipePatternRegistry {
                 DynamicRecipePatternDetails dynamic = getDynamicPattern(detail);
                 if (dynamic == null) return;
                 routePath.add(new TreeRouteStep(target, detail));
+                boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target,
+                        RouteEdge.of(detail));
                 for (IPatternDetails.IInput input : detail.getInputs()) {
                     for (GenericStack option : input.possibleInputs()) {
                         if (option != null && option.amount() > 0) {
+                            if (canonicalDustToIngot && isCanonicalSameMaterialDustInput(target, option.what())) {
+                                continue;
+                            }
                             verifyFrozenDynamicRoute(option.what(), depth + 1, path, routePath);
                         }
                     }
@@ -4344,9 +4837,47 @@ public final class DynamicRecipePatternRegistry {
 
         private void logSummary() {
             ApplyGrayMod.LOGGER.info("RecipeMap standalone pattern tree root={} nodes={} dynamicProcesses={} " +
-                            "normalProcesses={} leaves[raw={}, noPattern={}, depth={}, nodeLimit={}, cycle={}]",
-                    rootTarget, nodes, dynamicProcesses, normalProcesses, rawLeaves, noPatternLeaves,
-                    depthLeaves, nodeLimitLeaves, cycleLeaves);
+                            "normalProcesses={} leaves[raw={}, canonicalDustSeed={}, noPattern={}, depth={}, " +
+                            "nodeLimit={}, cycle={}]",
+                    rootTarget, nodes, dynamicProcesses, normalProcesses, rawLeaves, canonicalDustSeedLeaves,
+                    noPatternLeaves, depthLeaves, nodeLimitLeaves, cycleLeaves);
+            if (!noPatternLeafSamples.isEmpty()) {
+                ApplyGrayMod.LOGGER.info("RecipeMap standalone unresolved leaf samples root={} samples={}",
+                        rootTarget, noPatternLeafSamples);
+            }
+        }
+
+        /** Captures the selected-tree state once per unresolved key without issuing another recipe lookup. */
+        private void recordNoPatternLeaf(AEKey target, String reason) {
+            if (target == null || noPatternLeafSamples.size() >= MAX_PATTERN_GENERATION_NO_PATTERN_LEAF_SAMPLES ||
+                    !sampledNoPatternLeaves.add(target)) {
+                return;
+            }
+
+            CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
+            List<DynamicRecipePatternDetails> selected = session != null && session.matches(state) ?
+                    session.findTransientPatterns(target) : null;
+            List<PatternCandidate> candidates = session != null && session.matches(state) ?
+                    session.findRouteCandidates(target) : null;
+            Material material = getMaterialForKey(target);
+            String selectionState = selected == null ? "NOT_MATERIALIZED" :
+                    (selected.isEmpty() ? "NO_AVAILABLE_SELECTED_PATTERN" : "SELECTED_PATTERN_UNAVAILABLE");
+            noPatternLeafSamples.add("{key=" + RecipeFingerprint.describeKey(target) +
+                    ", material=" + (material == null ? "unknown" : material.getName()) +
+                    ", prefix=" + getOrePrefixForKey(target) +
+                    ", selection=" + selectionState +
+                    ", candidates=" + (candidates == null ? "unvisited" : candidates.size()) +
+                    ", maps=" + describeNoPatternCandidateMaps(candidates) +
+                    ", reason=" + reason + '}');
+        }
+
+        private static String describeNoPatternCandidateMaps(@Nullable List<PatternCandidate> candidates) {
+            if (candidates == null || candidates.isEmpty()) return "[]";
+            List<String> recipeMaps = new ArrayList<>(candidates.size());
+            for (PatternCandidate candidate : candidates) {
+                recipeMaps.add(candidate.recipeMap.getUnlocalizedName());
+            }
+            return recipeMaps.toString();
         }
 
         @Nullable
@@ -4471,6 +5002,7 @@ public final class DynamicRecipePatternRegistry {
             InventoryLedger ledger = new InventoryLedger(inventory);
             DirectRouteCost total = DirectRouteCost.materialFormConversions(
                     getSolidMaterialInputFormCost(target, edge.inputs));
+            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target, edge);
             for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 DirectRouteChoice best = null;
@@ -4484,8 +5016,10 @@ public final class DynamicRecipePatternRegistry {
                     long fromStock = branch.consume(option.what(), required);
                     long remaining = required - fromStock;
                     boolean normalPattern = remaining > 0 && !getNormalEdges(option.what()).isEmpty();
+                    boolean materialSeed = canonicalDustToIngot &&
+                            isCanonicalSameMaterialDustInput(target, option.what());
                     DirectRouteCost optionCost = DirectRouteCost.input(option.what(), fromStock, remaining,
-                            normalPattern, isRawMaterialLeaf(option.what()),
+                            normalPattern, materialSeed || isRawMaterialLeaf(option.what()),
                             isNonConsumableControlToken(option.what()));
                     DirectRouteChoice choice = new DirectRouteChoice(optionCost, branch);
                     if (best == null || choice.cost.compareTo(best.cost) < 0) {
@@ -4526,6 +5060,7 @@ public final class DynamicRecipePatternRegistry {
             Set<AEKey> path = new HashSet<>();
             path.add(target);
             prepareCycleAnalysis(target);
+            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target, edge);
 
             List<GenericStack> choices = new ArrayList<>(edge.inputs.length);
             for (IPatternDetails.IInput input : edge.inputs) {
@@ -4539,7 +5074,8 @@ public final class DynamicRecipePatternRegistry {
 
                     long required = multiplySaturated(option.amount(), input.getMultiplier());
                     InventoryLedger branch = ledger.copy();
-                    RouteCost optionCost = estimateKey(option.what(), required, branch, path, 1);
+                    RouteCost optionCost = estimateEdgeInput(target, canonicalDustToIngot, option.what(), required,
+                            branch, path, 1);
                     RouteChoice choice = new RouteChoice(optionCost, branch);
                     if (best == null || choice.cost.compareTo(best.cost) < 0) {
                         best = choice;
@@ -4569,12 +5105,13 @@ public final class DynamicRecipePatternRegistry {
          * search. Shared stock is still consumed in input order, so two frozen inputs cannot both claim the same
          * stored stack.
          */
-        private EncodedRecipe freezeDirectInputs(PatternCandidate candidate) {
+        private EncodedRecipe freezeDirectInputs(PatternCandidate candidate, AEKey target) {
             RouteEdge edge = RouteEdge.of(candidate);
             InventoryLedger ledger = new InventoryLedger(inventory);
             List<GenericStack> choices = new ArrayList<>(edge.inputs.length);
+            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target, edge);
             for (IPatternDetails.IInput input : edge.inputs) {
-                GenericStack selected = selectDirectInputChoice(input, ledger);
+                GenericStack selected = selectDirectInputChoice(target, canonicalDustToIngot, input, ledger);
                 if (selected == null) return candidate.encoded;
                 choices.add(selected);
             }
@@ -4582,7 +5119,8 @@ public final class DynamicRecipePatternRegistry {
         }
 
         @Nullable
-        private GenericStack selectDirectInputChoice(IPatternDetails.IInput input, InventoryLedger ledger) {
+        private GenericStack selectDirectInputChoice(AEKey output, boolean canonicalDustToIngot,
+                                                     IPatternDetails.IInput input, InventoryLedger ledger) {
             GenericStack[] options = input.possibleInputs();
             int optionLimit = Math.min(options.length, getLimits().getMaxInputAlternatives());
             DirectRouteChoice best = null;
@@ -4596,8 +5134,10 @@ public final class DynamicRecipePatternRegistry {
                 long fromStock = branch.consume(option.what(), required);
                 long remaining = required - fromStock;
                 boolean normalPattern = remaining > 0 && !getNormalEdges(option.what()).isEmpty();
+                boolean materialSeed = canonicalDustToIngot &&
+                        isCanonicalSameMaterialDustInput(output, option.what());
                 DirectRouteCost cost = DirectRouteCost.input(option.what(), fromStock, remaining, normalPattern,
-                        isRawMaterialLeaf(option.what()), isNonConsumableControlToken(option.what()));
+                        materialSeed || isRawMaterialLeaf(option.what()), isNonConsumableControlToken(option.what()));
                 if (best == null || cost.compareTo(best.cost) < 0) {
                     best = new DirectRouteChoice(cost, branch);
                     selected = option;
@@ -4673,6 +5213,7 @@ public final class DynamicRecipePatternRegistry {
                     total = total.plus(RouteCost.cycleRisk(cyclePenalty, depth + 1));
                 }
             }
+            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(output, edge);
             for (IPatternDetails.IInput input : edge.inputs) {
                 GenericStack[] options = input.possibleInputs();
                 RouteChoice best = null;
@@ -4684,7 +5225,8 @@ public final class DynamicRecipePatternRegistry {
                     long perCraft = multiplySaturated(option.amount(), input.getMultiplier());
                     long required = multiplySaturated(perCraft, crafts);
                     InventoryLedger branch = ledger.copy();
-                    RouteCost optionCost = estimateKey(option.what(), required, branch, path, depth + 1);
+                    RouteCost optionCost = estimateEdgeInput(output, canonicalDustToIngot, option.what(), required,
+                            branch, path, depth + 1);
                     RouteChoice choice = new RouteChoice(optionCost, branch);
                     if (best == null || choice.cost.compareTo(best.cost) < 0) {
                         best = choice;
@@ -4699,6 +5241,17 @@ public final class DynamicRecipePatternRegistry {
                 total = total.plus(best.cost);
             }
             return total;
+        }
+
+        private RouteCost estimateEdgeInput(AEKey output, boolean canonicalDustToIngot, AEKey input, long amount,
+                                            InventoryLedger ledger, Set<AEKey> path, int depth) {
+            if (canonicalDustToIngot && isCanonicalSameMaterialDustInput(output, input)) {
+                long fromStock = ledger.consume(input, amount);
+                long remaining = amount - fromStock;
+                RouteCost stockCost = RouteCost.stock(estimateKeyMaterialAmount(input, fromStock));
+                return remaining <= 0 ? stockCost : stockCost.plus(RouteCost.missing(input, remaining, depth));
+            }
+            return estimateKey(input, amount, ledger, path, depth);
         }
 
         private RouteCost estimateKey(AEKey key, long amount, InventoryLedger ledger,
@@ -5012,6 +5565,7 @@ public final class DynamicRecipePatternRegistry {
                     continue;
                 }
 
+                boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(key, edge);
                 for (IPatternDetails.IInput input : edge.inputs) {
                     GenericStack[] options = input.possibleInputs();
                     int optionLimit = Math.min(options.length, estimator.getLimits().getMaxInputAlternatives());
@@ -5019,6 +5573,11 @@ public final class DynamicRecipePatternRegistry {
                         GenericStack option = options[optionIndex];
                         if (option == null || option.amount() <= 0) continue;
                         AEKey dependency = option.what();
+                        if (canonicalDustToIngot && isCanonicalSameMaterialDustInput(key, dependency)) {
+                            // The powder is the physical material seed for this direct furnace transition, rather
+                            // than a route to follow back through the same material's conversion graph.
+                            continue;
+                        }
                         node.dependencies.add(dependency);
                         if (isCycleScopeDependency(root.equals(dependency), rootMaterial != null &&
                                 rootMaterial.equals(getMaterialForKey(dependency)))) {
@@ -5044,6 +5603,10 @@ public final class DynamicRecipePatternRegistry {
             if (!complete || edge.normalPattern || edge.cyclePolicy == CyclePolicy.EXTERNAL_SEED) return false;
             if (edge.cyclePolicy == CyclePolicy.FORBID) return true;
             if (edge.cyclePolicy == CyclePolicy.RECYCLE_ONLY && depth > 0) return true;
+            if (isCanonicalSameMaterialDustToIngotTransition(output, edge) &&
+                    edge.cyclePolicy != CyclePolicy.BREAKABLE) {
+                return false;
+            }
 
             GraphNode node = nodes.get(output);
             boolean cyclic = node != null && node.component != null && node.component.cyclic ||
@@ -5877,6 +6440,7 @@ public final class DynamicRecipePatternRegistry {
         private int standaloneRouteCostBudgetExhaustions;
         private int standaloneRouteCostStalls;
         private int standaloneRoutePathCycleRejections;
+        private int standaloneFastSelectionTargets;
         private String standaloneRouteCostBudgetLastReason = "OK";
         private int cycleObservations;
         private int rejectionFilters;
@@ -5938,6 +6502,10 @@ public final class DynamicRecipePatternRegistry {
 
         private void recordStandaloneRoutePathCycle() {
             standaloneRoutePathCycleRejections++;
+        }
+
+        private void recordStandaloneFastSelection() {
+            standaloneFastSelectionTargets++;
         }
 
         private void recordStandaloneRecursiveRouteOverride(AEKey target, PatternCandidate staticCandidate,
@@ -6074,6 +6642,7 @@ public final class DynamicRecipePatternRegistry {
             standaloneRouteCostBudgetExhaustions = 0;
             standaloneRouteCostStalls = 0;
             standaloneRoutePathCycleRejections = 0;
+            standaloneFastSelectionTargets = 0;
             standaloneRouteCostBudgetLastReason = "OK";
             transientGraphPrepared = false;
             transientGraphIncomplete = false;
@@ -6125,8 +6694,17 @@ public final class DynamicRecipePatternRegistry {
                         standaloneRecursiveRouteOverrideSamples);
             }
             if (transientGraphIncomplete) {
-                ApplyGrayMod.LOGGER.warn("RecipeMap task-local candidate graph reached its planning budget root={} " +
-                                "targets={} elapsedMs={}", rootTarget, targets, nanos / 1_000_000L);
+                if (standaloneFastSelectionTargets > 0) {
+                    ApplyGrayMod.LOGGER.warn("RecipeMap standalone route scoring reached its deadline but continued " +
+                                    "with direct selected-route materialization root={} targets={} fastTargets={} " +
+                                    "elapsedMs={} scoringLimitMs={} configKey=maxStandaloneRouteCalculationMillis " +
+                                    "reasonCode=DEADLINE_FAST_CONTINUATION",
+                            rootTarget, targets, standaloneFastSelectionTargets, nanos / 1_000_000L,
+                            getPlanningBudget().getMaxStandaloneRouteCalculationMillis());
+                } else {
+                    ApplyGrayMod.LOGGER.warn("RecipeMap task-local candidate graph reached its planning budget root={} " +
+                                    "targets={} elapsedMs={}", rootTarget, targets, nanos / 1_000_000L);
+                }
             }
         }
 

@@ -3,6 +3,7 @@ package applygray.integration.ae2.recipe;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
+import gregtech.api.capability.IHeatMachine;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.IHeatingCoil;
 import gregtech.api.capability.IOpticalComputationProvider;
@@ -14,6 +15,7 @@ import gregtech.api.metatileentity.multiblock.ICleanroomProvider;
 import gregtech.api.metatileentity.multiblock.ICleanroomReceiver;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.recipes.RecipeMap;
+import gregtech.common.metatileentities.multi.electric.godforge.module.MTEBaseModule;
 
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.IFluidTank;
@@ -148,14 +150,12 @@ public final class MachineCapabilityProfile {
                     facts.putIfAbsent("energyCapacity", recipeMapHolder.getEnergyContainer().getEnergyCapacity());
                 }
             }
-            if (controller instanceof IHeatingCoil heatingCoil) {
-                int temperature = heatingCoil.getCurrentTemperature();
-                if (temperature > 0) {
-                    capabilities.add("temperature");
-                    capabilities.add("heat");
-                    facts.putIfAbsent("temperature", temperature);
-                    facts.putIfAbsent("heat", temperature);
-                }
+            int temperature = getRecipeTemperature(controller);
+            if (temperature > 0) {
+                capabilities.add("temperature");
+                capabilities.add("heat");
+                facts.putIfAbsent("temperature", temperature);
+                facts.putIfAbsent("heat", temperature);
             }
             if (controller instanceof IOpticalComputationReceiver computationReceiver) {
                 IOpticalComputationProvider provider = computationReceiver.getComputationProvider();
@@ -182,6 +182,28 @@ public final class MachineCapabilityProfile {
                 parallelLimit, itemOutputSlots, fluidOutputTanks, availableItemOutputSlots,
                 availableFluidOutputTanks, bufferCount, dimension, cleanroomTypes,
                 capabilities, facts);
+    }
+
+    /**
+     * Returns the temperature that the physical recipe logic actually uses. Godforge modules carry their heat on the
+     * module rather than implementing {@link IHeatingCoil}; treating them as temperature-less rejects every
+     * blast-furnace route even after the module has been connected to the forge.
+     */
+    private static int getRecipeTemperature(MultiblockControllerBase controller) {
+        int heatingCoilTemperature = controller instanceof IHeatingCoil heatingCoil ?
+                heatingCoil.getCurrentTemperature() : 0;
+        int genericHeatMachineTemperature = controller instanceof IHeatMachine heatMachine ?
+                heatMachine.getTemperature() : 0;
+        int godforgeModuleTemperature = controller instanceof MTEBaseModule module ? module.getHeat() : 0;
+        return selectRecipeTemperature(heatingCoilTemperature, genericHeatMachineTemperature,
+                godforgeModuleTemperature);
+    }
+
+    static int selectRecipeTemperature(int heatingCoilTemperature, int genericHeatMachineTemperature,
+                                       int godforgeModuleTemperature) {
+        if (heatingCoilTemperature > 0) return heatingCoilTemperature;
+        if (godforgeModuleTemperature > 0) return godforgeModuleTemperature;
+        return Math.max(0, genericHeatMachineTemperature);
     }
 
     public String getProviderId() {

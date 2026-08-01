@@ -63,8 +63,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
-    // Version 12 invalidates saved routes because standalone generation now recursively scores selected candidates.
-    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 12;
+    // Version 14 invalidates polymer solid routes whose equal form scores could select a dust-fed conversion.
+    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 14;
     private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
@@ -324,6 +324,23 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public void refreshDynamicPatternPublication() {
         patternCacheRefreshPending.set(true);
         requestImmediatePatternUpdate();
+    }
+
+    /**
+     * Rebuilds AE2's provider snapshot synchronously on the server thread after a standalone generation finishes.
+     * {@link ae2.api.networking.crafting.ICraftingProvider#requestUpdate} mounts getAvailablePatterns() immediately,
+     * so callers may safely enable a follow-up calculation once this returns true.
+     */
+    public boolean publishCachedPatternsImmediately() {
+        if (getWorld() == null || getWorld().isRemote || !isActive()) {
+            return false;
+        }
+        if (patternCachePersistencePending.getAndSet(false)) {
+            markDirty();
+        }
+        boolean needsRetry = requestPatternUpdate();
+        patternCacheRefreshPending.set(needsRetry);
+        return !needsRetry;
     }
 
     public void clearCachedPatterns() {
@@ -656,7 +673,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         requestImmediatePatternUpdate();
     }
 
-    /** Publishes newly generated details to AE2 before the generation UI enables its native start button. */
+    /** Schedules a main-thread provider-cache refresh after an asynchronous cache mutation. */
     private void requestImmediatePatternUpdate() {
         if (getWorld() == null || getWorld().isRemote || !immediatePatternUpdatePending.compareAndSet(false, true)) {
             return;
@@ -668,9 +685,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         }
         server.addScheduledTask(() -> {
             immediatePatternUpdatePending.set(false);
-            if (!isActive()) return;
-            patternCacheRefreshPending.set(false);
-            requestPatternUpdate();
+            publishCachedPatternsImmediately();
         });
     }
 
