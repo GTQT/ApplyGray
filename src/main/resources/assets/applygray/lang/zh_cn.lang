@@ -61,7 +61,14 @@ applygray.machine.me_gas_hatch.uxv.name=UXV ME尾气仓
 applygray.machine.me_gas_hatch.opv.name=OpV ME尾气仓
 applygray.machine.me_gas_hatch.max.name=MAX ME尾气仓
 
-applygray.gui.rebuild_recipe_patterns=重建最优
+applygray.gui.generate_optimal_route_patterns=生成最优路线样板
+applygray.gui.pattern_generation.title=样板生成树
+applygray.gui.pattern_generation.back=返回数量选择
+applygray.gui.pattern_generation.status.idle=等待开始生成
+applygray.gui.pattern_generation.status.generating=正在生成样板树
+applygray.gui.pattern_generation.status.ready=样板生成完成
+applygray.gui.pattern_generation.status.unavailable=当前网络无法生成样板
+applygray.gui.pattern_generation.status.failed=样板生成失败，请查看日志
 applygray.gui.pattern_access.recipe_map_provider=配方表样板总成
 applygray.gui.pattern_access.location=位置: %1$d, %2$d, %3$d (维度 %4$d)
 applygray.gui.pattern_access.clear_dynamic_patterns=清理该总成的动态样板

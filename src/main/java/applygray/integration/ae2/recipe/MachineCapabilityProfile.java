@@ -1,5 +1,8 @@
 package applygray.integration.ae2.recipe;
 
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEKey;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.IHeatingCoil;
 import gregtech.api.capability.IOpticalComputationProvider;
@@ -250,10 +253,15 @@ public final class MachineCapabilityProfile {
         return value instanceof Number number ? number.longValue() : null;
     }
 
-    /** Conservative output proof for every physical output, including hidden deterministic and chanced outputs. */
-    public boolean canAcceptAllOutputs(NormalizedRecipe recipe) {
-        return recipe.getDistinctItemOutputTypes() <= availableItemOutputSlots &&
-                recipe.getDistinctFluidOutputTypes() <= availableFluidOutputTanks;
+    /**
+     * Proves that the machine has an output location for the one product represented by the virtual pattern.
+     * Physical byproducts are intentionally not part of the AE2 pattern contract and therefore do not reserve
+     * additional pattern output locations here.
+     */
+    public boolean canAcceptPatternOutput(AEKey target) {
+        if (target instanceof AEItemKey) return availableItemOutputSlots > 0;
+        if (target instanceof AEFluidKey) return availableFluidOutputTanks > 0;
+        return false;
     }
 
     public String summarize() {

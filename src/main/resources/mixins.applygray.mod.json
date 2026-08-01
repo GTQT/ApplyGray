@@ -8,11 +8,9 @@
   "refmap": "mixins.applygray.refmap.json",
   "mixins": [
     "supergiant.AccessorExecutingCraftingJob",
-    "supergiant.InvokerCraftingCalculation",
     "supergiant.MixinCraftingCPUCluster",
-    "supergiant.MixinCraftingCalculationLazyRecipeMap",
-    "supergiant.MixinCraftingGridCacheLazyRecipeMap",
-    "supergiant.MixinContainerCraftConfirmLazyRecipeMap",
+    "supergiant.MixinCraftingServiceRecipeMapPatternProvider",
+    "supergiant.MixinContainerCraftAmountRecipeMapGeneration",
     "supergiant.MixinAETrack",
     "supergiant.MixinPatternContainerGroup",
     "supergiant.InvokerAEBaseContainer",
@@ -28,7 +26,7 @@
     "supergiant.MixinRecipeTransferHandler",
     "supergiant.MixinPatternAccessDisplaySupport",
     "supergiant.MixinAbstractPatternAccessTermRecipeMapClear",
-    "supergiant.MixinGuiCraftConfirmLazyRecipeMap",
+    "supergiant.MixinOpenGuiPacketRecipeMapGeneration",
     "supergiantfc.MixinRecipeTransferBuilder",
     "supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
   ],

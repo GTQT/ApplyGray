@@ -86,7 +86,9 @@ final class RuleSetLoader {
                 "maxDynamicCandidatesForCost", "maxRefinedCandidates", "maxNormalPatternsPerTarget",
                 "maxInputAlternatives", "maxRouteDepth", "maxRouteExpansionsPerTarget",
                 "maxRouteExpansionsPerCalculation", "maxRouteCalculationMillis", "maxSccNodes", "maxSccEdges",
-                "maxSccAnalysisMillis", "maxPersistedPatternsPerProvider", "onExhaustion"),
+                "maxStandaloneRouteExpansionsPerCalculation", "maxStandaloneRouteCalculationMillis",
+                "maxSccAnalysisMillis", "maxPersistedPatternsPerProvider", "onExhaustion",
+                "cycleSafetyOnExhaustion"),
                 "planningBudget", file);
         int priority = optionalInt(budget, "priority", 0, file);
 
@@ -129,6 +131,16 @@ final class RuleSetLoader {
             target.maxRouteCalculationMillis(positiveLong(budget.get("maxRouteCalculationMillis"),
                     "maxRouteCalculationMillis", file), priority, source);
         }
+        if (budget.has("maxStandaloneRouteExpansionsPerCalculation")) {
+            target.maxStandaloneRouteExpansionsPerCalculation(positiveInt(
+                    budget.get("maxStandaloneRouteExpansionsPerCalculation"),
+                    "maxStandaloneRouteExpansionsPerCalculation", file), priority, source);
+        }
+        if (budget.has("maxStandaloneRouteCalculationMillis")) {
+            target.maxStandaloneRouteCalculationMillis(positiveLong(
+                    budget.get("maxStandaloneRouteCalculationMillis"),
+                    "maxStandaloneRouteCalculationMillis", file), priority, source);
+        }
         if (budget.has("maxSccNodes")) {
             target.maxSccNodes(positiveInt(budget.get("maxSccNodes"), "maxSccNodes", file), priority, source);
         }
@@ -149,6 +161,15 @@ final class RuleSetLoader {
                         "planningBudget.onExhaustion", file)), priority, source);
             } catch (IllegalArgumentException exception) {
                 throw new IOException("Unknown planningBudget.onExhaustion in " + file, exception);
+            }
+        }
+        if (budget.has("cycleSafetyOnExhaustion")) {
+            try {
+                target.cycleSafetyExhaustionPolicy(CycleSafetyExhaustionPolicy.valueOf(stringValue(
+                        budget.get("cycleSafetyOnExhaustion"), "planningBudget.cycleSafetyOnExhaustion", file)),
+                        priority, source);
+            } catch (IllegalArgumentException exception) {
+                throw new IOException("Unknown planningBudget.cycleSafetyOnExhaustion in " + file, exception);
             }
         }
     }

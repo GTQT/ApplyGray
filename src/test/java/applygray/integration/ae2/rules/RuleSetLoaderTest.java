@@ -107,7 +107,12 @@ class RuleSetLoaderTest {
         Files.writeString(rulesDirectory.resolve("base.json"), """
                 {
                   "version": 1,
-                  "planningBudget": { "priority": 10, "maxRecipesPerTarget": 64, "onExhaustion": "REJECT" },
+                  "planningBudget": {
+                    "priority": 10,
+                    "maxRecipesPerTarget": 64,
+                    "onExhaustion": "REJECT",
+                    "cycleSafetyOnExhaustion": "FALLBACK_NORMAL"
+                  },
                   "rules": []
                 }
                 """);
@@ -123,6 +128,7 @@ class RuleSetLoaderTest {
 
         assertEquals(128, budget.getMaxRecipesPerTarget());
         assertEquals(BudgetExhaustionPolicy.REJECT, budget.getExhaustionPolicy());
+        assertEquals(CycleSafetyExhaustionPolicy.FALLBACK_NORMAL, budget.getCycleSafetyExhaustionPolicy());
     }
 
     @Test

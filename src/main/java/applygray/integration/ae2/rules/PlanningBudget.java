@@ -12,8 +12,10 @@ import java.util.concurrent.TimeUnit;
 public final class PlanningBudget {
 
     public static final PlanningBudget DEFAULT = new PlanningBudget(
-            512, 8, 2, 2, 32, 16, 16, 64, 512, 2_000,
-            128, 512, 250, 64, BudgetExhaustionPolicy.DEGRADE);
+            512, 8, 8, 8, 32, 16, 16, 64, 512, 2_000,
+            4_096, 8_000,
+            512, 2_048, 1_000, 64, BudgetExhaustionPolicy.DEGRADE,
+            CycleSafetyExhaustionPolicy.RUNTIME_RECOVERY);
 
     private final int maxRecipesPerTarget;
     private final int maxCandidatesPerTarget;
@@ -25,19 +27,24 @@ public final class PlanningBudget {
     private final int maxRouteExpansionsPerTarget;
     private final int maxRouteExpansionsPerCalculation;
     private final long maxRouteCalculationMillis;
+    private final int maxStandaloneRouteExpansionsPerCalculation;
+    private final long maxStandaloneRouteCalculationMillis;
     private final int maxSccNodes;
     private final int maxSccEdges;
     private final long maxSccAnalysisMillis;
     private final int maxPersistedPatternsPerProvider;
     private final BudgetExhaustionPolicy exhaustionPolicy;
+    private final CycleSafetyExhaustionPolicy cycleSafetyExhaustionPolicy;
 
     private PlanningBudget(int maxRecipesPerTarget, int maxCandidatesPerTarget,
                            int maxDynamicCandidatesForCost, int maxRefinedCandidates,
                            int maxNormalPatternsPerTarget, int maxInputAlternatives, int maxRouteDepth,
                            int maxRouteExpansionsPerTarget, int maxRouteExpansionsPerCalculation,
-                           long maxRouteCalculationMillis, int maxSccNodes, int maxSccEdges,
+                           long maxRouteCalculationMillis, int maxStandaloneRouteExpansionsPerCalculation,
+                           long maxStandaloneRouteCalculationMillis, int maxSccNodes, int maxSccEdges,
                            long maxSccAnalysisMillis, int maxPersistedPatternsPerProvider,
-                           BudgetExhaustionPolicy exhaustionPolicy) {
+                           BudgetExhaustionPolicy exhaustionPolicy,
+                           CycleSafetyExhaustionPolicy cycleSafetyExhaustionPolicy) {
         this.maxRecipesPerTarget = requirePositive(maxRecipesPerTarget, "maxRecipesPerTarget");
         this.maxCandidatesPerTarget = requirePositive(maxCandidatesPerTarget, "maxCandidatesPerTarget");
         this.maxDynamicCandidatesForCost = requirePositive(maxDynamicCandidatesForCost,
@@ -51,12 +58,18 @@ public final class PlanningBudget {
         this.maxRouteExpansionsPerCalculation = requirePositive(maxRouteExpansionsPerCalculation,
                 "maxRouteExpansionsPerCalculation");
         this.maxRouteCalculationMillis = requirePositive(maxRouteCalculationMillis, "maxRouteCalculationMillis");
+        this.maxStandaloneRouteExpansionsPerCalculation = requirePositive(maxStandaloneRouteExpansionsPerCalculation,
+                "maxStandaloneRouteExpansionsPerCalculation");
+        this.maxStandaloneRouteCalculationMillis = requirePositive(maxStandaloneRouteCalculationMillis,
+                "maxStandaloneRouteCalculationMillis");
         this.maxSccNodes = requirePositive(maxSccNodes, "maxSccNodes");
         this.maxSccEdges = requirePositive(maxSccEdges, "maxSccEdges");
         this.maxSccAnalysisMillis = requirePositive(maxSccAnalysisMillis, "maxSccAnalysisMillis");
         this.maxPersistedPatternsPerProvider = requirePositive(maxPersistedPatternsPerProvider,
                 "maxPersistedPatternsPerProvider");
         this.exhaustionPolicy = Objects.requireNonNull(exhaustionPolicy, "exhaustionPolicy");
+        this.cycleSafetyExhaustionPolicy = Objects.requireNonNull(cycleSafetyExhaustionPolicy,
+                "cycleSafetyExhaustionPolicy");
     }
 
     public static Builder builder() {
@@ -107,6 +120,24 @@ public final class PlanningBudget {
         return TimeUnit.MILLISECONDS.toNanos(maxRouteCalculationMillis);
     }
 
+    /**
+     * Legacy-named node cap for standalone tree materialization.
+     *
+     * <p>It limits how many selected graph nodes a generated template may contain. Recursive route scoring itself is
+     * deadline-bound and receives fair adaptive grants, so this value is intentionally not a route-score cap.</p>
+     */
+    public int getMaxStandaloneRouteExpansionsPerCalculation() {
+        return maxStandaloneRouteExpansionsPerCalculation;
+    }
+
+    public long getMaxStandaloneRouteCalculationMillis() {
+        return maxStandaloneRouteCalculationMillis;
+    }
+
+    public long getMaxStandaloneRouteCalculationNanos() {
+        return TimeUnit.MILLISECONDS.toNanos(maxStandaloneRouteCalculationMillis);
+    }
+
     public int getMaxSccNodes() {
         return maxSccNodes;
     }
@@ -131,12 +162,19 @@ public final class PlanningBudget {
         return exhaustionPolicy;
     }
 
+    public CycleSafetyExhaustionPolicy getCycleSafetyExhaustionPolicy() {
+        return cycleSafetyExhaustionPolicy;
+    }
+
     public String summarize() {
         return "recipes=" + maxRecipesPerTarget + ", candidates=" + maxCandidatesPerTarget +
                 ", depth=" + maxRouteDepth + ", expansions=" + maxRouteExpansionsPerCalculation +
                 ", routeMs=" + maxRouteCalculationMillis + ", scc=" + maxSccNodes + '/' + maxSccEdges +
+                ", standaloneTreeNodes=" + maxStandaloneRouteExpansionsPerCalculation +
+                ", standaloneRouteMs=" + maxStandaloneRouteCalculationMillis +
                 ", sccMs=" + maxSccAnalysisMillis + ", persisted=" + maxPersistedPatternsPerProvider +
-                ", onExhaustion=" + exhaustionPolicy;
+                ", onExhaustion=" + exhaustionPolicy +
+                ", cycleSafetyOnExhaustion=" + cycleSafetyExhaustionPolicy;
     }
 
     private static int requirePositive(int value, String name) {
@@ -162,11 +200,14 @@ public final class PlanningBudget {
         private final Setting<Integer> maxRouteExpansionsPerTarget;
         private final Setting<Integer> maxRouteExpansionsPerCalculation;
         private final Setting<Long> maxRouteCalculationMillis;
+        private final Setting<Integer> maxStandaloneRouteExpansionsPerCalculation;
+        private final Setting<Long> maxStandaloneRouteCalculationMillis;
         private final Setting<Integer> maxSccNodes;
         private final Setting<Integer> maxSccEdges;
         private final Setting<Long> maxSccAnalysisMillis;
         private final Setting<Integer> maxPersistedPatternsPerProvider;
         private final Setting<BudgetExhaustionPolicy> exhaustionPolicy;
+        private final Setting<CycleSafetyExhaustionPolicy> cycleSafetyExhaustionPolicy;
 
         private Builder(PlanningBudget defaults) {
             maxRecipesPerTarget = new Setting<>(defaults.maxRecipesPerTarget);
@@ -179,11 +220,15 @@ public final class PlanningBudget {
             maxRouteExpansionsPerTarget = new Setting<>(defaults.maxRouteExpansionsPerTarget);
             maxRouteExpansionsPerCalculation = new Setting<>(defaults.maxRouteExpansionsPerCalculation);
             maxRouteCalculationMillis = new Setting<>(defaults.maxRouteCalculationMillis);
+            maxStandaloneRouteExpansionsPerCalculation =
+                    new Setting<>(defaults.maxStandaloneRouteExpansionsPerCalculation);
+            maxStandaloneRouteCalculationMillis = new Setting<>(defaults.maxStandaloneRouteCalculationMillis);
             maxSccNodes = new Setting<>(defaults.maxSccNodes);
             maxSccEdges = new Setting<>(defaults.maxSccEdges);
             maxSccAnalysisMillis = new Setting<>(defaults.maxSccAnalysisMillis);
             maxPersistedPatternsPerProvider = new Setting<>(defaults.maxPersistedPatternsPerProvider);
             exhaustionPolicy = new Setting<>(defaults.exhaustionPolicy);
+            cycleSafetyExhaustionPolicy = new Setting<>(defaults.cycleSafetyExhaustionPolicy);
         }
 
         public void maxRecipesPerTarget(int value, int priority, String source) {
@@ -227,6 +272,16 @@ public final class PlanningBudget {
             maxRouteCalculationMillis.set(requirePositive(value, "maxRouteCalculationMillis"), priority, source);
         }
 
+        public void maxStandaloneRouteExpansionsPerCalculation(int value, int priority, String source) {
+            maxStandaloneRouteExpansionsPerCalculation.set(
+                    requirePositive(value, "maxStandaloneRouteExpansionsPerCalculation"), priority, source);
+        }
+
+        public void maxStandaloneRouteCalculationMillis(long value, int priority, String source) {
+            maxStandaloneRouteCalculationMillis.set(
+                    requirePositive(value, "maxStandaloneRouteCalculationMillis"), priority, source);
+        }
+
         public void maxSccNodes(int value, int priority, String source) {
             maxSccNodes.set(requirePositive(value, "maxSccNodes"), priority, source);
         }
@@ -248,13 +303,20 @@ public final class PlanningBudget {
             exhaustionPolicy.set(Objects.requireNonNull(value, "exhaustionPolicy"), priority, source);
         }
 
+        public void cycleSafetyExhaustionPolicy(CycleSafetyExhaustionPolicy value, int priority, String source) {
+            cycleSafetyExhaustionPolicy.set(Objects.requireNonNull(value, "cycleSafetyExhaustionPolicy"), priority,
+                    source);
+        }
+
         public PlanningBudget build() {
             return new PlanningBudget(maxRecipesPerTarget.value, maxCandidatesPerTarget.value,
                     maxDynamicCandidatesForCost.value, maxRefinedCandidates.value,
                     maxNormalPatternsPerTarget.value, maxInputAlternatives.value, maxRouteDepth.value,
                     maxRouteExpansionsPerTarget.value, maxRouteExpansionsPerCalculation.value,
-                    maxRouteCalculationMillis.value, maxSccNodes.value, maxSccEdges.value,
-                    maxSccAnalysisMillis.value, maxPersistedPatternsPerProvider.value, exhaustionPolicy.value);
+                    maxRouteCalculationMillis.value, maxStandaloneRouteExpansionsPerCalculation.value,
+                    maxStandaloneRouteCalculationMillis.value, maxSccNodes.value, maxSccEdges.value,
+                    maxSccAnalysisMillis.value, maxPersistedPatternsPerProvider.value, exhaustionPolicy.value,
+                    cycleSafetyExhaustionPolicy.value);
         }
     }
 

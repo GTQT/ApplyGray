@@ -1,17 +1,27 @@
 package applygray.integration.ae2.recipe;
 
+import applygray.ApplyGrayMod;
+
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
+import gregtech.api.recipes.machines.RecipeMapFurnace;
+
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.crafting.FurnaceRecipes;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraftforge.oredict.OreDictionary;
 
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -22,12 +32,20 @@ import java.util.concurrent.ConcurrentMap;
 public final class RecipeBindingResolver {
 
     private static final ConcurrentMap<RecipeMap<?>, RecipeMapSnapshot> SNAPSHOTS = new ConcurrentHashMap<>();
+    /**
+     * RecipeMapFurnace deliberately creates Vanilla furnace recipes only during lookup. Keep the resulting recipes
+     * in a main-thread snapshot so asynchronous AE2 planning can index the same fallback route safely.
+     */
+    private static final ConcurrentMap<RecipeMap<?>, List<Recipe>> RUNTIME_FURNACE_FALLBACKS =
+            new ConcurrentHashMap<>();
+    private static final Set<RecipeMap<?>> DIRTY_RUNTIME_FURNACE_MAPS = ConcurrentHashMap.newKeySet();
+    private static final Set<RecipeMap<?>> FURNACE_CAPTURE_FAILURES_LOGGED = ConcurrentHashMap.newKeySet();
 
     private RecipeBindingResolver() {
     }
 
     public static RecipeMapSnapshot snapshot(RecipeMap<?> recipeMap) {
-        return SNAPSHOTS.computeIfAbsent(recipeMap, RecipeMapSnapshot::create);
+        return SNAPSHOTS.computeIfAbsent(recipeMap, RecipeBindingResolver::createSnapshot);
     }
 
     public static void register(RecipeMap<?> recipeMap, RecipeMapSnapshot snapshot) {
@@ -40,6 +58,37 @@ public final class RecipeBindingResolver {
 
     public static void invalidateAll() {
         SNAPSHOTS.clear();
+    }
+
+    /**
+     * Captures lookup-only Vanilla furnace fallbacks before a provider snapshot crosses into AE2's async planner.
+     * The returned maps changed content and require their output indexes and persisted dynamic patterns to be reset.
+     */
+    public static List<RecipeMap<?>> captureMainThreadRuntimeRecipes(RecipeMap<?>[] recipeMaps) {
+        if (recipeMaps == null || recipeMaps.length == 0) return Collections.emptyList();
+
+        List<RecipeMap<?>> changed = new ArrayList<>();
+        for (RecipeMap<?> recipeMap : recipeMaps) {
+            if (!(recipeMap instanceof RecipeMapFurnace)) continue;
+            if (captureRuntimeFurnaceFallbacks(recipeMap)) changed.add(recipeMap);
+        }
+        return changed.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(changed);
+    }
+
+    /**
+     * Must be called when Vanilla smelting registrations change after providers have already begun planning.
+     * Existing bindings become unavailable until the owning provider captures a replacement main-thread snapshot.
+     */
+    public static List<RecipeMap<?>> invalidateRuntimeFurnaceFallbacks() {
+        List<RecipeMap<?>> invalidated = new ArrayList<>();
+        for (RecipeMap<?> recipeMap : RUNTIME_FURNACE_FALLBACKS.keySet()) {
+            if (!(recipeMap instanceof RecipeMapFurnace)) continue;
+            DIRTY_RUNTIME_FURNACE_MAPS.add(recipeMap);
+            RUNTIME_FURNACE_FALLBACKS.remove(recipeMap);
+            SNAPSHOTS.remove(recipeMap);
+            invalidated.add(recipeMap);
+        }
+        return invalidated.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(invalidated);
     }
 
     public static Resolution resolve(RecipeBinding binding, @Nullable RecipeMap<?> recipeMap) {
@@ -65,6 +114,70 @@ public final class RecipeBindingResolver {
             return Resolution.rejected("BINDING_TARGET_NOT_DETERMINISTIC_OUTPUT");
         }
         return Resolution.resolved(recipe);
+    }
+
+    private static RecipeMapSnapshot createSnapshot(RecipeMap<?> recipeMap) {
+        List<Recipe> runtimeFallbacks = RUNTIME_FURNACE_FALLBACKS.get(recipeMap);
+        return RecipeMapSnapshot.create(recipeMap,
+                runtimeFallbacks == null ? Collections.emptyList() : runtimeFallbacks);
+    }
+
+    /** Builds fallback recipes through RecipeMapFurnace itself, preserving its static-recipe-first lookup semantics. */
+    private static boolean captureRuntimeFurnaceFallbacks(RecipeMap<?> recipeMap) {
+        boolean hasCapturedFallbacks = RUNTIME_FURNACE_FALLBACKS.containsKey(recipeMap);
+        if (hasCapturedFallbacks && !DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap)) return false;
+
+        try {
+            Set<Recipe> registeredRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
+            registeredRecipes.addAll(recipeMap.getRecipeList());
+
+            List<Map.Entry<ItemStack, ItemStack>> furnaceEntries = new ArrayList<>(
+                    FurnaceRecipes.instance().getSmeltingList().entrySet());
+            furnaceEntries.removeIf(entry -> entry.getKey() == null || entry.getKey().isEmpty() ||
+                    entry.getKey().getMetadata() == OreDictionary.WILDCARD_VALUE ||
+                    entry.getValue() == null || entry.getValue().isEmpty());
+            furnaceEntries.sort(Comparator
+                    .comparing((Map.Entry<ItemStack, ItemStack> entry) -> describeStack(entry.getKey()))
+                    .thenComparing(entry -> describeStack(entry.getValue())));
+
+            List<Recipe> fallbacks = new ArrayList<>(furnaceEntries.size());
+            for (Map.Entry<ItemStack, ItemStack> entry : furnaceEntries) {
+                ItemStack input = entry.getKey().copy();
+                input.setCount(1);
+                Recipe resolved = recipeMap.findRecipe(Long.MAX_VALUE, Collections.singletonList(input),
+                        Collections.emptyList(), false);
+                // A registered GT furnace recipe wins before RecipeMapFurnace reaches its Vanilla fallback.
+                if (resolved != null && !registeredRecipes.contains(resolved)) fallbacks.add(resolved);
+            }
+
+            List<Recipe> immutableFallbacks = Collections.unmodifiableList(new ArrayList<>(fallbacks));
+            RecipeMapSnapshot refreshed = RecipeMapSnapshot.create(recipeMap, immutableFallbacks);
+            RecipeMapSnapshot previous = SNAPSHOTS.put(recipeMap, refreshed);
+            RUNTIME_FURNACE_FALLBACKS.put(recipeMap, immutableFallbacks);
+            DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap);
+            FURNACE_CAPTURE_FAILURES_LOGGED.remove(recipeMap);
+
+            boolean changed = previous == null || !previous.getContentVersion().equals(refreshed.getContentVersion());
+            if (changed) {
+                ApplyGrayMod.LOGGER.info("Captured {} Vanilla furnace fallback recipe(s) for RecipeMap {}; " +
+                                "dynamic pattern planning can now index direct furnace routes",
+                        immutableFallbacks.size(), recipeMap.getUnlocalizedName());
+            }
+            return changed;
+        } catch (RuntimeException exception) {
+            DIRTY_RUNTIME_FURNACE_MAPS.add(recipeMap);
+            if (FURNACE_CAPTURE_FAILURES_LOGGED.add(recipeMap)) {
+                ApplyGrayMod.LOGGER.warn("Could not capture Vanilla furnace fallback recipes for RecipeMap {}; " +
+                                "direct furnace routes will remain unavailable until the next successful capture",
+                        recipeMap.getUnlocalizedName(), exception);
+            }
+            return false;
+        }
+    }
+
+    private static String describeStack(ItemStack stack) {
+        return stack == null || stack.isEmpty() ? "" :
+                RecipeFingerprint.canonicalNbt(stack.writeToNBT(new NBTTagCompound()));
     }
 
     private static boolean producesBoundTarget(NormalizedRecipe recipe, RecipeBinding binding) {
@@ -95,8 +208,19 @@ public final class RecipeBindingResolver {
         }
 
         public static RecipeMapSnapshot create(RecipeMap<?> recipeMap) {
-            Collection<Recipe> source = recipeMap.getRecipeList();
-            List<Recipe> recipes = Collections.unmodifiableList(new ArrayList<>(source));
+            return create(recipeMap, Collections.emptyList());
+        }
+
+        static RecipeMapSnapshot create(RecipeMap<?> recipeMap, Collection<Recipe> runtimeFallbacks) {
+            List<Recipe> mutableRecipes = new ArrayList<>(recipeMap.getRecipeList());
+            Set<Recipe> knownRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
+            knownRecipes.addAll(mutableRecipes);
+            if (runtimeFallbacks != null) {
+                for (Recipe recipe : runtimeFallbacks) {
+                    if (recipe != null && knownRecipes.add(recipe)) mutableRecipes.add(recipe);
+                }
+            }
+            List<Recipe> recipes = Collections.unmodifiableList(mutableRecipes);
             String contentVersion = RecipeFingerprint.contentVersion(recipeMap, recipes);
             Map<Recipe, Integer> indexes = new IdentityHashMap<>();
             Map<String, List<Recipe>> byFingerprint = new LinkedHashMap<>();

@@ -60,9 +60,8 @@ public final class RuleSet {
         if (context.getTokenSlots() > 81) {
             decision.deny("core.safety", "NC_TOKEN_SLOT_CAPACITY", true);
         }
-        if (!context.getMachine().canAcceptAllOutputs(context.getRecipe())) {
-            decision.deny("core.safety", context.getHiddenOutputCount() > 0 ?
-                    "HIDDEN_OUTPUT_CAPACITY_UNPROVEN" : "OUTPUT_CAPACITY_UNPROVEN", true);
+        if (!context.getMachine().canAcceptPatternOutput(context.getTarget())) {
+            decision.deny("core.safety", "OUTPUT_CAPACITY_UNPROVEN", true);
         }
 
         BuiltinRecipePropertyConstraint.evaluate(context, decision);

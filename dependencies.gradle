@@ -66,6 +66,10 @@ dependencies {
     modCompileOnly(name: gregTechArtifact)
     modRuntimeOnly(name: gregTechArtifact)
 
+    // GuiCraftAmount directly inherits AE2's optional Mouse Tweaks integration interface.
+    // Keep this compile-only, matching AE2's optional runtime dependency.
+    modCompileOnly 'curse.maven:mouse-tweaks-unofficial-461660:5876158'
+
     // APIs used by ApplyGray's integration code.
     modCompileOnly('com.cleanroommc:modularui:3.1.6') {
         transitive = false

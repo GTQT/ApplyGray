@@ -22,6 +22,7 @@ import gregtech.common.items.behaviors.ProgrammableCircuit;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentTranslation;
@@ -62,8 +63,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPatternProvider {
 
-    // Version 10 persists a provider planning mode and selected rule pin group alongside exact bindings.
-    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 10;
+    // Version 12 invalidates saved routes because standalone generation now recursively scores selected candidates.
+    private static final int DYNAMIC_PATTERN_CACHE_VERSION = 12;
     private static final long PATTERN_CACHE_REFRESH_INTERVAL_TICKS = 20L;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
@@ -71,6 +72,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     private final ConcurrentMap<String, DynamicRecipePatternDetails> cachedPatterns = new ConcurrentHashMap<>();
     private final AtomicBoolean patternCacheRefreshPending = new AtomicBoolean(true);
     private final AtomicBoolean patternCachePersistencePending = new AtomicBoolean();
+    private final AtomicBoolean immediatePatternUpdatePending = new AtomicBoolean();
     private volatile PlanningMode planningMode = PlanningMode.STOCK_FIRST;
     private volatile String pinnedRouteGroup = "";
     private long nextPatternCacheRefreshTick;
@@ -102,7 +104,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
 
     @Override
     public void setPatternDetails() {
-        // Dynamic patterns are registered by MixinCraftingGridCache on demand.
+        // This provider has no physical pattern slots. Generated details are published by getAvailablePatterns().
     }
 
     @Override
@@ -111,7 +113,15 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             return Collections.emptyList();
         }
 
-        List<DynamicRecipePatternDetails> patterns = new ArrayList<>(cachedPatterns.values());
+        List<DynamicRecipePatternDetails> patterns = new ArrayList<>();
+        for (DynamicRecipePatternDetails detail : cachedPatterns.values()) {
+            if (DynamicRecipePatternRegistry.isPublishedDynamicPattern(detail, this)) {
+                patterns.add(detail);
+            }
+        }
+        if (patterns.isEmpty()) {
+            return Collections.emptyList();
+        }
         patterns.sort((left, right) -> left.getRecipeKey().compareTo(right.getRecipeKey()));
         return Collections.unmodifiableList(patterns);
     }
@@ -195,6 +205,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             RecipePatternRules.reloadIfChanged();
             MultiblockControllerBase controller = getController();
             RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
+            captureRuntimeRecipeMaps(recipeMaps);
             String recipeMapSignature = createRecipeMapSignature(recipeMaps);
             MachineCapabilityProfile machineProfile = MachineCapabilityProfile.capture(getDynamicProviderId(),
                     controller, recipeMaps, getBufferCount(), RecipePatternRules.collectMachineFacts(controller));
@@ -217,6 +228,19 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             DynamicRecipePatternRegistry.refreshProvider(this);
         }
         flushCachedPatternUpdate();
+    }
+
+    @Override
+    public void gridChanged() {
+        if (getWorld() == null || getWorld().isRemote) {
+            return;
+        }
+
+        // AE2 has already removed and added this provider while moving the node. Repeating requestPatternUpdate()
+        // for every provider in a merged grid only remounts the same cached details a second time.
+        if (DynamicRecipePatternRegistry.refreshProviderAfterGridChange(this)) {
+            setNeedPatternSync(true);
+        }
     }
 
     @Override
@@ -282,10 +306,24 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         return existing;
     }
 
+    /** Registers the exact detail instance selected by a completed task-local AE2 plan. */
+    public synchronized void replaceCachedDynamicPattern(DynamicRecipePatternDetails detail) {
+        DynamicRecipePatternDetails previous = cachedPatterns.put(detail.getRecipeKey(), detail);
+        if (previous != detail) {
+            queueCachedPatternUpdate();
+        }
+    }
+
     public void removeCachedDynamicPattern(String recipeKey) {
         if (cachedPatterns.remove(recipeKey) != null) {
             queueCachedPatternUpdate();
         }
+    }
+
+    /** Rebuilds AE2's ordinary provider cache after the registry changes which saved details are published. */
+    public void refreshDynamicPatternPublication() {
+        patternCacheRefreshPending.set(true);
+        requestImmediatePatternUpdate();
     }
 
     public void clearCachedPatterns() {
@@ -405,6 +443,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (controller == null || !controller.isStructureFormed() || controller.getRecipeLogic() == null) return null;
         RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
         if (recipeMaps.length == 0) return null;
+        captureRuntimeRecipeMaps(recipeMaps);
         try {
             IGrid grid = getMainNode().getGrid();
             if (grid == null) return null;
@@ -512,7 +551,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (recipeMaps.length == 0) {
             return "所属多方块没有可用配方表";
         }
-        return "按 AE 请求懒生成样板\n配方表: " + recipeMaps[0].getLocalizedName() +
+        return "通过目标样板生成任务创建\n配方表: " + recipeMaps[0].getLocalizedName() +
                 (recipeMaps.length > 1 ? " 等 " + recipeMaps.length + " 张" : "") +
                 "\n缓冲区: " + getBufferCount() + " 个\n规划: " + planningMode +
                 (planningMode == PlanningMode.PINNED ? " / " +
@@ -541,6 +580,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         }
         RecipeMap<?> active = controller.getRecipeLogic().getRecipeMap();
         return active == null ? new RecipeMap<?>[0] : new RecipeMap<?>[]{active};
+    }
+
+    /** Captures lookup-only recipe sources while this provider is still on the server thread. */
+    private static void captureRuntimeRecipeMaps(RecipeMap<?>[] recipeMaps) {
+        for (RecipeMap<?> recipeMap : RecipeBindingResolver.captureMainThreadRuntimeRecipes(recipeMaps)) {
+            DynamicRecipePatternRegistry.invalidatePreparedRecipeMapContents(recipeMap);
+        }
     }
 
     private boolean isRecipeMapRouteAvailable(DynamicRecipePatternDetails detail) {
@@ -607,6 +653,25 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     private void queueCachedPatternUpdate() {
         patternCachePersistencePending.set(true);
         patternCacheRefreshPending.set(true);
+        requestImmediatePatternUpdate();
+    }
+
+    /** Publishes newly generated details to AE2 before the generation UI enables its native start button. */
+    private void requestImmediatePatternUpdate() {
+        if (getWorld() == null || getWorld().isRemote || !immediatePatternUpdatePending.compareAndSet(false, true)) {
+            return;
+        }
+        MinecraftServer server = getWorld().getMinecraftServer();
+        if (server == null) {
+            immediatePatternUpdatePending.set(false);
+            return;
+        }
+        server.addScheduledTask(() -> {
+            immediatePatternUpdatePending.set(false);
+            if (!isActive()) return;
+            patternCacheRefreshPending.set(false);
+            requestPatternUpdate();
+        });
     }
 
     private void invalidatePlanningConfiguration(String change) {

@@ -36,6 +36,7 @@ import java.util.stream.Stream;
 public final class RecipePatternRules {
 
     private static final String DEFAULTS_RESOURCE = "/assets/applygray/recipe-pattern-rules/defaults.json";
+    private static final String RETIRED_ELEMENTAL_COMPOUND_SYNTHESIS_RULE = "core.elemental-compound-synthesis";
     private static final Gson RULE_FILE_GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final AtomicReference<RuleSet> ACTIVE = new AtomicReference<>(RuleSet.empty());
     private static final List<RecipePatternFactContributor> FACT_CONTRIBUTORS = new CopyOnWriteArrayList<>();
@@ -189,6 +190,7 @@ public final class RecipePatternRules {
         JsonArray rules = getRulesArray(document, defaults.toString());
         JsonArray bundledRules = getRulesArray(bundled, "bundled defaults");
 
+        List<String> removedRuleIds = removeRetiredDefaultRules(rules);
         List<String> addedRuleIds = new ArrayList<>();
         for (JsonElement bundledRule : bundledRules) {
             if (!bundledRule.isJsonObject()) continue;
@@ -201,27 +203,36 @@ public final class RecipePatternRules {
         }
 
         JsonObject bundledBudget = getPlanningBudgetObject(bundled, "bundled defaults");
-        JsonElement bundledDynamicCandidateLimit = bundledBudget.get("maxDynamicCandidatesForCost");
-        if (bundledDynamicCandidateLimit == null) {
-            throw new IOException("Bundled defaults have no maxDynamicCandidatesForCost");
-        }
         JsonObject budget = getOrCreatePlanningBudget(document, defaults.toString());
-        JsonElement currentDynamicCandidateLimit = budget.get("maxDynamicCandidatesForCost");
-        boolean upgradedLegacyDynamicCandidateLimit = currentDynamicCandidateLimit == null ||
-                isLegacyDynamicCandidateLimit(currentDynamicCandidateLimit);
-        if (upgradedLegacyDynamicCandidateLimit) {
-            budget.add("maxDynamicCandidatesForCost", bundledDynamicCandidateLimit);
+        List<String> upgradedBudgetFields = new ArrayList<>();
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxDynamicCandidatesForCost", upgradedBudgetFields, "2");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxRefinedCandidates", upgradedBudgetFields, "2");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccNodes", upgradedBudgetFields, "128", "1024");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccEdges", upgradedBudgetFields, "512", "4096");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccAnalysisMillis", upgradedBudgetFields, "250", "5000");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxStandaloneRouteExpansionsPerCalculation",
+                upgradedBudgetFields);
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxStandaloneRouteCalculationMillis", upgradedBudgetFields);
+
+        JsonElement bundledCycleSafetyPolicy = bundledBudget.get("cycleSafetyOnExhaustion");
+        if (bundledCycleSafetyPolicy == null) {
+            throw new IOException("Bundled defaults have no cycleSafetyOnExhaustion");
+        }
+        boolean addedCycleSafetyPolicy = !budget.has("cycleSafetyOnExhaustion");
+        if (addedCycleSafetyPolicy) {
+            budget.add("cycleSafetyOnExhaustion", bundledCycleSafetyPolicy);
         }
 
-        if (addedRuleIds.isEmpty() && !upgradedLegacyDynamicCandidateLimit) return;
+        if (removedRuleIds.isEmpty() && addedRuleIds.isEmpty() && upgradedBudgetFields.isEmpty() &&
+                !addedCycleSafetyPolicy) return;
         try (Writer writer = Files.newBufferedWriter(defaults, StandardCharsets.UTF_8,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             RULE_FILE_GSON.toJson(document, writer);
             writer.write(System.lineSeparator());
         }
-        ApplyGrayMod.LOGGER.info("Migrated RecipeMap pattern defaults at {}: addedRules={}, " +
-                        "maxDynamicCandidatesForCost={}.",
-                defaults, addedRuleIds, bundledDynamicCandidateLimit.getAsInt());
+        ApplyGrayMod.LOGGER.info("Migrated RecipeMap pattern defaults at {}: removedRules={}, addedRules={}, " +
+                        "upgradedBudgetFields={}, cycleSafetyOnExhaustion={}.",
+                defaults, removedRuleIds, addedRuleIds, upgradedBudgetFields, bundledCycleSafetyPolicy);
     }
 
     private static JsonObject readBundledDefaultRules() throws IOException {
@@ -291,9 +302,40 @@ public final class RecipePatternRules {
         return false;
     }
 
-    private static boolean isLegacyDynamicCandidateLimit(JsonElement value) {
-        return value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() &&
-                "2".equals(value.getAsString());
+    private static List<String> removeRetiredDefaultRules(JsonArray rules) {
+        List<String> removedRuleIds = new ArrayList<>();
+        for (int index = rules.size() - 1; index >= 0; index--) {
+            JsonElement ruleElement = rules.get(index);
+            if (!ruleElement.isJsonObject()) continue;
+            JsonElement id = ruleElement.getAsJsonObject().get("id");
+            if (id == null || !id.isJsonPrimitive() ||
+                    !RETIRED_ELEMENTAL_COMPOUND_SYNTHESIS_RULE.equals(id.getAsString())) continue;
+            rules.remove(index);
+            removedRuleIds.add(RETIRED_ELEMENTAL_COMPOUND_SYNTHESIS_RULE);
+        }
+        return removedRuleIds;
+    }
+
+    private static void upgradeLegacyBudgetValue(JsonObject budget, JsonObject bundledBudget, String field,
+                                                 List<String> upgradedFields, String... legacyValues)
+            throws IOException {
+        JsonElement bundledValue = bundledBudget.get(field);
+        if (bundledValue == null) throw new IOException("Bundled defaults have no " + field);
+        JsonElement currentValue = budget.get(field);
+        boolean missing = currentValue == null;
+        boolean legacy = false;
+        if (currentValue != null && currentValue.isJsonPrimitive() &&
+                currentValue.getAsJsonPrimitive().isNumber()) {
+            for (String legacyValue : legacyValues) {
+                if (legacyValue.equals(currentValue.getAsString())) {
+                    legacy = true;
+                    break;
+                }
+            }
+        }
+        if (!missing && !legacy) return;
+        budget.add(field, bundledValue);
+        upgradedFields.add(field);
     }
 
     private static String getDirectoryState(Path directory) throws IOException {
