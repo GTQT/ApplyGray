@@ -20,7 +20,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Immutable virtual processing pattern generated for a RecipeMap on demand.
@@ -46,7 +48,10 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
     private final RecipeBinding recipeBinding;
     private final NonConsumableTokenLayout tokenLayout;
     private final List<String> explanation;
-    private final AEItemKey definition;
+    /** Number of ordinary RecipeMap executions represented by one AE2 pattern execution. */
+    private final int recipeRunsPerPattern;
+    /** Encoded AE2 item data is only needed once a plan or display actually asks for this detail. */
+    @Nullable private volatile AEItemKey definition;
 
     DynamicRecipePatternDetails(String recipeKey, String recipeMapName,
                                 List<GenericStack> inputs, List<List<GenericStack>> alternatives,
@@ -57,6 +62,22 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
                                 int maxPatternsForTarget, PlanningMode planningMode, String pinGroup,
                                 List<GenericStack> hiddenActualOutputs, RecipeBinding recipeBinding,
                                 NonConsumableTokenLayout tokenLayout, List<String> explanation) {
+        this(recipeKey, recipeMapName, inputs, alternatives, outputs, circuitConfiguration,
+                rawMaterialCost, stepCost, routePriority, ruleRoutePriority, cyclePolicy, cycleRiskPenalty,
+                maxPatternsForTarget, planningMode, pinGroup, hiddenActualOutputs, recipeBinding, tokenLayout,
+                explanation, 1);
+    }
+
+    private DynamicRecipePatternDetails(String recipeKey, String recipeMapName,
+                                        List<GenericStack> inputs, List<List<GenericStack>> alternatives,
+                                        List<GenericStack> outputs, int circuitConfiguration,
+                                        long rawMaterialCost, int stepCost,
+                                        DynamicRecipePatternRegistry.CandidateRoutePriority routePriority,
+                                        long ruleRoutePriority, CyclePolicy cyclePolicy, long cycleRiskPenalty,
+                                        int maxPatternsForTarget, PlanningMode planningMode, String pinGroup,
+                                        List<GenericStack> hiddenActualOutputs, RecipeBinding recipeBinding,
+                                        NonConsumableTokenLayout tokenLayout, List<String> explanation,
+                                        int recipeRunsPerPattern) {
         if (inputs.isEmpty() || outputs.size() != 1 || recipeBinding == null) {
             throw new IllegalArgumentException("Dynamic RecipeMap pattern requires inputs, one output, and a binding");
         }
@@ -80,13 +101,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         this.recipeBinding = recipeBinding;
         this.tokenLayout = tokenLayout == null ? NonConsumableTokenLayout.EMPTY : tokenLayout;
         this.explanation = Collections.unmodifiableList(new ArrayList<>(explanation));
-
-        ItemStack encoded = PatternDetailsHelper.encodeProcessingPattern(
-                primaryInputs(inputs), this.outputs, recipeMapName);
-        this.definition = AEItemKey.of(encoded);
-        if (this.definition == null) {
-            throw new IllegalStateException("Could not create a definition for dynamic RecipeMap pattern " + recipeKey);
-        }
+        this.recipeRunsPerPattern = Math.max(1, recipeRunsPerPattern);
     }
 
     public String getRecipeKey() {
@@ -153,6 +168,98 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         return explanation;
     }
 
+    /** Returns the number of normal RecipeMap recipe executions represented by this detail. */
+    public int getRecipeRunsPerPattern() {
+        return recipeRunsPerPattern;
+    }
+
+    /** Large details are task-local and must not be expanded a second time. */
+    public boolean isLargePattern() {
+        return recipeRunsPerPattern > 1;
+    }
+
+    /** Returns whether this detail consumes the requested key as one of its own inputs. */
+    public boolean consumes(AEKey requested) {
+        if (requested == null) return false;
+        for (Input input : inputs) {
+            for (GenericStack possibleInput : input.possibleInputs()) {
+                if (requested.equals(possibleInput.what())) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Largest safe planning multiplier for this exact detail.
+     *
+     * <p>Pattern buffers aggregate equal keys across input slots and accept only signed-int stack amounts. The
+     * calculation therefore uses the worst case for every input alternative, rather than checking each slot in
+     * isolation. Non-consumable programmable-circuit tokens remain one token per large pattern execution.</p>
+     */
+    public int getMaximumLargePatternMultiplier() {
+        if (isLargePattern()) return 1;
+
+        Map<AEKey, Long> amountsByKey = new HashMap<>();
+        boolean[] nonConsumableInputs = getNonConsumableInputSlots();
+        for (int inputIndex = 0; inputIndex < inputs.length; inputIndex++) {
+            if (nonConsumableInputs[inputIndex]) continue;
+            Input input = inputs[inputIndex];
+            for (GenericStack possibleInput : input.possibleInputs()) {
+                addCapacityAmount(amountsByKey, possibleInput.what(), input.getMultiplier());
+            }
+        }
+        for (GenericStack output : outputs) {
+            addCapacityAmount(amountsByKey, output.what(), output.amount());
+        }
+        for (GenericStack hiddenOutput : hiddenActualOutputs) {
+            addCapacityAmount(amountsByKey, hiddenOutput.what(), hiddenOutput.amount());
+        }
+
+        int maximum = Integer.MAX_VALUE;
+        for (long amount : amountsByKey.values()) {
+            if (amount <= 0) return 1;
+            maximum = Math.min(maximum, (int) (Integer.MAX_VALUE / amount));
+        }
+        return Math.max(1, maximum);
+    }
+
+    /**
+     * Creates a non-published large-pattern detail. Consumable inputs and all advertised outputs scale together.
+     * AE2 may use a rounded-up final execution, which intentionally creates normal recipe surplus.
+     */
+    @Nullable
+    public DynamicRecipePatternDetails createLargePattern(int multiplier) {
+        if (multiplier <= 1 || multiplier > getMaximumLargePatternMultiplier()) return null;
+
+        boolean[] nonConsumableInputs = getNonConsumableInputSlots();
+        List<GenericStack> scaledInputs = new ArrayList<>(inputs.length);
+        List<List<GenericStack>> scaledAlternatives = new ArrayList<>(inputs.length);
+        for (int inputIndex = 0; inputIndex < inputs.length; inputIndex++) {
+            Input input = inputs[inputIndex];
+            long amount = nonConsumableInputs[inputIndex] ? input.getMultiplier() :
+                    multiplyPatternAmount(input.getMultiplier(), multiplier);
+            if (amount <= 0) return null;
+
+            GenericStack[] options = input.possibleInputs();
+            List<GenericStack> alternatives = new ArrayList<>(options.length);
+            for (GenericStack option : options) {
+                alternatives.add(new GenericStack(option.what(), amount));
+            }
+            scaledInputs.add(new GenericStack(options[0].what(), amount));
+            scaledAlternatives.add(alternatives);
+        }
+
+        List<GenericStack> scaledOutputs = scaleStacks(outputs, multiplier);
+        List<GenericStack> scaledHiddenOutputs = scaleStacks(hiddenActualOutputs, multiplier);
+        if (scaledOutputs == null || scaledHiddenOutputs == null) return null;
+
+        return new DynamicRecipePatternDetails(recipeKey + "#batch=" + multiplier, recipeMapName,
+                scaledInputs, scaledAlternatives, scaledOutputs, circuitConfiguration,
+                LongMath.saturatedMultiply(rawMaterialCost, multiplier), scaleStepCost(stepCost, multiplier),
+                routePriority, ruleRoutePriority, cyclePolicy, cycleRiskPenalty, maxPatternsForTarget,
+                planningMode, pinGroup, scaledHiddenOutputs, recipeBinding, tokenLayout, explanation, multiplier);
+    }
+
     boolean matchesRecipeDefinition(String expectedRecipeMapName, List<GenericStack> expectedPrimaryInputs,
                                     List<List<GenericStack>> expectedAlternatives,
                                     List<GenericStack> expectedOutputs, int expectedCircuitConfiguration,
@@ -164,7 +271,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
                                     List<GenericStack> expectedHiddenActualOutputs,
                                     RecipeBinding expectedBinding,
                                     NonConsumableTokenLayout expectedTokenLayout) {
-        if (!recipeMapName.equals(expectedRecipeMapName) || !outputs.equals(expectedOutputs) ||
+        if (isLargePattern() || !recipeMapName.equals(expectedRecipeMapName) || !outputs.equals(expectedOutputs) ||
                 circuitConfiguration != expectedCircuitConfiguration || rawMaterialCost != expectedRawMaterialCost ||
                 stepCost != expectedStepCost || routePriority != expectedRoutePriority ||
                 ruleRoutePriority != expectedRuleRoutePriority || cyclePolicy != expectedCyclePolicy ||
@@ -260,6 +367,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         data.setLong("RuleRoutePriority", ruleRoutePriority);
         data.setString("CyclePolicy", cyclePolicy.name());
         data.setLong("CycleRiskPenalty", cycleRiskPenalty);
+        data.setInteger("RecipeRuns", recipeRunsPerPattern);
         data.setInteger("MaxPatterns", maxPatternsForTarget);
         data.setString("PlanningMode", planningMode.name());
         data.setString("PinGroup", pinGroup);
@@ -329,7 +437,7 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
                 data.getInteger("StepCost"), readRoutePriority(data), data.getLong("RuleRoutePriority"),
                 readCyclePolicy(data), data.getLong("CycleRiskPenalty"), Math.max(1, data.getInteger("MaxPatterns")),
                 readPlanningMode(data), data.getString("PinGroup"),
-                hiddenOutputs, binding, tokenLayout, explanation);
+                hiddenOutputs, binding, tokenLayout, explanation, Math.max(1, data.getInteger("RecipeRuns")));
     }
 
     private static DynamicRecipePatternRegistry.CandidateRoutePriority readRoutePriority(NBTTagCompound data) {
@@ -365,7 +473,22 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
 
     @Override
     public AEItemKey getDefinition() {
-        return definition;
+        AEItemKey current = definition;
+        if (current != null) return current;
+
+        synchronized (this) {
+            current = definition;
+            if (current != null) return current;
+
+            ItemStack encoded = PatternDetailsHelper.encodeProcessingPattern(
+                    primaryInputs(), outputs, recipeMapName);
+            current = AEItemKey.of(encoded);
+            if (current == null) {
+                throw new IllegalStateException("Could not create a definition for dynamic RecipeMap pattern " + recipeKey);
+            }
+            definition = current;
+            return current;
+        }
     }
 
     @Override
@@ -395,10 +518,6 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
             result.add(new GenericStack(primary.what(), input.getMultiplier()));
         }
         return result;
-    }
-
-    private static List<GenericStack> primaryInputs(List<GenericStack> source) {
-        return Collections.unmodifiableList(new ArrayList<>(source));
     }
 
     private static Input[] createInputs(List<GenericStack> primary,
@@ -431,7 +550,43 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         return result;
     }
 
-    private static final class Input implements IInput {
+    private boolean[] getNonConsumableInputSlots() {
+        boolean[] result = new boolean[inputs.length];
+        for (NonConsumableTokenLayout.Slot slot : tokenLayout.getSlots()) {
+            int index = slot.getInputIndex();
+            if (index >= 0 && index < result.length) result[index] = true;
+        }
+        return result;
+    }
+
+    private static void addCapacityAmount(Map<AEKey, Long> amountsByKey, AEKey key, long amount) {
+        if (key == null || amount <= 0) return;
+        amountsByKey.merge(key, amount, LongMath::saturatedAdd);
+    }
+
+    private static long multiplyPatternAmount(long amount, int multiplier) {
+        if (amount <= 0 || amount > Integer.MAX_VALUE / (long) multiplier) return -1;
+        return amount * multiplier;
+    }
+
+    @Nullable
+    private static List<GenericStack> scaleStacks(List<GenericStack> source, int multiplier) {
+        List<GenericStack> result = new ArrayList<>(source.size());
+        for (GenericStack stack : source) {
+            if (stack == null) continue;
+            long amount = multiplyPatternAmount(stack.amount(), multiplier);
+            if (amount <= 0) return null;
+            result.add(new GenericStack(stack.what(), amount));
+        }
+        return result;
+    }
+
+    private static int scaleStepCost(int value, int multiplier) {
+        long scaled = LongMath.saturatedMultiply(Math.max(0, value), multiplier);
+        return (int) Math.min(Integer.MAX_VALUE, scaled);
+    }
+
+    private static final class Input implements IInput, ExactDynamicRecipeInput {
 
         private final GenericStack[] possibleInputs;
         private final long multiplier;
@@ -476,6 +631,21 @@ public final class DynamicRecipePatternDetails implements IPatternDetails {
         @Override
         public @Nullable AEKey getRemainingKey(AEKey template) {
             return null;
+        }
+
+        @Override
+        public boolean isExactDynamicRecipeInput() {
+            return possibleInputs.length == 1;
+        }
+
+        @Override
+        public AEKey getExactDynamicRecipeInputKey() {
+            return possibleInputs[0].what();
+        }
+
+        @Override
+        public long getExactDynamicRecipeInputAmount() {
+            return possibleInputs[0].amount();
         }
     }
 }

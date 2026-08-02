@@ -28,8 +28,16 @@ public final class RecipeFingerprint {
     private RecipeFingerprint() {
     }
 
+    /**
+     * A recipe's content identity without its position in a map. This is used to establish a deterministic ordering
+     * before an ordinal is added to distinguish otherwise identical recipes.
+     */
+    public static String contentFingerprint(String recipeMapId, Recipe recipe) {
+        return sha256(recipeMapId + '\n' + describeRecipe(recipe));
+    }
+
     public static String fingerprint(String recipeMapId, Recipe recipe, int registrationIndex) {
-        return sha256(recipeMapId + '\n' + registrationIndex + '\n' + describeRecipe(recipe));
+        return sha256(recipeMapId + '\n' + registrationIndex + '\n' + contentFingerprint(recipeMapId, recipe));
     }
 
     public static String contentVersion(RecipeMap<?> recipeMap, Collection<Recipe> recipes) {

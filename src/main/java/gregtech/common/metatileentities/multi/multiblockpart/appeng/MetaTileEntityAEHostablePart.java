@@ -2,6 +2,7 @@ package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
 import applygray.api.IAEManagedMetaTileEntity;
 import applygray.integration.ae2.ApplyGrayGridNodeSupport;
+import applygray.integration.ae2.CraftingProviderRefreshPolicy;
 import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IControllable;
@@ -213,12 +214,39 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         }
 
         wasCraftingProviderActive = active;
-        ICraftingProvider.requestUpdate(getMainNode());
+        boolean needsNativeRefresh = CraftingProviderRefreshPolicy.needsNativeRefresh(active,
+                shouldRefreshCraftingProviderAfterActivation(), shouldRefreshCraftingProviderAfterDeactivation());
+        if (needsNativeRefresh) {
+            refreshCraftingProviderPatterns();
+        }
         if (active) {
             craftingProviderRefreshPending = false;
         }
-        GTLog.logger.debug("Refreshing AE2 crafting patterns for {} at {} after {} (active={})",
-                metaTileEntityId, getPos(), state == null ? "periodic state check" : state, active);
+        if (needsNativeRefresh) {
+            GTLog.logger.debug("Refreshing AE2 crafting patterns for {} at {} after {} (active={})",
+                    metaTileEntityId, getPos(), state == null ? "periodic state check" : state, active);
+        }
+    }
+
+    /**
+     * Returns whether AE2 must remount this provider after its node becomes active.
+     *
+     * <p>Most providers need this because AE2 initially mounts them before channel assignment, when their pattern
+     * list can be empty. Providers with an intentionally empty native pattern set may opt out until they actually
+     * publish patterns.</p>
+     */
+    protected boolean shouldRefreshCraftingProviderAfterActivation() {
+        return true;
+    }
+
+    /** Returns whether a provider must remount an empty pattern list when its node becomes inactive. */
+    protected boolean shouldRefreshCraftingProviderAfterDeactivation() {
+        return true;
+    }
+
+    /** Requests AE2 to rebuild this node's native pattern list. */
+    protected void refreshCraftingProviderPatterns() {
+        ICraftingProvider.requestUpdate(getMainNode());
     }
 
     /**
@@ -246,7 +274,9 @@ public abstract class MetaTileEntityAEHostablePart extends MetaTileEntityMultibl
         }
 
         craftingProviderRefreshPending = false;
-        ICraftingProvider.requestUpdate(getMainNode());
+        if (shouldRefreshCraftingProviderAfterActivation()) {
+            refreshCraftingProviderPatterns();
+        }
     }
 
     @Override

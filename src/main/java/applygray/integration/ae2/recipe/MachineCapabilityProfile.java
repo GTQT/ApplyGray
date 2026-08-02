@@ -17,8 +17,6 @@ import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.common.metatileentities.multi.electric.godforge.module.MTEBaseModule;
 
-import net.minecraft.item.ItemStack;
-import net.minecraftforge.fluids.IFluidTank;
 import net.minecraftforge.items.IItemHandlerModifiable;
 
 import java.util.ArrayList;
@@ -43,8 +41,6 @@ public final class MachineCapabilityProfile {
     private final int parallelLimit;
     private final int itemOutputSlots;
     private final int fluidOutputTanks;
-    private final int availableItemOutputSlots;
-    private final int availableFluidOutputTanks;
     private final int bufferCount;
     private final int dimension;
     private final Set<String> cleanroomTypes;
@@ -53,10 +49,10 @@ public final class MachineCapabilityProfile {
     private final String version;
 
     private MachineCapabilityProfile(String providerId, String controllerType, boolean structureFormed,
-                                      List<String> recipeMaps, long maxVoltage, int parallelLimit,
-                                      int itemOutputSlots, int fluidOutputTanks,
-                                      int availableItemOutputSlots, int availableFluidOutputTanks, int bufferCount,
-                                     int dimension, Set<String> cleanroomTypes,
+                                       List<String> recipeMaps, long maxVoltage, int parallelLimit,
+                                       int itemOutputSlots, int fluidOutputTanks,
+                                       int bufferCount,
+                                       int dimension, Set<String> cleanroomTypes,
                                      Set<String> capabilities, Map<String, Object> adapterFacts) {
         this.providerId = providerId;
         this.controllerType = controllerType;
@@ -66,8 +62,6 @@ public final class MachineCapabilityProfile {
         this.parallelLimit = parallelLimit;
         this.itemOutputSlots = itemOutputSlots;
         this.fluidOutputTanks = fluidOutputTanks;
-        this.availableItemOutputSlots = availableItemOutputSlots;
-        this.availableFluidOutputTanks = availableFluidOutputTanks;
         this.bufferCount = bufferCount;
         this.dimension = dimension;
         this.cleanroomTypes = Collections.unmodifiableSet(new LinkedHashSet<>(cleanroomTypes));
@@ -75,8 +69,7 @@ public final class MachineCapabilityProfile {
         this.adapterFacts = Collections.unmodifiableMap(sanitizeFacts(adapterFacts));
         this.version = RecipeFingerprint.sha256(providerId + '\n' + controllerType + '\n' + structureFormed + '\n' +
                 String.join("|", recipeMaps) + '\n' + maxVoltage + '\n' + parallelLimit + '\n' +
-                itemOutputSlots + '\n' + fluidOutputTanks + '\n' + availableItemOutputSlots + '\n' +
-                availableFluidOutputTanks + '\n' + bufferCount + '\n' +
+                itemOutputSlots + '\n' + fluidOutputTanks + '\n' + bufferCount + '\n' +
                 dimension + '\n' + String.join("|", this.cleanroomTypes) + '\n' +
                 String.join("|", this.capabilities) + '\n' + this.adapterFacts);
     }
@@ -102,8 +95,6 @@ public final class MachineCapabilityProfile {
         int parallelLimit = 0;
         int itemOutputSlots = 0;
         int fluidOutputTanks = 0;
-        int availableItemOutputSlots = 0;
-        int availableFluidOutputTanks = 0;
         int dimension = Integer.MIN_VALUE;
         Set<String> cleanroomTypes = new LinkedHashSet<>();
         Set<String> capabilities = new LinkedHashSet<>();
@@ -130,20 +121,6 @@ public final class MachineCapabilityProfile {
                 IMultipleTankHandler outputTanks = recipeMapHolder.getOutputFluidInventory();
                 itemOutputSlots = outputInventory == null ? 0 : outputInventory.getSlots();
                 fluidOutputTanks = outputTanks == null ? 0 : outputTanks.getTanks();
-                if (outputInventory != null) {
-                    for (int slot = 0; slot < outputInventory.getSlots(); slot++) {
-                        ItemStack output = outputInventory.getStackInSlot(slot);
-                        if (output == null || output.isEmpty()) availableItemOutputSlots++;
-                    }
-                }
-                if (outputTanks != null) {
-                    for (int tankIndex = 0; tankIndex < outputTanks.getTanks(); tankIndex++) {
-                        IFluidTank output = outputTanks.getTankAt(tankIndex);
-                        if (output == null || output.getFluid() == null || output.getFluidAmount() <= 0) {
-                            availableFluidOutputTanks++;
-                        }
-                    }
-                }
                 if (itemOutputSlots > 0) capabilities.add("item_output");
                 if (fluidOutputTanks > 0) capabilities.add("fluid_output");
                 if (recipeMapHolder.getEnergyContainer() != null) {
@@ -179,8 +156,7 @@ public final class MachineCapabilityProfile {
         }
         if (bufferCount > 0) capabilities.add("isolated_buffer");
         return new MachineCapabilityProfile(providerId, controllerType, formed, recipeMaps, maxVoltage,
-                parallelLimit, itemOutputSlots, fluidOutputTanks, availableItemOutputSlots,
-                availableFluidOutputTanks, bufferCount, dimension, cleanroomTypes,
+                parallelLimit, itemOutputSlots, fluidOutputTanks, bufferCount, dimension, cleanroomTypes,
                 capabilities, facts);
     }
 
@@ -238,14 +214,6 @@ public final class MachineCapabilityProfile {
         return fluidOutputTanks;
     }
 
-    public int getAvailableItemOutputSlots() {
-        return availableItemOutputSlots;
-    }
-
-    public int getAvailableFluidOutputTanks() {
-        return availableFluidOutputTanks;
-    }
-
     public int getBufferCount() {
         return bufferCount;
     }
@@ -281,16 +249,15 @@ public final class MachineCapabilityProfile {
      * additional pattern output locations here.
      */
     public boolean canAcceptPatternOutput(AEKey target) {
-        if (target instanceof AEItemKey) return availableItemOutputSlots > 0;
-        if (target instanceof AEFluidKey) return availableFluidOutputTanks > 0;
+        if (target instanceof AEItemKey) return itemOutputSlots > 0;
+        if (target instanceof AEFluidKey) return fluidOutputTanks > 0;
         return false;
     }
 
     public String summarize() {
         return controllerType + " maps=" + recipeMaps + " voltage=" + maxVoltage +
                 " parallel=" + parallelLimit + " dimension=" + dimension + " outputSlots=" +
-                availableItemOutputSlots + '/' + itemOutputSlots + " fluid=" +
-                availableFluidOutputTanks + '/' + fluidOutputTanks;
+                itemOutputSlots + " fluid=" + fluidOutputTanks;
     }
 
     private static Map<String, Object> sanitizeFacts(Map<String, Object> source) {

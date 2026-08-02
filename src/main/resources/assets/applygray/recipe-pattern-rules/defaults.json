@@ -17,7 +17,6 @@
     "maxSccNodes": 512,
     "maxSccEdges": 2048,
     "maxSccAnalysisMillis": 1000,
-    "maxPersistedPatternsPerProvider": 64,
     "onExhaustion": "DEGRADE",
     "cycleSafetyOnExhaustion": "RUNTIME_RECOVERY"
   },

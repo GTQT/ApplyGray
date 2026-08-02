@@ -55,6 +55,16 @@ public final class NonConsumableTokenLayout {
      */
     @Nullable
     public List<ItemStack> decode(KeyCounter[] inputHolders) {
+        return decode(inputHolders, 1);
+    }
+
+    /**
+     * Decodes inputs for a merged AE2 push. Each logical token slot must contain exactly one token per execution,
+     * while the execution buffer needs only one copy of the decoded non-consumable catalyst.
+     */
+    @Nullable
+    public List<ItemStack> decode(KeyCounter[] inputHolders, int batchMultiplier) {
+        if (batchMultiplier <= 0) return null;
         if (slots.isEmpty()) return Collections.emptyList();
         if (inputHolders == null) return null;
 
@@ -71,7 +81,7 @@ public final class NonConsumableTokenLayout {
                 amount = entry.getLongValue();
                 break;
             }
-            if (!(key instanceof AEItemKey itemKey) || amount != 1) return null;
+            if (!(key instanceof AEItemKey itemKey) || amount != batchMultiplier) return null;
 
             ItemStack token = itemKey.toStack(1);
             if (ProgrammableCircuit.getInstanceFor(token) == null || !ProgrammableCircuit.hasWrappedItem(token)) {

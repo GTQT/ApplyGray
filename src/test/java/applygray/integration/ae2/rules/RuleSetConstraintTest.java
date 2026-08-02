@@ -91,10 +91,10 @@ class RuleSetConstraintTest {
         try {
             Constructor<MachineCapabilityProfile> constructor = MachineCapabilityProfile.class.getDeclaredConstructor(
                     String.class, String.class, boolean.class, List.class, long.class, int.class, int.class,
-                    int.class, int.class, int.class, int.class, int.class, Set.class, Set.class, Map.class);
+                    int.class, int.class, int.class, Set.class, Set.class, Map.class);
             constructor.setAccessible(true);
             return constructor.newInstance("test-provider", "test-controller", true,
-                    List.of("test_rule_property_map"), 0L, 0, 0, 0, 0, 0, 0, Integer.MIN_VALUE,
+                    List.of("test_rule_property_map"), 0L, 0, 0, 0, 0, Integer.MIN_VALUE,
                     Set.of("structure"), Set.of("structure"), Map.of());
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError("Could not construct machine capability test fixture", exception);

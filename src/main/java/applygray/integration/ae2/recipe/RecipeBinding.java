@@ -15,8 +15,8 @@ import java.util.Objects;
  */
 public final class RecipeBinding {
 
-    // Version 2 uses canonical NBT/property serialization in RecipeFingerprint.
-    public static final int FINGERPRINT_VERSION = 2;
+    // Version 3 assigns recipe ordinals after a canonical content sort, so bindings survive recipe-map reload order.
+    public static final int FINGERPRINT_VERSION = 3;
     public static final int NORMALIZATION_VERSION = 1;
     private static final int SERIALIZATION_VERSION = 2;
 

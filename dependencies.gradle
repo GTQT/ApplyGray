@@ -85,6 +85,7 @@ dependencies {
     }
     modCompileOnly 'mezz:jei:4.31.2'
     modRuntimeOnly 'mezz:jei:4.31.2'
+    modCompileOnly 'curse.maven:the-one-probe-245211:2667280'
     modRuntimeOnly 'curse.maven:the-one-probe-245211:2667280'
     modCompileOnly 'curse.maven:codechicken-lib-1-8-242818:2779848'
     modRuntimeOnly 'curse.maven:codechicken-lib-1-8-242818:2779848'

@@ -26,8 +26,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Resolves bindings against immutable RecipeMap snapshots. RecipeMap mutations must invalidate this cache before
- * new work is accepted; the RecipeMap mixin performs that invalidation for normal add/remove paths.
+ * Resolves bindings against immutable RecipeMap snapshots. RecipeMap mutations invalidate this cache before new
+ * work is accepted; already-buffered work remains valid only when its exact recipe fingerprint is still present.
+ * The RecipeMap mixin performs the invalidation for normal add/remove paths.
  */
 public final class RecipeBindingResolver {
 
@@ -102,9 +103,9 @@ public final class RecipeBindingResolver {
         }
 
         RecipeMapSnapshot snapshot = snapshot(recipeMap);
-        if (!binding.getRecipeMapContentVersion().equals(snapshot.getContentVersion())) {
-            return Resolution.rejected("RECIPE_MAP_CONTENT_CHANGED");
-        }
+        // The map-level content version is a cache epoch, not the identity of this request. A late registration of
+        // an unrelated recipe must not strand a complete buffered request. The fingerprint includes this map's id,
+        // registration index, and canonical recipe content, so the checks below still reject substitutions.
         List<Recipe> candidates = snapshot.getRecipes(binding.getRecipeFingerprint());
         if (candidates.isEmpty()) return Resolution.rejected("BINDING_RECIPE_NOT_FOUND");
         if (candidates.size() != 1) return Resolution.rejected("BINDING_FINGERPRINT_AMBIGUOUS");
@@ -220,6 +221,14 @@ public final class RecipeBindingResolver {
                     if (recipe != null && knownRecipes.add(recipe)) mutableRecipes.add(recipe);
                 }
             }
+            // RecipeMap#getRecipeList has a lookup-derived order. Sort by canonical content before assigning the
+            // ordinal embedded in a binding, otherwise a reload can strand persisted exact patterns.
+            String recipeMapId = recipeMap.getUnlocalizedName();
+            Map<Recipe, String> sortKeys = new IdentityHashMap<>();
+            for (Recipe recipe : mutableRecipes) {
+                sortKeys.put(recipe, RecipeFingerprint.contentFingerprint(recipeMapId, recipe));
+            }
+            mutableRecipes.sort(Comparator.comparing(sortKeys::get));
             List<Recipe> recipes = Collections.unmodifiableList(mutableRecipes);
             String contentVersion = RecipeFingerprint.contentVersion(recipeMap, recipes);
             Map<Recipe, Integer> indexes = new IdentityHashMap<>();

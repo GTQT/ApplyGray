@@ -242,17 +242,19 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
     }
 
     @Test
-    void directSameMaterialDustSmeltingTerminatesOnlyBaseAndHotIngotCycles() {
+    void directElementalDustSmeltingTerminatesOnlyBaseAndHotIngotCycles() {
         assertTrue(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingot"));
         assertTrue(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingotHot"));
         assertFalse(DynamicRecipePatternRegistry.isDirectIngotOrHotIngotPrefix("ingotDouble"));
 
         assertTrue(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
-                "ingotHot", true, false));
+                "ingotHot", true, true, false));
         assertFalse(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
-                "ingot", false, false));
+                "ingotHot", false, true, false));
         assertFalse(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
-                "ingot", true, true));
+                "ingot", true, false, false));
+        assertFalse(DynamicRecipePatternRegistry.isCanonicalSameMaterialDustToIngotTransition(
+                "ingot", true, true, true));
     }
 
     @Test

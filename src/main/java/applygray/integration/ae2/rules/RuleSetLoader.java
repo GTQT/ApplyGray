@@ -87,7 +87,7 @@ final class RuleSetLoader {
                 "maxInputAlternatives", "maxRouteDepth", "maxRouteExpansionsPerTarget",
                 "maxRouteExpansionsPerCalculation", "maxRouteCalculationMillis", "maxSccNodes", "maxSccEdges",
                 "maxStandaloneRouteExpansionsPerCalculation", "maxStandaloneRouteCalculationMillis",
-                "maxSccAnalysisMillis", "maxPersistedPatternsPerProvider", "onExhaustion",
+                "maxSccAnalysisMillis", "onExhaustion",
                 "cycleSafetyOnExhaustion"),
                 "planningBudget", file);
         int priority = optionalInt(budget, "priority", 0, file);
@@ -150,10 +150,6 @@ final class RuleSetLoader {
         if (budget.has("maxSccAnalysisMillis")) {
             target.maxSccAnalysisMillis(positiveLong(budget.get("maxSccAnalysisMillis"),
                     "maxSccAnalysisMillis", file), priority, source);
-        }
-        if (budget.has("maxPersistedPatternsPerProvider")) {
-            target.maxPersistedPatternsPerProvider(positiveInt(budget.get("maxPersistedPatternsPerProvider"),
-                    "maxPersistedPatternsPerProvider", file), priority, source);
         }
         if (budget.has("onExhaustion")) {
             try {

@@ -97,8 +97,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static gregtech.api.util.AE2PatternCompat.getFluidStack;
-import static gregtech.api.util.AE2PatternCompat.isFluidDrop;
 import static gregtech.api.util.AE2PatternCompat.toGenericStack;
 
 /**
@@ -261,27 +259,6 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         return true;
     }
 
-    /**
-     * 将旧的 InventoryCrafting 入口转换为按输入槽位保留的 AE 资源签名。
-     */
-    private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
-        return extractSignature(inventoryCrafting, null, null);
-    }
-
-    private BufferSignature extractSignature(net.minecraft.inventory.InventoryCrafting inventoryCrafting,
-                                             @Nullable String patternKey, @Nullable String recipeMapName) {
-        KeyCounter[] inputHolder = new KeyCounter[inventoryCrafting.getSizeInventory()];
-        for (int i = 0; i < inventoryCrafting.getSizeInventory(); i++) {
-            inputHolder[i] = new KeyCounter();
-            GenericStack stack = toGenericStack(inventoryCrafting.getStackInSlot(i));
-            if (stack != null && stack.amount() > 0) {
-                inputHolder[i].add(stack.what(), stack.amount());
-            }
-        }
-        return extractSignature(inputHolder, patternKey, recipeMapName, null, null,
-                NonConsumableTokenLayout.EMPTY);
-    }
-
     @Nullable
     private BufferSignature extractSignature(KeyCounter[] inputHolder, @Nullable String patternKey,
                                              @Nullable String recipeMapName, @Nullable ItemStack extraCircuit,
@@ -334,6 +311,58 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                 ItemStack.areItemStackTagsEqual(first, second);
     }
 
+    /**
+     * Formats the AE-side request and its isolated execution projection for a one-shot bound-buffer trace.
+     * Keeping this at the provider boundary distinguishes failed insertion from later recipe consumption.
+     */
+    private static String describeKeyCounters(KeyCounter[] inputHolder) {
+        if (inputHolder == null || inputHolder.length == 0) return "[]";
+
+        StringBuilder result = new StringBuilder("[");
+        for (int slot = 0; slot < inputHolder.length; slot++) {
+            if (slot > 0) result.append(", ");
+            result.append(slot).append('=');
+            KeyCounter counter = inputHolder[slot];
+            if (counter == null || counter.isEmpty()) {
+                result.append("<empty>");
+                continue;
+            }
+            boolean first = true;
+            for (var entry : counter) {
+                if (!first) result.append('+');
+                result.append(entry.getKey()).append('x').append(entry.getLongValue());
+                first = false;
+            }
+        }
+        return result.append(']').toString();
+    }
+
+    private static String describeBufferContents(PatternBuffer buffer) {
+        StringBuilder result = new StringBuilder("items=[");
+        for (int slot = 0; slot < buffer.itemHandler.getSlots(); slot++) {
+            if (slot > 0) result.append(", ");
+            result.append(slot).append('=').append(describeItemStack(buffer.itemHandler.getStackInSlot(slot)));
+        }
+        result.append("] circuits=[");
+        for (int slot = 0; slot < buffer.circuitSlot.getSlots(); slot++) {
+            if (slot > 0) result.append(", ");
+            result.append(slot).append('=').append(describeItemStack(buffer.circuitSlot.getStackInSlot(slot)));
+        }
+        result.append("] fluids=[");
+        for (int tank = 0; tank < buffer.fluidHandler.getTanks(); tank++) {
+            if (tank > 0) result.append(", ");
+            FluidStack fluid = buffer.fluidHandler.getTankAt(tank).getFluid();
+            result.append(tank).append('=').append(fluid == null ? "<empty>" :
+                    fluid.getFluid().getName() + 'x' + fluid.amount);
+        }
+        return result.append(']').toString();
+    }
+
+    private static String describeItemStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return "<empty>";
+        return String.valueOf(stack.getItem().getRegistryName()) + '@' + stack.getMetadata() + 'x' + stack.getCount();
+    }
+
     private static void addFluidRequirement(List<FluidStack> fluidTypes, FluidStack fluid) {
         if (fluid == null || fluid.amount <= 0) return;
         for (FluidStack existing : fluidTypes) {
@@ -343,11 +372,6 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             }
         }
         fluidTypes.add(fluid.copy());
-    }
-
-    private static int multiplyClamped(int amount, int multiplier) {
-        if (amount <= 0 || multiplier <= 0) return 0;
-        return clampToInt((long) amount * multiplier);
     }
 
     private static int clampToInt(long value) {
@@ -381,7 +405,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     /**
      * 将 AE 推送的材料分配到缓冲区中。
      * 相同物品组合进入同一个缓冲区并累积数量，不同物品组合分配新缓冲区。
-     * 实现类似 PH-Mod pushPatternMulti 的累积效果。
+     * 相同签名的连续推送会累积到同一个缓冲区。
      */
     public boolean pushToBuffer(net.minecraft.inventory.InventoryCrafting inventoryCrafting) {
         return pushToBuffer(inventoryCrafting, null, null);
@@ -415,9 +439,22 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                                    @Nullable String recipeMapName, @Nullable ItemStack extraCircuit,
                                    @Nullable RecipeBinding recipeBinding,
                                    NonConsumableTokenLayout tokenLayout) {
+        return pushToBuffer(inputHolder, patternKey, recipeMapName, extraCircuit, recipeBinding, tokenLayout, 1);
+    }
+
+    protected boolean pushToBuffer(KeyCounter[] inputHolder, @Nullable String patternKey,
+                                   @Nullable String recipeMapName, @Nullable ItemStack extraCircuit,
+                                   @Nullable RecipeBinding recipeBinding,
+                                   NonConsumableTokenLayout tokenLayout, int batchMultiplier) {
+        if (batchMultiplier <= 0) {
+            logPatternPushRejected("batch multiplier must be positive");
+            return false;
+        }
         NonConsumableTokenLayout effectiveTokenLayout = tokenLayout == null ?
                 NonConsumableTokenLayout.EMPTY : tokenLayout;
-        List<ItemStack> decodedTokens = recipeBinding == null ? null : effectiveTokenLayout.decode(inputHolder);
+        // AE2 has already scaled consumable counters. The multiplier only changes how NC token counters are decoded.
+        List<ItemStack> decodedTokens = recipeBinding == null ? null :
+                effectiveTokenLayout.decode(inputHolder, batchMultiplier);
         if (recipeBinding != null && decodedTokens == null) {
             logPatternPushRejected("non-consumable circuit token layout does not match the bound recipe");
             return false;
@@ -459,17 +496,21 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             logPatternPushRejected("selected pattern buffer cannot accept all inputs");
             return false;
         }
+        // The AE CPU has already extracted its inputs. Retain an exact rollback point for an existing buffer so a
+        // handler that accepts less than its simulation cannot turn a rejected push into lost materials.
+        NBTTagCompound previousBufferState = allocated ? null : buffer.writeToNBT();
         if (decodedTokens != null) {
             if (!buffer.setBoundCircuits(decodedTokens)) {
-                if (allocated) {
-                    buffer.clear();
-                    unregisterBufferFromSignatureMap(buffer, signature);
-                }
+                rollbackFailedPatternPush(buffer, allocated, signature, previousBufferState);
                 logPatternPushRejected("bound non-consumable circuit tokens do not fit the virtual circuit slots");
                 return false;
             }
         }
-        insertKeyCounters(buffer, inputHolder);
+        if (!insertKeyCounters(buffer, inputHolder)) {
+            rollbackFailedPatternPush(buffer, allocated, signature, previousBufferState);
+            logPatternPushRejected("actual pattern buffer write was incomplete");
+            return false;
+        }
         if (decodedTokens == null) {
             applyCircuitMetadata(buffer, inputHolder, extraCircuit);
         }
@@ -481,27 +522,19 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         long worldTick = getWorld() != null ? getWorld().getTotalWorldTime() : 0;
         int signatureHash = signature.hashCode();
         buffer.recordRecipeMatch(worldTick, signatureHash);
+        buffer.logFirstAcceptedBoundPush(bufferPool.indexOf(buffer), inputHolder, batchMultiplier);
 
         return true;
     }
 
-    // ==================== 批量推送（移植自 PH-Mod IMultiplePatternPushable）====================
-
-    /**
-     * 批量推送多份相同样板的材料到缓冲区中。
-     * 由 AE2 的 CraftingCPUCluster.executeBatchPush() 调用。
-     * 性能优化：只做一次签名提取和缓冲区匹配，然后按倍数直接插入。
-     * 移植自 PH-Mod 的 classifyForce() 批量插入模式。
-     *
-     * @param patternDetails 合成样板详情
-     * @param table          单份材料的 InventoryCrafting
-     * @param maxTodo        最大允许推送的份数
-     * @return [0] = 实际成功推送的份数
-     */
-    public int[] pushPatternMulti(IPatternDetails patternDetails,
-                                   net.minecraft.inventory.InventoryCrafting table,
-                                   int maxTodo) {
-        return pushPatternMultiToBuffer(table, maxTodo, null, null);
+    private void rollbackFailedPatternPush(PatternBuffer buffer, boolean allocated, BufferSignature signature,
+                                           @Nullable NBTTagCompound previousBufferState) {
+        if (allocated) {
+            buffer.clear();
+            unregisterBufferFromSignatureMap(buffer, signature);
+        } else if (previousBufferState != null) {
+            buffer.readFromNBT(previousBufferState);
+        }
     }
 
     private boolean canInsertKeyCounters(PatternBuffer buffer, KeyCounter[] inputHolder) {
@@ -539,7 +572,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         return true;
     }
 
-    private void insertKeyCounters(PatternBuffer buffer, KeyCounter[] inputHolder) {
+    private boolean insertKeyCounters(PatternBuffer buffer, KeyCounter[] inputHolder) {
         KeyCounter total = new KeyCounter();
         for (KeyCounter holder : inputHolder) {
             total.addAll(holder);
@@ -550,12 +583,17 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             if (amount <= 0) {
                 continue;
             }
+            if (amount > Integer.MAX_VALUE) {
+                return false;
+            }
             if (key instanceof AEFluidKey fluidKey) {
-                buffer.getFluidHandler().fill(fluidKey.toStack((int) amount), true);
+                if (buffer.getFluidHandler().fill(fluidKey.toStack((int) amount), true) != amount) {
+                    return false;
+                }
                 continue;
             }
             if (!(key instanceof AEItemKey itemKey)) {
-                continue;
+                return false;
             }
             ItemStack stack = itemKey.toStack((int) amount);
             if (ProgrammableCircuit.getInstanceFor(stack) != null) {
@@ -564,7 +602,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             for (int slot = 0; slot < buffer.getItemHandler().getSlots() && !stack.isEmpty(); slot++) {
                 stack = buffer.getItemHandler().insertItem(slot, stack, false);
             }
+            if (!stack.isEmpty()) {
+                return false;
+            }
         }
+        return true;
     }
 
     private void applyCircuitMetadata(PatternBuffer buffer, KeyCounter[] inputHolder, @Nullable ItemStack extraCircuit) {
@@ -587,81 +629,6 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         if (extraCircuit != null && !extraCircuit.isEmpty()) {
             ProgrammableCircuit.getWrappedItem(extraCircuit).ifPresent(buffer::setCustomCircuit);
         }
-    }
-
-    protected int[] pushPatternMultiToBuffer(net.minecraft.inventory.InventoryCrafting table, int maxTodo,
-                                              @Nullable String patternKey, @Nullable String recipeMapName) {
-        // 第一步：一次性提取签名（避免重复创建对象）
-        BufferSignature signature = extractSignature(table, patternKey, recipeMapName);
-        if (signature == null) {
-            logPatternPushRejected("batch input signature is invalid");
-            return new int[]{0};
-        }
-
-        // 第二步：一次性查找或分配缓冲区
-        PatternBuffer buffer = findOrAllocateBuffer(signature);
-        if (buffer == null) return new int[]{0};
-
-        // 第三步：通过 space() 计算缓冲区剩余容量，确定实际推送份数
-        int effectiveMax;
-        if (buffer.isEmpty()) {
-            // 空缓冲区：设置签名后再计算
-            buffer.setSignature(signature);
-            registerBufferInSignatureMap(buffer);
-            effectiveMax = Math.min(maxTodo, buffer.space());
-        } else {
-            effectiveMax = Math.min(maxTodo, buffer.space());
-        }
-        if (effectiveMax <= 0) {
-            return new int[]{0};
-        }
-
-        // 第四步：按倍数直接插入物品和流体（不重复提取签名和查找缓冲区）
-        for (int s = 0; s < table.getSizeInventory(); s++) {
-            ItemStack ingredient = table.getStackInSlot(s);
-            if (ingredient.isEmpty()) continue;
-
-            // 检测 FakeFluid — 流体编码为假物品
-            if (isFluidDrop(ingredient)) {
-                FluidStack fluid = getFluidStack(ingredient);
-                if (fluid != null) {
-                    FluidStack toFill = fluid.copy();
-                    toFill.amount = multiplyClamped(fluid.amount, effectiveMax);
-                    buffer.getFluidHandler().fill(toFill, true);
-                }
-                continue;
-            }
-
-            // 处理可编程电路 — 解包并设置到缓冲区的虚拟电路槽
-            if (ProgrammableCircuit.getInstanceFor(ingredient) != null) {
-                if (ProgrammableCircuit.hasWrappedItem(ingredient)) {
-                    // 有包裹物品：解包并设置为自定义电路
-                    ProgrammableCircuit.getWrappedItem(ingredient).ifPresent(buffer::setCustomCircuit);
-                } else {
-                    // 空白可编程电路：清空缓冲区电路槽
-                    buffer.clearCircuit();
-                }
-                continue;
-            }
-
-            // 普通物品 — 按倍数插入
-            ItemStack toInsert = ingredient.copy();
-            toInsert.setCount(multiplyClamped(ingredient.getCount(), effectiveMax));
-            for (int slot = 0; slot < buffer.getItemHandler().getSlots(); slot++) {
-                toInsert = buffer.getItemHandler().insertItem(slot, toInsert, false);
-                if (toInsert.isEmpty()) break;
-            }
-        }
-
-        // 标记缓冲区已绑定配方
-        buffer.setRecipeLocked(true);
-
-        // 记录配方匹配事件
-        long worldTick = getWorld() != null ? getWorld().getTotalWorldTime() : 0;
-        int signatureHash = signature.hashCode();
-        buffer.recordRecipeMatch(worldTick, signatureHash);
-
-        return new int[]{effectiveMax};
     }
 
     // ==================== update 主循环 ====================
@@ -1778,6 +1745,10 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         /** 配方身份标识 ID，用于缓冲区排序和配方缓存优化 */
         private int recipeId;
 
+        // Bound-buffer diagnostics are deliberately one-shot per signature assignment.
+        private boolean acceptedBoundPushLogged;
+        private boolean materialExtractionLogged;
+
         public PatternBuffer(MetaTileEntity owner) {
             this.owner = owner;
             this.isolatedHandler = new IsolatedPatternBufferHandler(this);
@@ -1790,8 +1761,27 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
                 @Override
                 public boolean isItemValid(int slot, @NotNull ItemStack stack) {
-                    ItemStack expected = getExpectedItem(slot);
-                    return expected.isEmpty() || sameItemType(expected, stack);
+                    return PatternBufferItemSlotValidator.accepts(getExpectedItem(slot), stack);
+                }
+
+                @Override
+                public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) {
+                    // Forge 1.12's ItemStackHandler does not consult isItemValid during insertion.
+                    if (!isItemValid(slot, stack)) {
+                        return stack;
+                    }
+                    return super.insertItem(slot, stack, simulate);
+                }
+
+                @Override
+                public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) {
+                    ItemStack before = getStackInSlot(slot);
+                    ItemStack extracted = super.extractItem(slot, amount, simulate);
+                    if (!simulate && !extracted.isEmpty()) {
+                        PatternBuffer.this.logFirstMaterialExtraction(slot, before, extracted,
+                                getStackInSlot(slot));
+                    }
+                    return extracted;
                 }
             };
 
@@ -1978,10 +1968,34 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         public void setSignature(BufferSignature signature) {
             this.signature = signature;
+            this.acceptedBoundPushLogged = false;
+            this.materialExtractionLogged = false;
             int itemSlots = signature == null ? 0 : signature.getItemTypes().size();
             int fluidSlots = signature == null ? 0 : signature.getFluidTypes().size();
             int circuitSlots = signature == null ? 0 : getCircuitSlotCount(signature);
             rebuildHandlers(itemSlots, fluidSlots, circuitSlots);
+        }
+
+        private void logFirstAcceptedBoundPush(int bufferIndex, KeyCounter[] inputHolder, int batchMultiplier) {
+            RecipeBinding binding = getRecipeBinding();
+            if (binding == null || acceptedBoundPushLogged) return;
+
+            acceptedBoundPushLogged = true;
+            ApplyGrayMod.LOGGER.info("Bound pattern buffer accepted AE push provider={} buffer={} binding={} " +
+                            "batchMultiplier={} requested={} stored={}",
+                    owner.getPos(), bufferIndex + 1, binding.describe(), batchMultiplier,
+                    describeKeyCounters(inputHolder), describeBufferContents(this));
+        }
+
+        private void logFirstMaterialExtraction(int slot, ItemStack before, ItemStack extracted, ItemStack after) {
+            RecipeBinding binding = getRecipeBinding();
+            if (binding == null || materialExtractionLogged) return;
+
+            materialExtractionLogged = true;
+            ApplyGrayMod.LOGGER.info("Bound pattern buffer material extracted provider={} binding={} slot={} " +
+                            "before={} extracted={} after={} remaining={}",
+                    owner.getPos(), binding.describe(), slot, describeItemStack(before), describeItemStack(extracted),
+                    describeItemStack(after), describeBufferContents(this));
         }
 
         public boolean isRecipeLocked() {
@@ -2274,11 +2288,12 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             if (hasSignature && tag.hasKey("Fluids", Constants.NBT.TAG_LIST)) {
                 NBTTagList fluidList = tag.getTagList("Fluids", Constants.NBT.TAG_COMPOUND);
                 for (int i = 0; i < Math.min(fluidList.tagCount(), fluidHandler.getTanks()); i++) {
-                    IFluidTank tank = fluidHandler.getTankAt(i);
                     NBTTagCompound fluidTag = fluidList.getCompoundTagAt(i);
                     FluidStack fluid = FluidStack.loadFluidStackFromNBT(fluidTag);
                     if (fluid != null) {
-                        tank.fill(fluid, true);
+                        // This is persisted state, not a new insertion. Restoring through fill() re-applies the
+                        // signature-derived filter and can silently reject valid legacy buffer contents.
+                        restorePersistedFluid(fluidHandler, i, fluidTag);
                     }
                 }
             }
@@ -2300,6 +2315,10 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             // 反序列化配方跟踪字段
             this.lastMatchTick = tag.getLong("lastMatchTick");
             this.recipeId = tag.getInteger("recipeId");
+        }
+
+        static void restorePersistedFluid(FluidTankList fluidHandler, int tankIndex, NBTTagCompound fluidTag) {
+            fluidHandler.getTankAt(tankIndex).deserializeNBT(fluidTag);
         }
 
         private void readItemsFromNBT(NBTTagCompound tagCompound) {

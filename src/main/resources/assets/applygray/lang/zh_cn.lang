@@ -73,3 +73,7 @@ applygray.gui.pattern_access.recipe_map_provider=配方表样板总成
 applygray.gui.pattern_access.location=位置: %1$d, %2$d, %3$d (维度 %4$d)
 applygray.gui.pattern_access.clear_dynamic_patterns=清理该总成的动态样板
 applygray.gui.pattern_access.cleared_dynamic_patterns=已清理 %1$d 个动态样板
+applygray.gui.recipe_map_pattern_provider.refund_buffered_materials=将所有缓冲材料退还至AE网络
+applygray.top.recipe_map_pattern_provider.contents=缓冲内容
+applygray.top.recipe_map_pattern_provider.empty=没有缓冲中的输入
+applygray.top.recipe_map_pattern_provider.more=个缓冲条目未显示

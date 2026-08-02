@@ -5,6 +5,7 @@ import applygray.common.ApplyGrayMetaTileEntities;
 import applygray.common.ApplyGrayRecipes;
 import applygray.integration.ApplyGrayIntegrationBootstrap;
 import applygray.integration.ae2.rules.RecipePatternRules;
+import applygray.integration.theoneprobe.TheOneProbeIntegration;
 
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
@@ -33,6 +34,7 @@ public class ApplyGrayMod {
     public void preInit(FMLPreInitializationEvent event) {
         LOGGER.info("Loading Applied Energistics 2 Supergiant integration for GregTech");
         RecipePatternRules.initialize(event.getModConfigurationDirectory());
+        TheOneProbeIntegration.enqueueIMC();
         ApplyGrayIntegrationBootstrap.init();
         ApplyGrayMetaTileEntities.init();
     }

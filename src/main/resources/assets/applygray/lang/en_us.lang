@@ -73,3 +73,7 @@ applygray.gui.pattern_access.recipe_map_provider=Recipe Map Pattern Provider
 applygray.gui.pattern_access.location=Location: %1$d, %2$d, %3$d (Dimension %4$d)
 applygray.gui.pattern_access.clear_dynamic_patterns=Clear this provider's dynamic patterns
 applygray.gui.pattern_access.cleared_dynamic_patterns=Cleared %1$d dynamic pattern(s)
+applygray.gui.recipe_map_pattern_provider.refund_buffered_materials=Return all buffered materials to the AE network
+applygray.top.recipe_map_pattern_provider.contents=Buffered contents
+applygray.top.recipe_map_pattern_provider.empty=No buffered inputs
+applygray.top.recipe_map_pattern_provider.more=additional buffered stack(s) not shown

@@ -78,15 +78,15 @@ class RuleSetOutputCapacityTest {
         }
     }
 
-    private static MachineCapabilityProfile createMachine(int availableItemOutputs, int availableFluidOutputs) {
+    private static MachineCapabilityProfile createMachine(int itemOutputSlots, int fluidOutputTanks) {
         try {
             Constructor<MachineCapabilityProfile> constructor = MachineCapabilityProfile.class.getDeclaredConstructor(
                     String.class, String.class, boolean.class, List.class, long.class, int.class, int.class,
-                    int.class, int.class, int.class, int.class, int.class, Set.class, Set.class, Map.class);
+                    int.class, int.class, int.class, Set.class, Set.class, Map.class);
             constructor.setAccessible(true);
             return constructor.newInstance("test-provider", "test-controller", true, List.of("test_output_map"),
-                    0L, 0, availableItemOutputs, availableFluidOutputs, availableItemOutputs,
-                    availableFluidOutputs, 0, Integer.MIN_VALUE, Set.of(), Set.of("structure"), Map.of());
+                    0L, 0, itemOutputSlots, fluidOutputTanks, 0, Integer.MIN_VALUE,
+                    Set.of(), Set.of("structure"), Map.of());
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError("Could not construct machine capability test fixture", exception);
         }

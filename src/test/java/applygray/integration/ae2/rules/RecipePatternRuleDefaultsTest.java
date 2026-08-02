@@ -42,7 +42,10 @@ class RecipePatternRuleDefaultsTest {
         Files.writeString(defaults, """
                 {
                   "version": 1,
-                  "planningBudget": { "maxDynamicCandidatesForCost": 2 },
+                  "planningBudget": {
+                    "maxDynamicCandidatesForCost": 2,
+                    "maxPersistedPatternsPerProvider": 64
+                  },
                   "rules": [
                     { "id": "core.elemental-compound-synthesis", "effects": [] }
                   ]
@@ -66,6 +69,7 @@ class RecipePatternRuleDefaultsTest {
         assertTrue(migrated.contains("cycleSafetyOnExhaustion"));
         assertTrue(migrated.contains("maxStandaloneRouteExpansionsPerCalculation"));
         assertTrue(migrated.contains("maxStandaloneRouteCalculationMillis"));
+        assertFalse(migrated.contains("maxPersistedPatternsPerProvider"));
         assertTrue(migrated.contains("core.polymer-dust-fallback"));
         assertTrue(migrated.contains("core.chemical-product-ingot-fallback"));
         assertTrue(migrated.contains("core.primary-compound-synthesis"));

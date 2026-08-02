@@ -213,6 +213,7 @@ public final class RecipePatternRules {
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxStandaloneRouteExpansionsPerCalculation",
                 upgradedBudgetFields);
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxStandaloneRouteCalculationMillis", upgradedBudgetFields);
+        boolean removedPersistedPatternLimit = budget.remove("maxPersistedPatternsPerProvider") != null;
 
         JsonElement bundledCycleSafetyPolicy = bundledBudget.get("cycleSafetyOnExhaustion");
         if (bundledCycleSafetyPolicy == null) {
@@ -224,15 +225,16 @@ public final class RecipePatternRules {
         }
 
         if (removedRuleIds.isEmpty() && addedRuleIds.isEmpty() && upgradedBudgetFields.isEmpty() &&
-                !addedCycleSafetyPolicy) return;
+                !addedCycleSafetyPolicy && !removedPersistedPatternLimit) return;
         try (Writer writer = Files.newBufferedWriter(defaults, StandardCharsets.UTF_8,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             RULE_FILE_GSON.toJson(document, writer);
             writer.write(System.lineSeparator());
         }
         ApplyGrayMod.LOGGER.info("Migrated RecipeMap pattern defaults at {}: removedRules={}, addedRules={}, " +
-                        "upgradedBudgetFields={}, cycleSafetyOnExhaustion={}.",
-                defaults, removedRuleIds, addedRuleIds, upgradedBudgetFields, bundledCycleSafetyPolicy);
+                        "upgradedBudgetFields={}, removedPersistedPatternLimit={}, cycleSafetyOnExhaustion={}.",
+                defaults, removedRuleIds, addedRuleIds, upgradedBudgetFields, removedPersistedPatternLimit,
+                bundledCycleSafetyPolicy);
     }
 
     private static JsonObject readBundledDefaultRules() throws IOException {
