@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +40,8 @@ public final class RecipeBindingResolver {
      */
     private static final ConcurrentMap<RecipeMap<?>, List<Recipe>> RUNTIME_FURNACE_FALLBACKS =
             new ConcurrentHashMap<>();
+    /** Maps whose fallback list came from an explicit full FurnaceRecipes capture rather than saved-pattern recovery. */
+    private static final Set<RecipeMap<?>> FULL_RUNTIME_FURNACE_FALLBACK_MAPS = ConcurrentHashMap.newKeySet();
     private static final Set<RecipeMap<?>> DIRTY_RUNTIME_FURNACE_MAPS = ConcurrentHashMap.newKeySet();
     private static final Set<RecipeMap<?>> FURNACE_CAPTURE_FAILURES_LOGGED = ConcurrentHashMap.newKeySet();
     private RecipeBindingResolver() {
@@ -76,6 +79,35 @@ public final class RecipeBindingResolver {
     }
 
     /**
+     * Restores only Vanilla furnace fallbacks represented by saved patterns. This never enumerates
+     * {@link FurnaceRecipes#getSmeltingList()} and is therefore suitable for the delayed persisted-pattern path.
+     * Full furnace indexing remains exclusively in {@link #captureMainThreadRuntimeRecipes(RecipeMap[])}.
+     *
+     * @return number of distinct fallback recipes reconstructed from saved patterns
+     */
+    public static int recoverPersistedFurnaceFallbacks(RecipeMap<?>[] recipeMaps,
+                                                       Collection<PersistedFurnaceFallback> fallbackRequests) {
+        if (recipeMaps == null || recipeMaps.length == 0 || fallbackRequests == null ||
+                fallbackRequests.isEmpty()) {
+            return 0;
+        }
+
+        int recovered = 0;
+        for (RecipeMap<?> recipeMap : recipeMaps) {
+            if (!(recipeMap instanceof RecipeMapFurnace)) continue;
+
+            List<PersistedFurnaceFallback> requestsForMap = new ArrayList<>();
+            for (PersistedFurnaceFallback request : fallbackRequests) {
+                if (request != null && request.isFor(recipeMap)) requestsForMap.add(request);
+            }
+            if (!requestsForMap.isEmpty()) {
+                recovered += recoverPersistedFurnaceFallbacks(recipeMap, requestsForMap);
+            }
+        }
+        return recovered;
+    }
+
+    /**
      * Must be called when Vanilla smelting registrations change after providers have already begun planning.
      * Existing bindings become unavailable until the owning provider captures a replacement main-thread snapshot.
      */
@@ -85,6 +117,7 @@ public final class RecipeBindingResolver {
             if (!(recipeMap instanceof RecipeMapFurnace)) continue;
             DIRTY_RUNTIME_FURNACE_MAPS.add(recipeMap);
             RUNTIME_FURNACE_FALLBACKS.remove(recipeMap);
+            FULL_RUNTIME_FURNACE_FALLBACK_MAPS.remove(recipeMap);
             SNAPSHOTS.remove(recipeMap);
             invalidated.add(recipeMap);
         }
@@ -103,7 +136,7 @@ public final class RecipeBindingResolver {
 
         RecipeMapSnapshot snapshot = snapshot(recipeMap);
         // The map-level content version is a cache epoch, not the identity of this request. A late registration of
-        // an unrelated recipe must not strand a complete buffered request. Version 4 fingerprints the canonical
+        // an unrelated recipe must not strand a complete buffered request. Version 5 fingerprints the canonical
         // recipe content directly, while an ambiguous content fingerprint remains unsafe to execute.
         List<Recipe> candidates = snapshot.getRecipes(binding.getRecipeFingerprint());
         if (candidates.isEmpty()) return Resolution.rejected("BINDING_RECIPE_NOT_FOUND");
@@ -124,8 +157,10 @@ public final class RecipeBindingResolver {
 
     /** Builds fallback recipes through RecipeMapFurnace itself, preserving its static-recipe-first lookup semantics. */
     private static boolean captureRuntimeFurnaceFallbacks(RecipeMap<?> recipeMap) {
-        boolean hasCapturedFallbacks = RUNTIME_FURNACE_FALLBACKS.containsKey(recipeMap);
-        if (hasCapturedFallbacks && !DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap)) return false;
+        boolean requiresReplacement = DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap);
+        boolean hasFullCapture = FULL_RUNTIME_FURNACE_FALLBACK_MAPS.contains(recipeMap);
+        if (hasFullCapture && !requiresReplacement) return false;
+        if (requiresReplacement) FULL_RUNTIME_FURNACE_FALLBACK_MAPS.remove(recipeMap);
 
         try {
             Set<Recipe> registeredRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -154,6 +189,7 @@ public final class RecipeBindingResolver {
             RecipeMapSnapshot refreshed = RecipeMapSnapshot.create(recipeMap, immutableFallbacks);
             RecipeMapSnapshot previous = SNAPSHOTS.put(recipeMap, refreshed);
             RUNTIME_FURNACE_FALLBACKS.put(recipeMap, immutableFallbacks);
+            FULL_RUNTIME_FURNACE_FALLBACK_MAPS.add(recipeMap);
             DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap);
             FURNACE_CAPTURE_FAILURES_LOGGED.remove(recipeMap);
 
@@ -165,6 +201,7 @@ public final class RecipeBindingResolver {
             }
             return changed;
         } catch (RuntimeException exception) {
+            FULL_RUNTIME_FURNACE_FALLBACK_MAPS.remove(recipeMap);
             DIRTY_RUNTIME_FURNACE_MAPS.add(recipeMap);
             if (FURNACE_CAPTURE_FAILURES_LOGGED.add(recipeMap)) {
                 ApplyGrayMod.LOGGER.warn("Could not capture Vanilla furnace fallback recipes for RecipeMap {}; " +
@@ -175,9 +212,88 @@ public final class RecipeBindingResolver {
         }
     }
 
+    /** Rebuilds just the fallback recipes that the persisted bindings can prove they need. */
+    private static int recoverPersistedFurnaceFallbacks(RecipeMap<?> recipeMap,
+                                                        Collection<PersistedFurnaceFallback> requests) {
+        synchronized (recipeMap) {
+            boolean resetExistingFallbacks = DIRTY_RUNTIME_FURNACE_MAPS.remove(recipeMap);
+            List<Recipe> existing = resetExistingFallbacks ? Collections.emptyList() :
+                    RUNTIME_FURNACE_FALLBACKS.get(recipeMap);
+            List<Recipe> fallbacks = new ArrayList<>(existing == null ? Collections.emptyList() : existing);
+            Set<String> fallbackFingerprints = new HashSet<>();
+            String recipeMapId = recipeMap.getUnlocalizedName();
+            for (Recipe recipe : fallbacks) {
+                fallbackFingerprints.add(RecipeFingerprint.contentFingerprint(recipeMapId, recipe));
+            }
+
+            Set<Recipe> registeredRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
+            registeredRecipes.addAll(recipeMap.getRecipeList());
+            int recovered = 0;
+            for (PersistedFurnaceFallback request : requests) {
+                if (!request.hasCurrentBindingFor(recipeMap)) continue;
+
+                ItemStack input = request.createInputStack();
+                if (input.isEmpty()) continue;
+                Recipe resolved = recipeMap.findRecipe(Long.MAX_VALUE, Collections.singletonList(input),
+                        Collections.emptyList(), false);
+                // A static GT recipe wins at execution time and cannot stand in for a saved Vanilla fallback binding.
+                if (resolved == null || registeredRecipes.contains(resolved)) continue;
+
+                String fingerprint = RecipeFingerprint.contentFingerprint(recipeMapId, resolved);
+                if (!request.binding.getRecipeFingerprint().equals(fingerprint) ||
+                        !fallbackFingerprints.add(fingerprint)) {
+                    continue;
+                }
+                fallbacks.add(resolved);
+                recovered++;
+            }
+
+            if (resetExistingFallbacks || recovered > 0) {
+                List<Recipe> immutableFallbacks = Collections.unmodifiableList(new ArrayList<>(fallbacks));
+                RecipeMapSnapshot refreshed = RecipeMapSnapshot.create(recipeMap, immutableFallbacks);
+                RUNTIME_FURNACE_FALLBACKS.put(recipeMap, immutableFallbacks);
+                FULL_RUNTIME_FURNACE_FALLBACK_MAPS.remove(recipeMap);
+                SNAPSHOTS.put(recipeMap, refreshed);
+            }
+            if (recovered > 0) {
+                ApplyGrayMod.LOGGER.info("Recovered {} persisted Vanilla furnace fallback recipe(s) for RecipeMap {}; " +
+                                "no global furnace scan was performed",
+                        recovered, recipeMapId);
+            }
+            return recovered;
+        }
+    }
+
     private static String describeStack(ItemStack stack) {
         return stack == null || stack.isEmpty() ? "" :
                 RecipeFingerprint.canonicalNbt(stack.writeToNBT(new NBTTagCompound()));
+    }
+
+    /** One exact furnace lookup encoded by a persisted dynamic pattern. */
+    public static final class PersistedFurnaceFallback {
+
+        private final RecipeBinding binding;
+        private final ItemStack input;
+
+        public PersistedFurnaceFallback(@Nullable RecipeBinding binding, @Nullable ItemStack input) {
+            this.binding = binding;
+            ItemStack copied = input == null ? ItemStack.EMPTY : input.copy();
+            if (!copied.isEmpty()) copied.setCount(1);
+            this.input = copied;
+        }
+
+        private boolean isFor(RecipeMap<?> recipeMap) {
+            return binding != null && recipeMap != null && binding.isForRecipeMap(recipeMap.getUnlocalizedName());
+        }
+
+        private boolean hasCurrentBindingFor(RecipeMap<?> recipeMap) {
+            return isFor(recipeMap) && binding.getRecipeFingerprintVersion() == RecipeBinding.FINGERPRINT_VERSION &&
+                    binding.getNormalizationVersion() == RecipeBinding.NORMALIZATION_VERSION;
+        }
+
+        private ItemStack createInputStack() {
+            return input.copy();
+        }
     }
 
     private static boolean producesBoundTarget(NormalizedRecipe recipe, RecipeBinding binding) {

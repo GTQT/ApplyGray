@@ -5,6 +5,7 @@ import applygray.integration.ae2.DynamicRecipePatternRegistry;
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.stacks.AEKey;
 import ae2.api.stacks.KeyCounter;
+import ae2.crafting.CraftBranchFailure;
 import ae2.crafting.CraftingCalculation;
 import ae2.crafting.CraftingTreeNode;
 import ae2.crafting.CraftingTreeProcess;
@@ -101,5 +102,38 @@ public abstract class MixinCraftingTreeNodeLargePattern {
 
         DynamicRecipePatternRegistry.recordLargePatternMaximumCraftablePreviewBypass();
         cir.setReturnValue(requestedPatternRuns);
+    }
+
+    /** Times only the generic AE2 preview calls that remain after the one-run large-pattern bypass. */
+    @Redirect(method = "lambda$requestCraftingBranch$0", at = @At(value = "INVOKE",
+            target = "Lae2/crafting/CraftingTreeProcess;getMaximumCraftableTimes(Lae2/crafting/inv/CraftingSimulationState;J)J"))
+    private static long applygray$timeMaximumCraftablePreview(CraftingTreeProcess process,
+                                                                CraftingSimulationState inventory,
+                                                                long requestedPatternRuns)
+            throws InterruptedException {
+        long startedAtNanos = System.nanoTime();
+        try {
+            return ((AccessorCraftingTreeProcess) process).applygray$getMaximumCraftableTimes(inventory,
+                    requestedPatternRuns);
+        } finally {
+            DynamicRecipePatternRegistry.recordMaximumCraftablePreview(process.getDetails(),
+                    System.nanoTime() - startedAtNanos);
+        }
+    }
+
+    /** Attributes process-request work to the direct process rather than all of its recursive descendants. */
+    @Redirect(method = { "lambda$requestCraftingBranch$1", "lambda$requestMissingBranch$0",
+            "lambda$extractAvailableForCraftingInner$1" }, at = @At(value = "INVOKE",
+            target = "Lae2/crafting/CraftingTreeProcess;request(Lae2/crafting/inv/CraftingSimulationState;J)V"))
+    private static void applygray$timeCraftingProcessRequest(CraftingTreeProcess process,
+                                                               CraftingSimulationState inventory,
+                                                               long requestedPatternRuns)
+            throws CraftBranchFailure, InterruptedException {
+        boolean timing = DynamicRecipePatternRegistry.beginCraftingProcessRequest(process.getDetails());
+        try {
+            ((AccessorCraftingTreeProcess) process).applygray$request(inventory, requestedPatternRuns);
+        } finally {
+            if (timing) DynamicRecipePatternRegistry.finishCraftingProcessRequest();
+        }
     }
 }

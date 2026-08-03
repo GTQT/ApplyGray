@@ -15,8 +15,8 @@ import java.util.Objects;
  */
 public final class RecipeBinding {
 
-    // Version 4 binds the canonical recipe content directly, independent of RecipeMap insertion order.
-    public static final int FINGERPRINT_VERSION = 4;
+    // Version 5 binds canonical recipe content with restart-stable RecipeInput identities.
+    public static final int FINGERPRINT_VERSION = 5;
     public static final int NORMALIZATION_VERSION = 1;
     private static final int SERIALIZATION_VERSION = 2;
 

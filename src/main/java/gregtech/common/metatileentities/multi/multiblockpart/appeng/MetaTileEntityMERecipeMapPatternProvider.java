@@ -606,8 +606,8 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
      * Captures a worker-safe Provider definition on the server thread.
      *
      * <p>Runtime furnace fallbacks are expensive to enumerate, so only an explicit pattern-generation request may
-     * capture them. Persisted-pattern publication uses the saved details as-is and never performs runtime capture
-     * on an AE2 lifecycle callback.</p>
+     * fully capture them. Persisted-pattern publication restores at most the exact furnace inputs encoded by its
+     * saved details and never enumerates the Vanilla furnace table from an AE2 lifecycle callback.</p>
      */
     public DynamicRecipePatternRegistry.ProviderSnapshot createDynamicSnapshot(DynamicSnapshotPurpose purpose) {
         if (getWorld() == null || getWorld().isRemote || !isActive()) return null;
@@ -617,11 +617,15 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (recipeMaps.length == 0) return null;
 
         long snapshotStartedAt = System.nanoTime();
-        long runtimeCaptureNanos = 0;
+        long runtimeRecipePreparationNanos = 0;
         if (purpose == DynamicSnapshotPurpose.PATTERN_GENERATION) {
             long runtimeCaptureStartedAt = System.nanoTime();
             captureRuntimeRecipeMapsForPatternGeneration(recipeMaps);
-            runtimeCaptureNanos = System.nanoTime() - runtimeCaptureStartedAt;
+            runtimeRecipePreparationNanos = System.nanoTime() - runtimeCaptureStartedAt;
+        } else if (purpose == DynamicSnapshotPurpose.PERSISTED_PATTERN_PUBLICATION) {
+            long runtimeRecoveryStartedAt = System.nanoTime();
+            recoverPersistedRuntimeRecipeMaps(recipeMaps);
+            runtimeRecipePreparationNanos = System.nanoTime() - runtimeRecoveryStartedAt;
         }
         try {
             IGrid grid = getMainNode().getGrid();
@@ -633,7 +637,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             DynamicRecipePatternRegistry.ProviderSnapshot snapshot = new DynamicRecipePatternRegistry.ProviderSnapshot(
                     grid, getDynamicProviderId(),
                     dynamicEpoch.get(), recipeMaps, machineProfile, planningMode, pinnedRouteGroup, this);
-            logSlowSnapshot(purpose, recipeMaps.length, runtimeCaptureNanos, profileNanos,
+            logSlowSnapshot(purpose, recipeMaps.length, runtimeRecipePreparationNanos, profileNanos,
                     System.nanoTime() - snapshotStartedAt);
             return snapshot;
         } catch (IllegalStateException ignored) {
@@ -793,8 +797,43 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         }
     }
 
+    /** Restores only the saved electric-furnace routes required to publish this provider's persisted patterns. */
+    private void recoverPersistedRuntimeRecipeMaps(RecipeMap<?>[] recipeMaps) {
+        List<RecipeBindingResolver.PersistedFurnaceFallback> recoveries = new ArrayList<>();
+        for (DynamicRecipePatternDetails detail : getCachedDynamicPatterns()) {
+            RecipeBinding binding = detail.getRecipeBinding();
+            if (binding == null || !binding.isForRecipeMap(detail.getRecipeMapName()) ||
+                    !isExposedFurnaceRecipeMap(recipeMaps, detail.getRecipeMapName()) ||
+                    !detail.getTokenLayout().isEmpty()) {
+                continue;
+            }
+
+            IPatternDetails.IInput[] inputs = detail.getInputs();
+            if (inputs.length != 1) continue;
+            var options = inputs[0].possibleInputs();
+            if (options.length != 1 || !(options[0].what() instanceof AEItemKey itemKey)) continue;
+
+            ItemStack input = itemKey.toStack(1);
+            if (!input.isEmpty()) {
+                recoveries.add(new RecipeBindingResolver.PersistedFurnaceFallback(binding, input));
+            }
+        }
+        RecipeBindingResolver.recoverPersistedFurnaceFallbacks(recipeMaps, recoveries);
+    }
+
+    private static boolean isExposedFurnaceRecipeMap(RecipeMap<?>[] recipeMaps, String recipeMapName) {
+        if (recipeMaps == null || recipeMapName == null) return false;
+        for (RecipeMap<?> recipeMap : recipeMaps) {
+            if (recipeMap instanceof gregtech.api.recipes.machines.RecipeMapFurnace &&
+                    recipeMapName.equals(recipeMap.getUnlocalizedName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Reports only unusually slow server-thread snapshot work and rate-limits it per provider. */
-    private void logSlowSnapshot(DynamicSnapshotPurpose purpose, int recipeMapCount, long runtimeCaptureNanos,
+    private void logSlowSnapshot(DynamicSnapshotPurpose purpose, int recipeMapCount, long runtimeRecipePreparationNanos,
                                  long profileNanos, long totalNanos) {
         if (totalNanos < SLOW_SNAPSHOT_NANOS) return;
 
@@ -804,9 +843,9 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (!lastSlowSnapshotLogNanos.compareAndSet(previous, now)) return;
 
         ApplyGrayMod.LOGGER.warn("Slow RecipeMap provider snapshot provider={} at {} purpose={} maps={} cached={} " +
-                        "total={}ms runtimeCapture={}ms machineProfile={}ms",
+                        "total={}ms runtimeRecipePreparation={}ms machineProfile={}ms",
                 getDynamicProviderId(), getPos(), purpose, recipeMapCount, cachedPatterns.size(),
-                TimeUnit.NANOSECONDS.toMillis(totalNanos), TimeUnit.NANOSECONDS.toMillis(runtimeCaptureNanos),
+                TimeUnit.NANOSECONDS.toMillis(totalNanos), TimeUnit.NANOSECONDS.toMillis(runtimeRecipePreparationNanos),
                 TimeUnit.NANOSECONDS.toMillis(profileNanos));
     }
 

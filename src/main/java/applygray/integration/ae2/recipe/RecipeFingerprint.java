@@ -34,7 +34,7 @@ public final class RecipeFingerprint {
     }
 
     /**
-     * Version 4 bindings identify the canonical recipe content itself. RecipeMap entries can be added, removed, or
+     * Version 5 bindings identify the canonical recipe content itself. RecipeMap entries can be added, removed, or
      * loaded in a different order without changing that identity.
      */
     public static String fingerprint(String recipeMapId, Recipe recipe) {
@@ -96,7 +96,7 @@ public final class RecipeFingerprint {
     private static void appendInputs(StringBuilder target, String name, Collection<GTRecipeInput> inputs) {
         target.append(name).append('=');
         for (GTRecipeInput input : inputs) {
-            appendLengthDelimited(target, canonicalNbt(GTRecipeInput.writeToNBT(input)));
+            appendLengthDelimited(target, canonicalNbt(GTRecipeInput.writePersistentIdentityToNBT(input)));
         }
         target.append('\n');
     }

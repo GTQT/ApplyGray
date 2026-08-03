@@ -8,6 +8,7 @@
   "refmap": "mixins.applygray.refmap.json",
   "mixins": [
     "supergiant.AccessorCraftingCalculation",
+    "supergiant.AccessorCraftingTreeProcess",
     "supergiant.AccessorExecutingCraftingJob",
     "supergiant.MixinCraftingCPUCluster",
     "supergiant.MixinCraftingCalculationLargePatternMetrics",

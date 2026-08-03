@@ -1,6 +1,7 @@
 package applygray.mixins.supergiant;
 
 import applygray.integration.ae2.DynamicRecipeInputPreview;
+import applygray.integration.ae2.DynamicRecipePatternRegistry;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.config.Actionable;
@@ -39,9 +40,11 @@ public abstract class MixinCraftingCpuHelperExactDynamicInput {
         if (!DynamicRecipeInputPreview.beginExactDynamicInputExtraction(template, key)) {
             return targetInventory.extract(key, amount, action);
         }
+        long startedAtNanos = System.nanoTime();
         try {
             return targetInventory.extract(key, amount, action);
         } finally {
+            DynamicRecipePatternRegistry.recordExactDynamicInputExtraction(System.nanoTime() - startedAtNanos);
             DynamicRecipeInputPreview.endExactDynamicInputExtraction();
         }
     }
