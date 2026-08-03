@@ -41,7 +41,6 @@ public final class RecipeBindingResolver {
             new ConcurrentHashMap<>();
     private static final Set<RecipeMap<?>> DIRTY_RUNTIME_FURNACE_MAPS = ConcurrentHashMap.newKeySet();
     private static final Set<RecipeMap<?>> FURNACE_CAPTURE_FAILURES_LOGGED = ConcurrentHashMap.newKeySet();
-
     private RecipeBindingResolver() {
     }
 
@@ -104,8 +103,8 @@ public final class RecipeBindingResolver {
 
         RecipeMapSnapshot snapshot = snapshot(recipeMap);
         // The map-level content version is a cache epoch, not the identity of this request. A late registration of
-        // an unrelated recipe must not strand a complete buffered request. The fingerprint includes this map's id,
-        // registration index, and canonical recipe content, so the checks below still reject substitutions.
+        // an unrelated recipe must not strand a complete buffered request. Version 4 fingerprints the canonical
+        // recipe content directly, while an ambiguous content fingerprint remains unsafe to execute.
         List<Recipe> candidates = snapshot.getRecipes(binding.getRecipeFingerprint());
         if (candidates.isEmpty()) return Resolution.rejected("BINDING_RECIPE_NOT_FOUND");
         if (candidates.size() != 1) return Resolution.rejected("BINDING_FINGERPRINT_AMBIGUOUS");
@@ -200,7 +199,7 @@ public final class RecipeBindingResolver {
 
         private RecipeMapSnapshot(RecipeMap<?> recipeMap, List<Recipe> recipes,
                                   Map<Recipe, Integer> registrationIndexes,
-                                  Map<String, List<Recipe>> recipesByFingerprint, String contentVersion) {
+                                   Map<String, List<Recipe>> recipesByFingerprint, String contentVersion) {
             this.recipeMap = recipeMap;
             this.recipes = recipes;
             this.registrationIndexes = registrationIndexes;
@@ -221,8 +220,8 @@ public final class RecipeBindingResolver {
                     if (recipe != null && knownRecipes.add(recipe)) mutableRecipes.add(recipe);
                 }
             }
-            // RecipeMap#getRecipeList has a lookup-derived order. Sort by canonical content before assigning the
-            // ordinal embedded in a binding, otherwise a reload can strand persisted exact patterns.
+            // RecipeMap#getRecipeList has a lookup-derived order. Sort by canonical content so cache epochs remain
+            // deterministic across equivalent map reloads.
             String recipeMapId = recipeMap.getUnlocalizedName();
             Map<Recipe, String> sortKeys = new IdentityHashMap<>();
             for (Recipe recipe : mutableRecipes) {
@@ -236,7 +235,7 @@ public final class RecipeBindingResolver {
             for (int index = 0; index < recipes.size(); index++) {
                 Recipe recipe = recipes.get(index);
                 indexes.put(recipe, index);
-                String fingerprint = RecipeFingerprint.fingerprint(recipeMap.getUnlocalizedName(), recipe, index);
+                String fingerprint = RecipeFingerprint.fingerprint(recipeMap.getUnlocalizedName(), recipe);
                 byFingerprint.computeIfAbsent(fingerprint, ignored -> new ArrayList<>()).add(recipe);
             }
             Map<String, List<Recipe>> immutableByFingerprint = new LinkedHashMap<>();
@@ -249,10 +248,6 @@ public final class RecipeBindingResolver {
 
         public String getContentVersion() {
             return contentVersion;
-        }
-
-        public int getRecipeCount() {
-            return recipes.size();
         }
 
         public List<Recipe> getRecipes() {

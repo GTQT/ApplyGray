@@ -28,23 +28,23 @@ public final class RecipeFingerprint {
     private RecipeFingerprint() {
     }
 
-    /**
-     * A recipe's content identity without its position in a map. This is used to establish a deterministic ordering
-     * before an ordinal is added to distinguish otherwise identical recipes.
-     */
+    /** A recipe's complete, position-independent identity in one RecipeMap. */
     public static String contentFingerprint(String recipeMapId, Recipe recipe) {
         return sha256(recipeMapId + '\n' + describeRecipe(recipe));
     }
 
-    public static String fingerprint(String recipeMapId, Recipe recipe, int registrationIndex) {
-        return sha256(recipeMapId + '\n' + registrationIndex + '\n' + contentFingerprint(recipeMapId, recipe));
+    /**
+     * Version 4 bindings identify the canonical recipe content itself. RecipeMap entries can be added, removed, or
+     * loaded in a different order without changing that identity.
+     */
+    public static String fingerprint(String recipeMapId, Recipe recipe) {
+        return contentFingerprint(recipeMapId, recipe);
     }
 
     public static String contentVersion(RecipeMap<?> recipeMap, Collection<Recipe> recipes) {
         StringBuilder content = new StringBuilder(recipeMap.getUnlocalizedName()).append('\n');
-        int index = 0;
         for (Recipe recipe : recipes) {
-            content.append(fingerprint(recipeMap.getUnlocalizedName(), recipe, index++)).append('\n');
+            content.append(fingerprint(recipeMap.getUnlocalizedName(), recipe)).append('\n');
         }
         return sha256(content.toString());
     }
@@ -70,7 +70,9 @@ public final class RecipeFingerprint {
         result.append("duration=").append(recipe.getDuration()).append('\n');
         result.append("eut=").append(recipe.getEUt()).append('\n');
         result.append("hidden=").append(recipe.isHidden()).append('\n');
-        result.append("category=").append(recipe.getRecipeCategory()).append('\n');
+        // Do not rely on a dependency object's toString() contract for persistent identity.
+        result.append("category=").append(recipe.getRecipeCategory() == null ? "<null>" :
+                recipe.getRecipeCategory().getUniqueID()).append('\n');
         result.append("ct=").append(recipe.getIsCTRecipe()).append('\n');
         result.append("groovy=").append(recipe.isGroovyRecipe()).append('\n');
         List<String> properties = new ArrayList<>();

@@ -99,7 +99,8 @@ class RecipeBindingResolverTest {
         RecipeBindingResolver.RecipeMapSnapshot snapshot =
                 RecipeBindingResolver.RecipeMapSnapshot.create(recipeMap, List.of(recipe));
         NormalizedRecipe normalized = snapshot.normalize(recipe);
-        RecipeBinding oldAlgorithmBinding = new RecipeBinding(recipeMap.getUnlocalizedName(), 2,
+        RecipeBinding oldAlgorithmBinding = new RecipeBinding(recipeMap.getUnlocalizedName(),
+                RecipeBinding.FINGERPRINT_VERSION - 1,
                 normalized.getRecipeFingerprint(), normalized.getRecipeMapContentVersion(),
                 RecipeFingerprint.describeKey(AEItemKey.of(new ItemStack(Items.GOLD_INGOT))),
                 RecipeBinding.NORMALIZATION_VERSION, "rules", "machine");
@@ -134,6 +135,30 @@ class RecipeBindingResolverTest {
         RecipeBindingResolver.register(recipeMap, snapshot);
         try {
             assertTrue(RecipeBindingResolver.resolve(persistedBinding, recipeMap).isResolved());
+        } finally {
+            RecipeBindingResolver.invalidate(recipeMap);
+        }
+    }
+
+    @Test
+    void contentBindingSurvivesAnUnrelatedRecipeMapInsertion() {
+        RecipeMap<SimpleRecipeBuilder> recipeMap = new RecipeMapBuilder<>(
+                "applygray_binding_content_" + System.nanoTime(), new SimpleRecipeBuilder())
+                .itemInputs(1)
+                .itemOutputs(1)
+                .build();
+        Recipe targetRecipe = recipe(recipeMap, Items.IRON_INGOT, Items.GOLD_INGOT);
+        Recipe insertedRecipe = recipe(recipeMap, Items.DIAMOND, Items.EMERALD);
+        RecipeBindingResolver.RecipeMapSnapshot initial =
+                RecipeBindingResolver.RecipeMapSnapshot.create(recipeMap, List.of(targetRecipe));
+        NormalizedRecipe normalized = initial.normalize(targetRecipe);
+        RecipeBinding binding = normalized.createBinding(AEItemKey.of(new ItemStack(Items.GOLD_INGOT)), "rules", "machine");
+        RecipeBindingResolver.RecipeMapSnapshot expanded =
+                RecipeBindingResolver.RecipeMapSnapshot.create(recipeMap, List.of(insertedRecipe, targetRecipe));
+
+        RecipeBindingResolver.register(recipeMap, expanded);
+        try {
+            assertTrue(RecipeBindingResolver.resolve(binding, recipeMap).isResolved());
         } finally {
             RecipeBindingResolver.invalidate(recipeMap);
         }

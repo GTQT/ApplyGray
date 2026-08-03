@@ -15,8 +15,8 @@ import java.util.Objects;
  */
 public final class RecipeBinding {
 
-    // Version 3 assigns recipe ordinals after a canonical content sort, so bindings survive recipe-map reload order.
-    public static final int FINGERPRINT_VERSION = 3;
+    // Version 4 binds the canonical recipe content directly, independent of RecipeMap insertion order.
+    public static final int FINGERPRINT_VERSION = 4;
     public static final int NORMALIZATION_VERSION = 1;
     private static final int SERIALIZATION_VERSION = 2;
 

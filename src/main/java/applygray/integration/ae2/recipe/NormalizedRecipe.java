@@ -169,7 +169,7 @@ public final class NormalizedRecipe {
         }
 
         return new NormalizedRecipe(recipeMapId,
-                RecipeFingerprint.fingerprint(recipeMapId, recipe, registrationIndex), recipeMapContentVersion,
+                RecipeFingerprint.fingerprint(recipeMapId, recipe), recipeMapContentVersion,
                 registrationIndex, itemInputs, fluidInputs, outputs, chancedStacks, chanced, nonConsumable,
                 properties, numericProperties, unknown, whiteListDimensions, blackListDimensions, cleanroomRequirement,
                 recipe.getRecipeCategory() == null ? "" : recipe.getRecipeCategory().getName(), recipe.getEUt(),

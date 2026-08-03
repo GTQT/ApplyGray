@@ -91,6 +91,8 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     /** Recipe keys selected by the most recent standalone generation graph. */
     private final Set<String> frozenStandalonePatternKeys = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean patternCachePersistencePending = new AtomicBoolean();
+    /** An obsolete saved binding was discarded and must not be written back into the next chunk save. */
+    private final AtomicBoolean discardedPersistedPatternCache = new AtomicBoolean();
     private final AtomicBoolean nativePatternSyncPending = new AtomicBoolean();
     private final AtomicLong lastSlowSnapshotLogNanos = new AtomicLong();
     private final AtomicLong lastSlowNativeRefreshLogNanos = new AtomicLong();
@@ -142,6 +144,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     @Override
     public void onLoad() {
         super.onLoad();
+        persistDiscardedPatternCache();
         schedulePersistedPatternPublication();
     }
 
@@ -541,15 +544,19 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         pinnedRouteGroup = normalizePinnedRouteGroup(data.getString("RecipePatternPinnedRouteGroup"));
         cachedPatterns.clear();
         frozenStandalonePatternKeys.clear();
+        discardedPersistedPatternCache.set(false);
         if (data.hasKey("LazyRecipePatterns", Constants.NBT.TAG_LIST)) {
             NBTTagList patterns = data.getTagList("LazyRecipePatterns", Constants.NBT.TAG_COMPOUND);
             int unreadablePatternCount = 0;
+            int obsoletePatternCount = 0;
             for (int i = 0; i < patterns.tagCount(); i++) {
                 try {
                     DynamicRecipePatternDetails detail = DynamicRecipePatternDetails.readFromNBT(
                             patterns.getCompoundTagAt(i));
-                    if (detail != null) {
+                    if (detail != null && hasCurrentPersistedBinding(detail)) {
                         cachedPatterns.putIfAbsent(detail.getRecipeKey(), detail);
+                    } else if (detail != null) {
+                        obsoletePatternCount++;
                     } else {
                         unreadablePatternCount++;
                     }
@@ -560,6 +567,13 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             if (unreadablePatternCount > 0) {
                 ApplyGrayMod.LOGGER.warn("Skipped {} unreadable cached RecipeMap pattern(s) at {}",
                         unreadablePatternCount, getPos());
+            }
+            if (obsoletePatternCount > 0) {
+                discardedPersistedPatternCache.set(true);
+                ApplyGrayMod.LOGGER.warn("Discarded {} obsolete cached RecipeMap pattern(s) at {} " +
+                                "(requires fingerprintVersion={} and normalizationVersion={})",
+                        obsoletePatternCount, getPos(), RecipeBinding.FINGERPRINT_VERSION,
+                        RecipeBinding.NORMALIZATION_VERSION);
             }
             NBTTagList frozenPatternKeys = data.getTagList(FROZEN_STANDALONE_PATTERN_KEYS_TAG,
                     Constants.NBT.TAG_STRING);
@@ -579,6 +593,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             // The host keeps this one activation refresh armed if the node has not obtained a channel yet.
             queueCraftingProviderRefresh();
         }
+        persistDiscardedPatternCache();
         schedulePersistedPatternPublication();
     }
 
@@ -848,6 +863,21 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         clearNativePatternListMount();
         patternCachePersistencePending.set(true);
         queueNativePatternSync();
+    }
+
+    private static boolean hasCurrentPersistedBinding(DynamicRecipePatternDetails detail) {
+        RecipeBinding binding = detail.getRecipeBinding();
+        return binding != null && binding.getRecipeFingerprintVersion() == RecipeBinding.FINGERPRINT_VERSION &&
+                binding.getNormalizationVersion() == RecipeBinding.NORMALIZATION_VERSION;
+    }
+
+    /** Persists the filtered cache without requesting a native AE2 provider refresh. */
+    private void persistDiscardedPatternCache() {
+        if (getWorld() == null || getWorld().isRemote ||
+                !discardedPersistedPatternCache.compareAndSet(true, false)) {
+            return;
+        }
+        markDirty();
     }
 
     /** Uses the same deferred native-provider update that ordinary pattern-slot changes use. */
