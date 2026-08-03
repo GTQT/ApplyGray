@@ -7,6 +7,7 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
 import ae2.crafting.CraftingTreeNode;
+import ae2.crafting.CraftingTreeProcess;
 import ae2.crafting.inv.CraftingSimulationState;
 import com.google.common.math.LongMath;
 import org.spongepowered.asm.mixin.Final;
@@ -80,5 +81,25 @@ public abstract class MixinCraftingTreeNodeLargePattern {
     @Inject(method = "buildChildPatterns", at = @At("RETURN"))
     private void applygray$finishLargePatternSelection(CallbackInfo ci) {
         DynamicRecipePatternRegistry.finishLargePatternSelection(this);
+    }
+
+    /**
+     * A one-run temporary batch is an atomic availability question: its actual request already runs in AE2's child
+     * simulation state, which is applied only after output was produced. Avoid the generic maximum-craftable preview
+     * rebuilding the same recursive tree immediately before that request. Multi-run batches retain AE2's normal
+     * partial-availability behavior.
+     */
+    @Inject(method = "lambda$requestCraftingBranch$0", at = @At("HEAD"), cancellable = true)
+    private static void applygray$useAtomicLargePatternAttempt(CraftingTreeProcess process,
+                                                                 CraftingSimulationState inventory,
+                                                                 long requestedPatternRuns,
+                                                                 CallbackInfoReturnable<Long> cir) {
+        if (!DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(
+                process.getDetails(), requestedPatternRuns)) {
+            return;
+        }
+
+        DynamicRecipePatternRegistry.recordLargePatternMaximumCraftablePreviewBypass();
+        cir.setReturnValue(requestedPatternRuns);
     }
 }

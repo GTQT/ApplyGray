@@ -12,6 +12,7 @@ import gregtech.api.recipes.chance.output.ChancedOutputList;
 import gregtech.api.recipes.ingredients.GTRecipeItemInput;
 import gregtech.api.recipes.properties.RecipePropertyStorageImpl;
 
+import ae2.api.stacks.AEItemKey;
 import net.minecraft.init.Bootstrap;
 import net.minecraft.init.Items;
 import net.minecraft.item.Item;
@@ -25,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RecipeBindingResolverTest {
 
@@ -83,6 +86,57 @@ class RecipeBindingResolverTest {
 
         assertEquals(inOriginalOrder.getContentVersion(), inReverseOrder.getContentVersion());
         assertEquals(fingerprints(inOriginalOrder), fingerprints(inReverseOrder));
+    }
+
+    @Test
+    void rejectsAnOlderBindingAlgorithmEvenWhenThePersistedDetailIsOtherwiseReadable() {
+        RecipeMap<SimpleRecipeBuilder> recipeMap = new RecipeMapBuilder<>(
+                "applygray_binding_version_" + System.nanoTime(), new SimpleRecipeBuilder())
+                .itemInputs(1)
+                .itemOutputs(1)
+                .build();
+        Recipe recipe = recipe(recipeMap, Items.IRON_INGOT, Items.GOLD_INGOT);
+        RecipeBindingResolver.RecipeMapSnapshot snapshot =
+                RecipeBindingResolver.RecipeMapSnapshot.create(recipeMap, List.of(recipe));
+        NormalizedRecipe normalized = snapshot.normalize(recipe);
+        RecipeBinding oldAlgorithmBinding = new RecipeBinding(recipeMap.getUnlocalizedName(), 2,
+                normalized.getRecipeFingerprint(), normalized.getRecipeMapContentVersion(),
+                RecipeFingerprint.describeKey(AEItemKey.of(new ItemStack(Items.GOLD_INGOT))),
+                RecipeBinding.NORMALIZATION_VERSION, "rules", "machine");
+
+        RecipeBindingResolver.register(recipeMap, snapshot);
+        try {
+            RecipeBindingResolver.Resolution resolution = RecipeBindingResolver.resolve(oldAlgorithmBinding, recipeMap);
+            assertFalse(resolution.isResolved());
+            assertEquals("UNSUPPORTED_BINDING_VERSION", resolution.getReasonCode());
+        } finally {
+            RecipeBindingResolver.invalidate(recipeMap);
+        }
+    }
+
+    @Test
+    void resolvesAnExactPersistedBindingDespiteAnOlderPlanningContext() {
+        RecipeMap<SimpleRecipeBuilder> recipeMap = new RecipeMapBuilder<>(
+                "applygray_binding_context_" + System.nanoTime(), new SimpleRecipeBuilder())
+                .itemInputs(1)
+                .itemOutputs(1)
+                .build();
+        Recipe recipe = recipe(recipeMap, Items.IRON_INGOT, Items.GOLD_INGOT);
+        RecipeBindingResolver.RecipeMapSnapshot snapshot =
+                RecipeBindingResolver.RecipeMapSnapshot.create(recipeMap, List.of(recipe));
+        NormalizedRecipe normalized = snapshot.normalize(recipe);
+        RecipeBinding persistedBinding = new RecipeBinding(recipeMap.getUnlocalizedName(),
+                RecipeBinding.FINGERPRINT_VERSION, normalized.getRecipeFingerprint(),
+                normalized.getRecipeMapContentVersion(),
+                RecipeFingerprint.describeKey(AEItemKey.of(new ItemStack(Items.GOLD_INGOT))),
+                RecipeBinding.NORMALIZATION_VERSION, "rules-before-restart", "profile-before-restart");
+
+        RecipeBindingResolver.register(recipeMap, snapshot);
+        try {
+            assertTrue(RecipeBindingResolver.resolve(persistedBinding, recipeMap).isResolved());
+        } finally {
+            RecipeBindingResolver.invalidate(recipeMap);
+        }
     }
 
     private static Recipe recipe(RecipeMap<SimpleRecipeBuilder> recipeMap, Item input, Item output) {

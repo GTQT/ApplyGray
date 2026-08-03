@@ -69,6 +69,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -181,6 +182,7 @@ public final class DynamicRecipePatternRegistry {
         private int largestMultiplier;
         private int exactDynamicInputTemplateBypasses;
         private int exactDynamicInputCacheBypasses;
+        private int maximumCraftablePreviewBypasses;
         private boolean slowProgressLogged;
 
         private LargePatternCalculationSummary(AEKey rootTarget) {
@@ -207,6 +209,10 @@ public final class DynamicRecipePatternRegistry {
 
         private void recordExactDynamicInputCacheBypass() {
             exactDynamicInputCacheBypasses++;
+        }
+
+        private void recordMaximumCraftablePreviewBypass() {
+            maximumCraftablePreviewBypasses++;
         }
 
         private boolean shouldLogSlowProgress() {
@@ -308,11 +314,13 @@ public final class DynamicRecipePatternRegistry {
 
         ApplyGrayMod.LOGGER.info("RecipeMap large-pattern calculation root={} elapsedMs={} candidateNodes={} " +
                         "candidates={} dynamicCandidates={} replacements={} largestOrdinaryRuns={} " +
-                        "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={}",
+                        "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={} " +
+                        "maximumCraftablePreviewBypasses={}",
                 summary.rootTarget, elapsedNanos / 1_000_000L, summary.candidateNodes,
                 summary.totalCandidates, summary.dynamicCandidates, summary.replacedCandidates,
                 summary.largestOrdinaryRunCount, summary.largestMultiplier,
-                summary.exactDynamicInputTemplateBypasses, summary.exactDynamicInputCacheBypasses);
+                summary.exactDynamicInputTemplateBypasses, summary.exactDynamicInputCacheBypasses,
+                summary.maximumCraftablePreviewBypasses);
     }
 
     /** Counts the low-level fuzzy-template bypasses used by frozen dynamic RecipeMap inputs. */
@@ -330,6 +338,23 @@ public final class DynamicRecipePatternRegistry {
     public static void recordExactDynamicInputCacheBypass() {
         LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
         if (summary != null) summary.recordExactDynamicInputCacheBypass();
+    }
+
+    /**
+     * A temporary large detail representing exactly one AE2 execution can use the normal branch request itself as
+     * the availability test. AE2 already performs that request in an isolated child simulation state and commits it
+     * only after it produced output. More than one execution must retain AE2's partial-availability calculation.
+     */
+    public static boolean canBypassLargePatternMaximumCraftablePreview(IPatternDetails details,
+                                                                         long requestedPatternRuns) {
+        return requestedPatternRuns == 1 && details instanceof DynamicRecipePatternDetails dynamic &&
+                dynamic.isLargePattern();
+    }
+
+    /** Counts the bounded atomic-attempt path once per branch, for the calculation-level diagnostic only. */
+    public static void recordLargePatternMaximumCraftablePreviewBypass() {
+        LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
+        if (summary != null) summary.recordMaximumCraftablePreviewBypass();
     }
 
     /** Removes the current calculation's cooperative lookup context. */
@@ -594,6 +619,12 @@ public final class DynamicRecipePatternRegistry {
         return state != null && state.getProviderSnapshot(providerId) != null;
     }
 
+    /** Returns whether the provider snapshot belongs to the node's current AE2 grid. */
+    public static boolean hasRegisteredProviderSnapshotOnCurrentGrid(
+            MetaTileEntityMERecipeMapPatternProvider provider) {
+        return isRegisteredOnCurrentGrid(provider) && hasRegisteredProviderSnapshot(provider);
+    }
+
     /** Transfers a completed provider definition without touching the controller or its exposed RecipeMaps. */
     private static boolean relocateRegisteredProviderToCurrentGrid(
             MetaTileEntityMERecipeMapPatternProvider provider) {
@@ -848,11 +879,12 @@ public final class DynamicRecipePatternRegistry {
             if (summary.shouldLogSlowProgress()) {
                 ApplyGrayMod.LOGGER.info("RecipeMap large-pattern calculation still running root={} candidateNodes={} " +
                                 "candidates={} dynamicCandidates={} replacements={} largestOrdinaryRuns={} " +
-                                "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={}",
+                                "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={} " +
+                                "maximumCraftablePreviewBypasses={}",
                         summary.rootTarget, summary.candidateNodes, summary.totalCandidates,
                         summary.dynamicCandidates, summary.replacedCandidates, summary.largestOrdinaryRunCount,
                         summary.largestMultiplier, summary.exactDynamicInputTemplateBypasses,
-                        summary.exactDynamicInputCacheBypasses);
+                        summary.exactDynamicInputCacheBypasses, summary.maximumCraftablePreviewBypasses);
             }
         }
         return changed ? Collections.unmodifiableList(expanded) : candidates;
@@ -965,6 +997,29 @@ public final class DynamicRecipePatternRegistry {
         IGrid grid = PROVIDER_GRIDS.get(provider.getDynamicProviderId());
         GridState state = grid == null ? null : GRIDS.get(grid);
         return state != null && state.isPublishedDynamicPattern(detail, provider, grid);
+    }
+
+    /**
+     * Reports why restored entries are still absent from this provider's published registry view.
+     *
+     * <p>This is intentionally a recovery-time diagnostic: it never captures runtime furnace fallbacks and does not
+     * generate new patterns. The exact binding resolver remains the authority for a saved recipe's identity; rule and
+     * machine-profile versions describe the old planning context and are not a second persistence version gate.</p>
+     */
+    public static PersistedPatternPublicationStatus inspectPersistedPatternPublication(
+            MetaTileEntityMERecipeMapPatternProvider provider) {
+        if (provider == null) {
+            return PersistedPatternPublicationStatus.empty();
+        }
+
+        int cachedPatternCount = provider.getCachedDynamicPatterns().size();
+        String providerId = provider.getDynamicProviderId();
+        IGrid grid = PROVIDER_GRIDS.get(providerId);
+        GridState state = grid == null ? null : GRIDS.get(grid);
+        if (state == null) {
+            return PersistedPatternPublicationStatus.awaitingSnapshot(cachedPatternCount);
+        }
+        return state.inspectPersistedPatternPublication(provider, providerId, cachedPatternCount);
     }
 
     /**
@@ -2301,6 +2356,57 @@ public final class DynamicRecipePatternRegistry {
         }
     }
 
+    /** Low-frequency recovery result for one provider's saved dynamic pattern cache. */
+    public static final class PersistedPatternPublicationStatus {
+
+        private final int cachedPatternCount;
+        private final int registeredPatternCount;
+        private final Map<String, Integer> rejectedCounts;
+
+        private PersistedPatternPublicationStatus(int cachedPatternCount, int registeredPatternCount,
+                                                  Map<String, Integer> rejectedCounts) {
+            this.cachedPatternCount = Math.max(0, cachedPatternCount);
+            this.registeredPatternCount = Math.max(0, registeredPatternCount);
+            this.rejectedCounts = Collections.unmodifiableMap(new LinkedHashMap<>(rejectedCounts));
+        }
+
+        private static PersistedPatternPublicationStatus empty() {
+            return new PersistedPatternPublicationStatus(0, 0, Collections.emptyMap());
+        }
+
+        private static PersistedPatternPublicationStatus awaitingSnapshot(int cachedPatternCount) {
+            Map<String, Integer> rejected = new LinkedHashMap<>();
+            if (cachedPatternCount > 0) {
+                rejected.put("PROVIDER_SNAPSHOT_UNAVAILABLE", cachedPatternCount);
+            }
+            return new PersistedPatternPublicationStatus(cachedPatternCount, 0, rejected);
+        }
+
+        public int getCachedPatternCount() {
+            return cachedPatternCount;
+        }
+
+        public int getRegisteredPatternCount() {
+            return registeredPatternCount;
+        }
+
+        /** True once every saved detail has a current registry owner; AE2 acknowledgement is checked separately. */
+        public boolean hasRegisteredAllCachedPatterns() {
+            return registeredPatternCount >= cachedPatternCount;
+        }
+
+        /** Only registry transfer/binding races merit a bounded timer retry; all other cases wait for lifecycle work. */
+        public boolean shouldRetryWithoutLifecycleChange() {
+            return rejectedCounts.containsKey("PROVIDER_SNAPSHOT_UNAVAILABLE") ||
+                    rejectedCounts.containsKey("REGISTRY_BINDING_PENDING");
+        }
+
+        public String summarize() {
+            return "registered=" + registeredPatternCount + '/' + cachedPatternCount +
+                    (rejectedCounts.isEmpty() ? "" : " rejected=" + rejectedCounts);
+        }
+    }
+
     /** Immutable, structured candidate decision retained for the Provider diagnostics view. */
     public static final class ProviderDiagnosticEvent {
 
@@ -2608,6 +2714,33 @@ public final class DynamicRecipePatternRegistry {
             }
         }
 
+        private PersistedPatternPublicationStatus inspectPersistedPatternPublication(
+                MetaTileEntityMERecipeMapPatternProvider provider, String providerId, int cachedPatternCount) {
+            ProviderSnapshot snapshot = providers.get(providerId);
+            if (snapshot == null || snapshot.provider != provider) {
+                return PersistedPatternPublicationStatus.awaitingSnapshot(cachedPatternCount);
+            }
+
+            // The first native mount can happen while this grid is still transferring providers. Resolve that one
+            // coalesced cache rebuild here rather than asking AE2 to remount repeatedly just to discover a rejection.
+            ensureProviderCacheBindings();
+
+            List<DynamicRecipePatternDetails> details = provider.getCachedDynamicPatterns();
+            details.sort((left, right) -> left.getRecipeKey().compareTo(right.getRecipeKey()));
+            Map<String, Integer> rejected = new LinkedHashMap<>();
+            int registered = 0;
+            for (DynamicRecipePatternDetails detail : details) {
+                if (patternsByRecipe.get(detail.getRecipeKey()) == detail &&
+                        providersByPattern.get(detail) == provider) {
+                    registered++;
+                    continue;
+                }
+                String reason = getPersistedPatternPublicationRejection(snapshot, detail);
+                rejected.merge(reason, 1, Integer::sum);
+            }
+            return new PersistedPatternPublicationStatus(details.size(), registered, rejected);
+        }
+
         /** Restores completed standalone graphs without exposing unrelated lazy cache entries as fresh routes. */
         private void bindFrozenStandalonePatterns() {
             for (ProviderSnapshot snapshot : providers.values()) {
@@ -2665,10 +2798,7 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private static boolean isRecipeMapAvailable(ProviderSnapshot snapshot, DynamicRecipePatternDetails detail) {
-            if (!snapshot.ruleSetVersion.equals(detail.getRecipeBinding().getRuleSetVersion()) ||
-                    !snapshot.machineProfile.getVersion().equals(detail.getRecipeBinding().getMachineProfileVersion())) {
-                return false;
-            }
+            if (getPersistedDetailValidationFailure(detail) != null) return false;
             for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
                 if (isDynamicRecipeMapEnabled(recipeMap) &&
                         recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName()) &&
@@ -3410,6 +3540,45 @@ public final class DynamicRecipePatternRegistry {
                 }
             }
             return false;
+        }
+
+        private static String getPersistedPatternPublicationRejection(ProviderSnapshot snapshot,
+                                                                        DynamicRecipePatternDetails detail) {
+            String detailFailure = getPersistedDetailValidationFailure(detail);
+            if (detailFailure != null) return detailFailure;
+
+            boolean matchingRecipeMap = false;
+            boolean enabledRecipeMap = false;
+            String resolverFailure = null;
+            for (RecipeMap<?> recipeMap : snapshot.recipeMaps) {
+                if (!recipeMap.getUnlocalizedName().equals(detail.getRecipeMapName())) continue;
+                matchingRecipeMap = true;
+                if (!isDynamicRecipeMapEnabled(recipeMap)) continue;
+                enabledRecipeMap = true;
+
+                RecipeBindingResolver.Resolution resolution =
+                        RecipeBindingResolver.resolve(detail.getRecipeBinding(), recipeMap);
+                if (resolution.isResolved()) return "REGISTRY_BINDING_PENDING";
+                resolverFailure = resolution.getReasonCode();
+            }
+            if (!matchingRecipeMap) return "RECIPE_MAP_UNAVAILABLE";
+            if (!enabledRecipeMap) return "RECIPE_MAP_DISABLED";
+            return resolverFailure == null ? "RECIPE_BINDING_UNAVAILABLE" : resolverFailure;
+        }
+
+        /** Verifies that the serialized detail still advertises the exact target protected by its binding. */
+        @Nullable
+        private static String getPersistedDetailValidationFailure(DynamicRecipePatternDetails detail) {
+            if (detail == null || detail.getRecipeBinding() == null) return "MISSING_BINDING";
+            RecipeBinding binding = detail.getRecipeBinding();
+            if (!binding.isForRecipeMap(detail.getRecipeMapName())) return "DETAIL_RECIPE_MAP_MISMATCH";
+            List<GenericStack> outputs = detail.getOutputs();
+            if (outputs.size() != 1 || outputs.get(0) == null || outputs.get(0).amount() <= 0 ||
+                    !detail.netProduces(outputs.get(0).what()) ||
+                    !binding.getTargetKey().equals(RecipeFingerprint.describeKey(outputs.get(0).what()))) {
+                return "DETAIL_TARGET_MISMATCH";
+            }
+            return null;
         }
 
         @Nullable

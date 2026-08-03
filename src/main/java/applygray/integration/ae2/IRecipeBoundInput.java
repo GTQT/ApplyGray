@@ -13,7 +13,7 @@ public interface IRecipeBoundInput extends IRecipeMapBoundInput {
     RecipeBinding getRecipeBinding();
 
     /**
-     * Lets a bound buffer reject execution after its provider's rule or machine-capability snapshot changed.
+     * Lets a bound buffer reject execution when its owner no longer exposes the bound RecipeMap.
      * Unbound legacy buffers retain the RecipeMap-only behavior from {@link IRecipeMapBoundInput}.
      */
     default boolean isRecipeBindingCurrent() {

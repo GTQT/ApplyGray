@@ -80,6 +80,10 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     private static final String FROZEN_STANDALONE_PATTERN_KEYS_TAG = "FrozenStandaloneRecipeMapPatterns";
     private static final long SLOW_SNAPSHOT_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
     private static final long SLOW_SNAPSHOT_LOG_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(5);
+    /** Retry an unacknowledged native remount without turning a bad saved binding into per-tick AE2 work. */
+    private static final long PERSISTED_PATTERN_PUBLICATION_INITIAL_RETRY_TICKS = 20L;
+    private static final long PERSISTED_PATTERN_PUBLICATION_MAX_RETRY_TICKS = 100L;
+    private static final int PERSISTED_PATTERN_PUBLICATION_MAX_RETRIES = 1;
     public static final String TERMINAL_GROUP_TOOLTIP_KEY = "applygray.gui.pattern_access.recipe_map_provider";
 
     private final AtomicLong dynamicEpoch = new AtomicLong();
@@ -90,11 +94,20 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     private final AtomicBoolean nativePatternSyncPending = new AtomicBoolean();
     private final AtomicLong lastSlowSnapshotLogNanos = new AtomicLong();
     private final AtomicLong lastSlowNativeRefreshLogNanos = new AtomicLong();
+    private final AtomicLong lastPersistedPatternPublicationLogNanos = new AtomicLong();
     /** True when AE2's most recent native mount already received this provider's persisted pattern list. */
     private volatile boolean nativePatternListMounted;
+    private volatile IGrid nativePatternListMountedGrid;
+    private volatile int nativePatternListMountedCount;
     /** A persisted cache can be read after AE2 has already mounted this node with an empty native pattern list. */
     private final AtomicBoolean persistedPatternPublicationPending = new AtomicBoolean();
     private final AtomicBoolean persistedPatternPublicationTaskQueued = new AtomicBoolean();
+    /** Grid expected to acknowledge the currently requested native remount. */
+    private volatile IGrid persistedPatternPublicationRequestedGrid;
+    private volatile long persistedPatternPublicationMountSequence;
+    private volatile int persistedPatternPublicationLastMountPatternCount = -1;
+    private volatile long persistedPatternPublicationNextRetryTick;
+    private volatile int persistedPatternPublicationRetryCount;
     private volatile PlanningMode planningMode = PlanningMode.STOCK_FIRST;
     private volatile String pinnedRouteGroup = "";
 
@@ -136,7 +149,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public void update() {
         super.update();
         if (getWorld() != null && !getWorld().isRemote && persistedPatternPublicationPending.get() &&
-                getOffsetTimer() % 20 == 0) {
+                getOffsetTimer() % 20 == 0 && isPersistedPatternPublicationRetryDue()) {
             // A controller can finish forming after the node joins its grid. This retries only lightweight
             // registration and native publication; runtime furnace capture remains generation-only.
             schedulePersistedPatternPublication();
@@ -147,8 +160,10 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     protected boolean shouldRefreshCraftingProviderAfterActivation() {
         // Grid.add mounts providers before the new grid has finished booting. If that mount already saw the saved
         // details, requesting another update for every provider after a cable merge only repeats the full AE2
-        // unmount/remount work. A first mount that was empty still gets the ordinary activation refresh.
-        return hasCachedDynamicPatterns() && !nativePatternListMounted;
+        // unmount/remount work. A persisted recovery remains pending until AE2 has actually read a non-empty list
+        // from the current grid, so it must keep the parent host's one activation refresh armed.
+        return persistedPatternPublicationPending.get() ||
+                hasCachedDynamicPatterns() && !nativePatternListMounted;
     }
 
     @Override
@@ -181,8 +196,9 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         // briefly false even for a powered node that already owns a channel, which used to force one requestUpdate()
         // per persisted provider after every network merge. isOnline() keeps offline/channel-starved providers hidden
         // while allowing AE2's own initial mount to carry the persisted list across a topology change.
+        IGrid currentGrid = getCurrentGridSafely();
         if (!getMainNode().isOnline() || cachedPatterns.isEmpty()) {
-            nativePatternListMounted = false;
+            recordNativePatternListMount(currentGrid, 0);
             return Collections.emptyList();
         }
 
@@ -193,11 +209,11 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             }
         }
         if (patterns.isEmpty()) {
-            nativePatternListMounted = false;
+            recordNativePatternListMount(currentGrid, 0);
             return Collections.emptyList();
         }
         patterns.sort((left, right) -> left.getRecipeKey().compareTo(right.getRecipeKey()));
-        nativePatternListMounted = true;
+        recordNativePatternListMount(currentGrid, patterns.size());
         return Collections.unmodifiableList(patterns);
     }
 
@@ -286,6 +302,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         }
 
         if (hasCachedDynamicPatterns()) {
+            resetPersistedPatternPublicationRetryAfterLifecycleChange();
             // A node that was not registered before Grid.add was mounted with an empty native list. Rebuild only in
             // that case; normal grid moves retain their previous published details without a second AE2 remount.
             if (DynamicRecipePatternRegistry.refreshProviderAfterGridChange(this)) {
@@ -305,6 +322,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         }
 
         if (hasCachedDynamicPatterns()) {
+            resetPersistedPatternPublicationRetryAfterLifecycleChange();
             if (isActive()) {
                 DynamicRecipePatternRegistry.refreshProviderAfterStateChange(this);
             }
@@ -320,7 +338,8 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
 
     @Override
     public void destroyMainNode() {
-        nativePatternListMounted = false;
+        clearNativePatternListMount();
+        resetPersistedPatternPublicationRetryAfterLifecycleChange();
         DynamicRecipePatternRegistry.unregister(this);
         super.destroyMainNode();
     }
@@ -403,6 +422,9 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     public void removeCachedDynamicPattern(String recipeKey) {
         if (cachedPatterns.remove(recipeKey) != null) {
             frozenStandalonePatternKeys.remove(recipeKey);
+            if (cachedPatterns.isEmpty()) {
+                clearPersistedPatternPublication();
+            }
             queueCachedPatternUpdate();
         }
     }
@@ -433,6 +455,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         if (!cachedPatterns.isEmpty()) {
             cachedPatterns.clear();
             frozenStandalonePatternKeys.clear();
+            clearPersistedPatternPublication();
             queueCachedPatternUpdate();
         } else if (!frozenStandalonePatternKeys.isEmpty()) {
             frozenStandalonePatternKeys.clear();
@@ -548,8 +571,14 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
             }
         }
         patternCachePersistencePending.set(false);
-        nativePatternListMounted = false;
-        persistedPatternPublicationPending.set(!cachedPatterns.isEmpty());
+        clearNativePatternListMount();
+        if (cachedPatterns.isEmpty()) {
+            clearPersistedPatternPublication();
+        } else {
+            beginPersistedPatternPublication();
+            // The host keeps this one activation refresh armed if the node has not obtained a channel yet.
+            queueCraftingProviderRefresh();
+        }
         schedulePersistedPatternPublication();
     }
 
@@ -790,13 +819,14 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
     }
 
     private boolean isBindingCurrent(DynamicRecipePatternDetails detail) {
-        return detail.getRecipeBinding().getRuleSetVersion().equals(RecipePatternRules.getActive().getVersion()) &&
-                isRecipeBindingCurrent(detail.getRecipeBinding());
+        return isRecipeBindingCurrent(detail.getRecipeBinding());
     }
 
     /**
-     * Re-samples only main-thread-safe controller facts before an already-buffered bound recipe is looked up.
-     * Recipe identity itself is checked by {@code MixinMultiblockRecipeLogicRecipeBinding} immediately afterwards.
+     * The profile and rules hashes belong to route selection, not recipe identity. Requiring those volatile values to
+     * survive a world restart strands an otherwise exact persisted pattern before GregTech can run its normal
+     * controller capability check. The resolver below still verifies the binding algorithm, recipe fingerprint, map,
+     * and target output immediately before execution.
      */
     public boolean isRecipeBindingCurrent(RecipeBinding binding) {
         if (binding == null ||
@@ -807,21 +837,15 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         MultiblockControllerBase controller = getController();
         RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
         if (recipeMaps.length == 0) return false;
-        boolean routeAvailable = false;
         for (RecipeMap<?> recipeMap : recipeMaps) {
-            if (binding.isForRecipeMap(recipeMap.getUnlocalizedName())) {
-                routeAvailable = true;
-                break;
-            }
+            if (binding.isForRecipeMap(recipeMap.getUnlocalizedName()) &&
+                    RecipeBindingResolver.resolve(binding, recipeMap).isResolved()) return true;
         }
-        if (!routeAvailable) return false;
-        MachineCapabilityProfile profile = MachineCapabilityProfile.capture(getDynamicProviderId(), controller,
-                recipeMaps, getBufferCount(), RecipePatternRules.collectMachineFacts(controller));
-        return binding.getMachineProfileVersion().equals(profile.getVersion());
+        return false;
     }
 
     private void queueCachedPatternUpdate() {
-        nativePatternListMounted = false;
+        clearNativePatternListMount();
         patternCachePersistencePending.set(true);
         queueNativePatternSync();
     }
@@ -846,10 +870,7 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
         });
     }
 
-    /**
-     * Completes the one native remount needed when NBT is decoded after AE2's initial empty provider mount.
-     * This does not scan RecipeMaps or capture lookup-only furnace recipes.
-     */
+    /** Queues a recovery step after NBT has restored a native provider that AE2 may have mounted while empty. */
     private void schedulePersistedPatternPublication() {
         if (!persistedPatternPublicationPending.get() || getWorld() == null || getWorld().isRemote ||
                 !persistedPatternPublicationTaskQueued.compareAndSet(false, true)) {
@@ -868,17 +889,182 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
 
     private void publishPersistedPatternsWhenReady() {
         if (!persistedPatternPublicationPending.get()) return;
-        if (getWorld() == null || getWorld().isRemote || !hasCachedDynamicPatterns() || !isActive()) return;
-
-        DynamicRecipePatternRegistry.refreshProviderAfterStateChange(this);
-        if (!DynamicRecipePatternRegistry.hasRegisteredProviderSnapshot(this)) return;
-
-        nativePatternListMounted = false;
-        if (publishCachedPatternsImmediately()) {
-            persistedPatternPublicationPending.set(false);
-            ApplyGrayMod.LOGGER.debug("Published {} persisted RecipeMap pattern(s) at {} without runtime recipe capture",
-                    cachedPatterns.size(), getPos());
+        if (getWorld() == null || getWorld().isRemote || !isActive()) return;
+        if (!hasCachedDynamicPatterns()) {
+            clearPersistedPatternPublication();
+            return;
         }
+
+        DynamicRecipePatternRegistry.refreshProviderAfterGridChange(this);
+        if (!DynamicRecipePatternRegistry.hasRegisteredProviderSnapshotOnCurrentGrid(this)) {
+            deferPersistedPatternPublication("provider snapshot is not registered on the current AE2 grid", true);
+            return;
+        }
+
+        IGrid currentGrid = getCurrentGridSafely();
+        if (currentGrid == null) {
+            deferPersistedPatternPublication("node has no current AE2 grid", true);
+            return;
+        }
+        int cachedCount = cachedPatterns.size();
+        if (hasMountedAllPersistedPatterns(currentGrid, cachedCount)) {
+            completePersistedPatternPublication(currentGrid);
+            return;
+        }
+        if (!isPersistedPatternPublicationRetryDue()) {
+            return;
+        }
+
+        // AE2 may already have mounted a partial list while the grid was booting. Do not remount it over and over
+        // for a binding that the strict resolver has definitively rejected; a grid/controller lifecycle event will
+        // re-arm recovery if its RecipeMap becomes available later.
+        if (isNativePatternListMountedOn(currentGrid)) {
+            DynamicRecipePatternRegistry.PersistedPatternPublicationStatus status =
+                    DynamicRecipePatternRegistry.inspectPersistedPatternPublication(this);
+            if (!status.hasRegisteredAllCachedPatterns() && !status.shouldRetryWithoutLifecycleChange()) {
+                pausePersistedPatternPublication("AE2 mounted " + nativePatternListMountedCount + '/' + cachedCount +
+                        " cached pattern(s); " + status.summarize());
+                return;
+            }
+        }
+
+        // requestUpdate() is synchronous in AE2, but its return type only reports node activity. Success is the
+        // subsequent getAvailablePatterns() mount on this exact grid, not merely issuing the request.
+        long mountSequenceBefore = persistedPatternPublicationMountSequence;
+        persistedPatternPublicationRequestedGrid = currentGrid;
+        persistedPatternPublicationLastMountPatternCount = -1;
+        clearNativePatternListMount();
+        queueCraftingProviderRefresh();
+
+        if (hasMountedAllPersistedPatterns(currentGrid, cachedCount)) {
+            completePersistedPatternPublication(currentGrid);
+            return;
+        }
+
+        int observedPatternCount = persistedPatternPublicationMountSequence > mountSequenceBefore ?
+                persistedPatternPublicationLastMountPatternCount : -1;
+        DynamicRecipePatternRegistry.PersistedPatternPublicationStatus status =
+                DynamicRecipePatternRegistry.inspectPersistedPatternPublication(this);
+        boolean retryWithoutLifecycleChange = status.hasRegisteredAllCachedPatterns() ||
+                status.shouldRetryWithoutLifecycleChange();
+        String reason;
+        if (observedPatternCount >= 0) {
+            reason = "AE2 mounted " + observedPatternCount + '/' + cachedCount + " cached pattern(s); " +
+                    status.summarize();
+        } else {
+            reason = "AE2 did not acknowledge the native provider remount; " + status.summarize();
+        }
+        deferPersistedPatternPublication(reason, retryWithoutLifecycleChange);
+    }
+
+    /** Marks recovery complete only after AE2 read every current persisted detail from this grid. */
+    private void completePersistedPatternPublication(IGrid grid) {
+        int cachedCount = cachedPatterns.size();
+        int mountedCount = nativePatternListMountedGrid == grid ? nativePatternListMountedCount : 0;
+        if (mountedCount < cachedCount) return;
+        if (!persistedPatternPublicationPending.getAndSet(false)) return;
+
+        persistedPatternPublicationRequestedGrid = null;
+        persistedPatternPublicationNextRetryTick = 0;
+        persistedPatternPublicationRetryCount = 0;
+        persistedPatternPublicationLastMountPatternCount = -1;
+        ApplyGrayMod.LOGGER.debug("Published {} persisted RecipeMap pattern(s) at {} without runtime recipe capture",
+                mountedCount, getPos());
+    }
+
+    /**
+     * Keeps an unacknowledged native remount pending with a bounded retry cadence. Strictly rejected details pause
+     * immediately and are rechecked only after a real node/controller lifecycle transition.
+     */
+    private void deferPersistedPatternPublication(String reason, boolean retryWithoutLifecycleChange) {
+        if (!retryWithoutLifecycleChange ||
+                persistedPatternPublicationRetryCount >= PERSISTED_PATTERN_PUBLICATION_MAX_RETRIES) {
+            pausePersistedPatternPublication(reason);
+            return;
+        }
+
+        int retryCount = Math.min(persistedPatternPublicationRetryCount + 1, 4);
+        persistedPatternPublicationRetryCount = retryCount;
+        long delay = PERSISTED_PATTERN_PUBLICATION_INITIAL_RETRY_TICKS << Math.min(retryCount - 1, 2);
+        delay = Math.min(delay, PERSISTED_PATTERN_PUBLICATION_MAX_RETRY_TICKS);
+        persistedPatternPublicationNextRetryTick = getWorld().getTotalWorldTime() + delay;
+        logDeferredPersistedPatternPublication(reason + "; retry in " + delay + " tick(s)");
+    }
+
+    private void pausePersistedPatternPublication(String reason) {
+        persistedPatternPublicationNextRetryTick = Long.MAX_VALUE;
+        logDeferredPersistedPatternPublication(reason + "; waiting for an AE2/controller state change");
+    }
+
+    private boolean isPersistedPatternPublicationRetryDue() {
+        if (persistedPatternPublicationNextRetryTick == 0) return true;
+        return getWorld() != null && getWorld().getTotalWorldTime() >= persistedPatternPublicationNextRetryTick;
+    }
+
+    private void beginPersistedPatternPublication() {
+        persistedPatternPublicationPending.set(true);
+        resetPersistedPatternPublicationRetryAfterLifecycleChange();
+    }
+
+    private void clearPersistedPatternPublication() {
+        persistedPatternPublicationPending.set(false);
+        persistedPatternPublicationRequestedGrid = null;
+        persistedPatternPublicationNextRetryTick = 0;
+        persistedPatternPublicationRetryCount = 0;
+        persistedPatternPublicationLastMountPatternCount = -1;
+    }
+
+    /** A channel, grid, or controller transition gives a previously empty native mount another legitimate chance. */
+    private void resetPersistedPatternPublicationRetryAfterLifecycleChange() {
+        if (!persistedPatternPublicationPending.get()) return;
+        persistedPatternPublicationRequestedGrid = null;
+        persistedPatternPublicationNextRetryTick = 0;
+        persistedPatternPublicationRetryCount = 0;
+        persistedPatternPublicationLastMountPatternCount = -1;
+    }
+
+    private IGrid getCurrentGridSafely() {
+        try {
+            return getMainNode().getGrid();
+        } catch (IllegalStateException ignored) {
+            return null;
+        }
+    }
+
+    private void recordNativePatternListMount(IGrid grid, int patternCount) {
+        nativePatternListMounted = patternCount > 0;
+        nativePatternListMountedGrid = patternCount > 0 ? grid : null;
+        nativePatternListMountedCount = Math.max(0, patternCount);
+        if (persistedPatternPublicationPending.get() && grid != null &&
+                grid == persistedPatternPublicationRequestedGrid) {
+            persistedPatternPublicationLastMountPatternCount = Math.max(0, patternCount);
+            persistedPatternPublicationMountSequence++;
+        }
+    }
+
+    private void clearNativePatternListMount() {
+        nativePatternListMounted = false;
+        nativePatternListMountedGrid = null;
+        nativePatternListMountedCount = 0;
+    }
+
+    private boolean isNativePatternListMountedOn(IGrid grid) {
+        return grid != null && nativePatternListMounted && nativePatternListMountedGrid == grid;
+    }
+
+    private boolean hasMountedAllPersistedPatterns(IGrid grid, int cachedCount) {
+        return isNativePatternListMountedOn(grid) && nativePatternListMountedCount >= cachedCount;
+    }
+
+    private void logDeferredPersistedPatternPublication(String reason) {
+        long now = System.nanoTime();
+        long previous = lastPersistedPatternPublicationLogNanos.get();
+        if (previous != 0 && now - previous < SLOW_SNAPSHOT_LOG_COOLDOWN_NANOS) return;
+        if (!lastPersistedPatternPublicationLogNanos.compareAndSet(previous, now)) return;
+
+        ApplyGrayMod.LOGGER.warn("Deferred persisted RecipeMap pattern publication at {}: {} (cached={}); " +
+                        "the provider remains recoverable without runtime recipe capture",
+                getPos(), reason, cachedPatterns.size());
     }
 
     private void invalidatePlanningConfiguration(String change) {
