@@ -1,5 +1,6 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.integration.ae2.ExactPatternInputRegistry;
 import gregtech.api.capability.IDataStickIntractable;
 import gregtech.api.util.GTLog;
 import gregtech.api.util.Mods;
@@ -242,7 +243,12 @@ public abstract class MetaTileEntityAEPatternRegistrar extends MetaTileEntityAEH
                 patternDetails.add(i, null);
                 continue;
             }
-            patternDetails.add(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
+
+            IPatternDetails detail = PatternDetailsHelper.decodePattern(pattern, getWorld());
+            patternDetails.add(i, detail);
+            if (detail != null) {
+                ExactPatternInputRegistry.registerPattern(detail);
+            }
         }
     }
 

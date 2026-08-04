@@ -45,15 +45,15 @@ class DynamicRecipePatternDetailsLargePatternTest {
     }
 
     @Test
-    void bypassesMaximumCraftablePreviewOnlyForOneLargePatternExecution() {
+    void bypassesMaximumCraftablePreviewOnlyForOneDynamicPatternExecution() {
         DynamicRecipePatternDetails ordinary = ordinaryPattern();
         DynamicRecipePatternDetails large = ordinary.createLargePattern(2);
 
         assertNotNull(large);
-        assertFalse(DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(ordinary, 1));
-        assertFalse(DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(large, 0));
-        assertTrue(DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(large, 1));
-        assertFalse(DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(large, 2));
+        assertTrue(DynamicRecipePatternRegistry.canBypassDynamicPatternMaximumCraftablePreview(ordinary, 1));
+        assertFalse(DynamicRecipePatternRegistry.canBypassDynamicPatternMaximumCraftablePreview(large, 0));
+        assertTrue(DynamicRecipePatternRegistry.canBypassDynamicPatternMaximumCraftablePreview(large, 1));
+        assertFalse(DynamicRecipePatternRegistry.canBypassDynamicPatternMaximumCraftablePreview(large, 2));
     }
 
     private static DynamicRecipePatternDetails ordinaryPattern() {

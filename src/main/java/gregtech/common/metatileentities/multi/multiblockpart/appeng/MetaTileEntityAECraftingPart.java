@@ -1,5 +1,6 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.integration.ae2.ExactPatternInputRegistry;
 import applygray.integration.ae2.ItemHandlerInternalInventory;
 
 import gregtech.api.capability.DualHandler;
@@ -323,6 +324,9 @@ public abstract class MetaTileEntityAECraftingPart extends MetaTileEntityAEHosta
                 undecodablePatternCount++;
             }
             patternDetails.set(i, detail);
+            if (detail != null) {
+                ExactPatternInputRegistry.registerPattern(detail);
+            }
         }
 
         logUndecodablePatterns(storedPatternCount, undecodablePatternCount);

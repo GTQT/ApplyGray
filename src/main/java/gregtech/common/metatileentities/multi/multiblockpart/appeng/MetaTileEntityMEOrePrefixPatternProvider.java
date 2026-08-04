@@ -2,6 +2,7 @@ package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
 import applygray.api.mui.ApplyGrayGuiTextures;
 import applygray.client.renderer.texture.ApplyGrayTextures;
+import applygray.integration.ae2.ExactPatternInputRegistry;
 
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.MetaTileEntity;
@@ -34,6 +35,7 @@ import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.ItemStackHandler;
 
+import ae2.api.crafting.IPatternDetails;
 import ae2.api.crafting.PatternDetailsHelper;
 import ae2.api.stacks.KeyCounter;
 import codechicken.lib.render.CCRenderState;
@@ -218,7 +220,11 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                 continue;
             }
 
-            patternDetails.add(i, PatternDetailsHelper.decodePattern(pattern, getWorld()));
+            IPatternDetails detail = PatternDetailsHelper.decodePattern(pattern, getWorld());
+            patternDetails.add(i, detail);
+            if (detail != null) {
+                ExactPatternInputRegistry.registerPattern(detail);
+            }
         }
     }
 

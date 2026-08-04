@@ -14,6 +14,7 @@ import com.google.common.math.LongMath;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
@@ -21,7 +22,9 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 /** Inserts bounded large RecipeMap candidates before AE2 expands their input branches. */
 @Mixin(value = CraftingTreeNode.class, remap = false)
@@ -85,26 +88,59 @@ public abstract class MixinCraftingTreeNodeLargePattern {
     }
 
     /**
-     * A one-run temporary batch is an atomic availability question: its actual request already runs in AE2's child
-     * simulation state, which is applied only after output was produced. Avoid the generic maximum-craftable preview
-     * rebuilding the same recursive tree immediately before that request. Multi-run batches retain AE2's normal
-     * partial-availability behavior.
+     * A one-run dynamic RecipeMap pattern is an atomic availability question: its actual request already runs in
+     * AE2's child simulation state, which is applied only after output was produced. Avoid the generic
+     * maximum-craftable preview rebuilding the same recursive tree immediately before that request. Multi-run and
+     * quantity-limited patterns retain AE2's normal partial-availability behavior.
      */
     @Inject(method = "lambda$requestCraftingBranch$0", at = @At("HEAD"), cancellable = true)
-    private static void applygray$useAtomicLargePatternAttempt(CraftingTreeProcess process,
-                                                                 CraftingSimulationState inventory,
-                                                                 long requestedPatternRuns,
-                                                                 CallbackInfoReturnable<Long> cir) {
-        if (!DynamicRecipePatternRegistry.canBypassLargePatternMaximumCraftablePreview(
-                process.getDetails(), requestedPatternRuns)) {
+    private static void applygray$useAtomicDynamicPatternAttempt(CraftingTreeProcess process,
+                                                                   CraftingSimulationState inventory,
+                                                                   long requestedPatternRuns,
+                                                                   CallbackInfoReturnable<Long> cir) {
+        boolean limitsQuantity = ((AccessorCraftingTreeProcess) process).applygray$limitsQuantity();
+        IPatternDetails details = process.getDetails();
+        if (limitsQuantity) {
             return;
         }
-
-        DynamicRecipePatternRegistry.recordLargePatternMaximumCraftablePreviewBypass();
-        cir.setReturnValue(requestedPatternRuns);
+        if (DynamicRecipePatternRegistry.canBypassDynamicPatternMaximumCraftablePreview(details,
+                requestedPatternRuns)) {
+            DynamicRecipePatternRegistry.recordDynamicPatternMaximumCraftablePreviewBypass(process, details,
+                    requestedPatternRuns, false);
+            cir.setReturnValue(requestedPatternRuns);
+            return;
+        }
+        if (DynamicRecipePatternRegistry.canBypassPatternMaximumCraftablePreview(details, requestedPatternRuns,
+                applygray$collectInputCandidateDetails(process))) {
+            DynamicRecipePatternRegistry.recordOrdinaryPatternMaximumCraftablePreviewBypass();
+            cir.setReturnValue(requestedPatternRuns);
+        }
     }
 
-    /** Times only the generic AE2 preview calls that remain after the one-run large-pattern bypass. */
+    /** Builds the per-input candidate lists of an ApplyGray-hosted ordinary pattern, without recursing. */
+    @Unique
+    private static List<List<IPatternDetails>> applygray$collectInputCandidateDetails(CraftingTreeProcess process) {
+        List<List<IPatternDetails>> candidatesPerInput = new ArrayList<>();
+        for (CraftingTreeNode inputNode :
+                ((AccessorCraftingTreeProcess) process).applygray$getInputNodes().keySet()) {
+            List<IPatternDetails> candidates = new ArrayList<>();
+            AccessorCraftingTreeNode accessor = (AccessorCraftingTreeNode) inputNode;
+            List<CraftingTreeProcess> children = accessor.applygray$getChildProcesses();
+            if (children == null) {
+                accessor.applygray$buildChildPatterns();
+                children = accessor.applygray$getChildProcesses();
+            }
+            if (children != null) {
+                for (CraftingTreeProcess child : children) {
+                    candidates.add(child.getDetails());
+                }
+            }
+            candidatesPerInput.add(candidates);
+        }
+        return candidatesPerInput;
+    }
+
+    /** Times only the generic AE2 preview calls that remain after the one-run dynamic-pattern bypass. */
     @Redirect(method = "lambda$requestCraftingBranch$0", at = @At(value = "INVOKE",
             target = "Lae2/crafting/CraftingTreeProcess;getMaximumCraftableTimes(Lae2/crafting/inv/CraftingSimulationState;J)J"))
     private static long applygray$timeMaximumCraftablePreview(CraftingTreeProcess process,
@@ -112,12 +148,13 @@ public abstract class MixinCraftingTreeNodeLargePattern {
                                                                 long requestedPatternRuns)
             throws InterruptedException {
         long startedAtNanos = System.nanoTime();
+        boolean limitsQuantity = ((AccessorCraftingTreeProcess) process).applygray$limitsQuantity();
         try {
             return ((AccessorCraftingTreeProcess) process).applygray$getMaximumCraftableTimes(inventory,
                     requestedPatternRuns);
         } finally {
-            DynamicRecipePatternRegistry.recordMaximumCraftablePreview(process.getDetails(),
-                    System.nanoTime() - startedAtNanos);
+            DynamicRecipePatternRegistry.recordMaximumCraftablePreview(process, process.getDetails(),
+                    requestedPatternRuns, limitsQuantity, System.nanoTime() - startedAtNanos);
         }
     }
 
@@ -129,11 +166,14 @@ public abstract class MixinCraftingTreeNodeLargePattern {
                                                                CraftingSimulationState inventory,
                                                                long requestedPatternRuns)
             throws CraftBranchFailure, InterruptedException {
-        boolean timing = DynamicRecipePatternRegistry.beginCraftingProcessRequest(process.getDetails());
+        boolean timing = DynamicRecipePatternRegistry.beginCraftingProcessRequest(process, process.getDetails(),
+                requestedPatternRuns, ((AccessorCraftingTreeProcess) process).applygray$limitsQuantity());
+        boolean completed = false;
         try {
             ((AccessorCraftingTreeProcess) process).applygray$request(inventory, requestedPatternRuns);
+            completed = true;
         } finally {
-            if (timing) DynamicRecipePatternRegistry.finishCraftingProcessRequest();
+            if (timing) DynamicRecipePatternRegistry.finishCraftingProcessRequest(completed);
         }
     }
 }

@@ -9,6 +9,7 @@
   "mixins": [
     "supergiant.AccessorCraftingCalculation",
     "supergiant.AccessorCraftingTreeProcess",
+    "supergiant.AccessorCraftingTreeNode",
     "supergiant.AccessorExecutingCraftingJob",
     "supergiant.MixinCraftingCPUCluster",
     "supergiant.MixinCraftingCalculationLargePatternMetrics",

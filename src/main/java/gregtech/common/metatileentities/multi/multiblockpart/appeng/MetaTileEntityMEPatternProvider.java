@@ -1966,6 +1966,14 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
                     ((MetaTileEntityMERecipeMapPatternProvider) owner).isRecipeBindingCurrent(binding);
         }
 
+        @Nullable
+        public String getRecipeBindingUnavailableReason() {
+            RecipeBinding binding = getRecipeBinding();
+            if (binding == null) return null;
+            return owner instanceof MetaTileEntityMERecipeMapPatternProvider recipeMapOwner ?
+                    recipeMapOwner.getRecipeBindingUnavailableReason(binding) : null;
+        }
+
         public void setSignature(BufferSignature signature) {
             this.signature = signature;
             this.acceptedBoundPushLogged = false;
@@ -2392,6 +2400,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
             @Override
             public boolean isRecipeBindingCurrent() {
                 return buffer.isRecipeBindingCurrent();
+            }
+
+            @Override
+            public @Nullable String getRecipeBindingUnavailableReason() {
+                return buffer.getRecipeBindingUnavailableReason();
             }
 
             @Override

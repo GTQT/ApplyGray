@@ -54,6 +54,7 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
+import ae2.crafting.pattern.AEProcessingPattern;
 import ae2.integration.data.CraftingTreeStackRegistry;
 import ae2.integration.data.LiteCraftTreeNode;
 import ae2.integration.data.LiteCraftTreeProc;
@@ -117,6 +118,9 @@ public final class DynamicRecipePatternRegistry {
     private static final ThreadLocal<Deque<CraftingProcessRequestTiming>> CRAFTING_PROCESS_REQUEST_TIMINGS =
             ThreadLocal.withInitial(ArrayDeque::new);
     private static final long SLOW_LARGE_PATTERN_CALCULATION_NANOS = 1_000_000_000L;
+    private static final int MAX_LARGE_PATTERN_PROCESS_HOTSPOTS = 6;
+    private static final int MAX_LARGE_PATTERN_PROCESS_EDGES = 8;
+    private static final int MAX_NON_DYNAMIC_MAXIMUM_PREVIEW_HOTSPOTS = 6;
     /**
      * Identifies the worker calculation launched by the explicit rebuild action. A grid can have several concurrent
      * calculations, so only the calculation for this request may consume the pending full rebuild.
@@ -145,6 +149,35 @@ public final class DynamicRecipePatternRegistry {
     private static final int MAX_PATTERN_GENERATION_CYCLE_RECOVERY_ATTEMPTS = 32;
     /** A larger quota that exposes no new route frontier is a replay, not useful additional route exploration. */
     private static final int MAX_IDENTICAL_ROUTE_REFINEMENT_REPLAYS = 2;
+
+    private static String abbreviateLargePatternRecipeKey(String recipeKey) {
+        if (recipeKey == null) return "<none>";
+        return recipeKey.length() <= 72 ? recipeKey :
+                recipeKey.substring(0, 32) + "..." + recipeKey.substring(recipeKey.length() - 32);
+    }
+
+    /** Produces a compact item-aware key for low-frequency planner diagnostics. */
+    private static String describeLargePatternDiagnosticKey(AEKey key) {
+        if (key instanceof AEItemKey itemKey) {
+            ItemStack stack = itemKey.getReadOnlyStack();
+            String itemId = String.valueOf(stack.getItem().getRegistryName());
+            String keyHash = RecipeFingerprint.sha256(RecipeFingerprint.describeKey(key)).substring(0, 12);
+            return itemId + '@' + stack.getMetadata() + '#' + keyHash;
+        }
+        return abbreviateLargePatternRecipeKey(RecipeFingerprint.describeKey(key));
+    }
+
+    private static String describeLargePatternDiagnosticInputs(IPatternDetails details) {
+        StringBuilder result = new StringBuilder("[");
+        IPatternDetails.IInput[] inputs = details.getInputs();
+        for (int index = 0; index < inputs.length; index++) {
+            if (index > 0) result.append(',');
+            GenericStack[] options = inputs[index].possibleInputs();
+            result.append(options.length == 0 ? "<none>" : describeLargePatternDiagnosticKey(options[0].what()))
+                    .append('x').append(inputs[index].getMultiplier());
+        }
+        return result.append(']').toString();
+    }
 
     /**
      * The standalone deadline bounds recursive scoring only. Once it expires, the already-reachable selected tree
@@ -175,14 +208,162 @@ public final class DynamicRecipePatternRegistry {
 
     private static final class CraftingProcessRequestTiming {
 
+        private final Object process;
         private final IPatternDetails details;
+        private final long requestedPatternRuns;
+        private final boolean limitsQuantity;
         private final long startedAtNanos;
         private long childNanos;
 
-        private CraftingProcessRequestTiming(IPatternDetails details) {
+        private CraftingProcessRequestTiming(Object process, IPatternDetails details, long requestedPatternRuns,
+                                             boolean limitsQuantity) {
+            this.process = process;
             this.details = details;
+            this.requestedPatternRuns = requestedPatternRuns;
+            this.limitsQuantity = limitsQuantity;
             this.startedAtNanos = System.nanoTime();
         }
+    }
+
+    /**
+     * Aggregates ordinary AE2 patterns whose generic availability preview still re-enters a dynamic RecipeMap tree.
+     * This is emitted only with the slow-calculation diagnostic, never once per recursive preview.
+     */
+    private static final class NonDynamicMaximumPreviewProfile {
+
+        private final String detailType;
+        private final String definitionFingerprint;
+        private final String primaryOutput;
+        private final String inputSignature;
+        private final int inputCount;
+        private final int outputCount;
+        private final Map<Object, Boolean> processInstances = new IdentityHashMap<>();
+        private int calls;
+        private int limitedCalls;
+        private long elapsedNanos;
+        private long smallestRequestedRuns = Long.MAX_VALUE;
+        private long largestRequestedRuns;
+
+        private NonDynamicMaximumPreviewProfile(IPatternDetails details) {
+            String simpleName = details.getClass().getSimpleName();
+            this.detailType = simpleName.isEmpty() ? details.getClass().getName() : simpleName;
+            this.definitionFingerprint = Integer.toUnsignedString(details.getDefinition().hashCode(), 16);
+            this.primaryOutput = describeLargePatternDiagnosticKey(details.getPrimaryOutput().what()) + 'x' +
+                    details.getPrimaryOutput().amount();
+            this.inputSignature = describeLargePatternDiagnosticInputs(details);
+            this.inputCount = details.getInputs().length;
+            this.outputCount = details.getOutputs().size();
+        }
+
+        private void record(Object process, long requestedPatternRuns, boolean limitsQuantity, long elapsedNanos) {
+            if (process != null) processInstances.put(process, Boolean.TRUE);
+            calls++;
+            if (limitsQuantity) limitedCalls++;
+            this.elapsedNanos += Math.max(0L, elapsedNanos);
+            if (requestedPatternRuns > 0) {
+                smallestRequestedRuns = Math.min(smallestRequestedRuns, requestedPatternRuns);
+                largestRequestedRuns = Math.max(largestRequestedRuns, requestedPatternRuns);
+            }
+        }
+
+        private String describe() {
+            String runRange = smallestRequestedRuns == Long.MAX_VALUE ? "n/a" :
+                    smallestRequestedRuns == largestRequestedRuns ? Long.toString(smallestRequestedRuns) :
+                            smallestRequestedRuns + ".." + largestRequestedRuns;
+            return "{type=" + detailType + " definition=" + definitionFingerprint + " output=" + primaryOutput +
+                    " inputs=" + inputCount + " outputs=" + outputCount + " processes=" + processInstances.size() +
+                    " calls=" + calls + " limited=" + limitedCalls + " previewMs=" + elapsedNanos / 1_000_000L +
+                    " requestedRuns=" + runRange + " inputKeys=" + inputSignature + '}';
+        }
+    }
+
+    /** Aggregates hot temporary-pattern branches without emitting one record for every recursive AE2 request. */
+    private static final class LargePatternProcessProfile {
+
+        private final String recipeMapName;
+        private final String recipeKey;
+        private final int multiplier;
+        private int requestCalls;
+        private int failedRequestCalls;
+        private int oneRunRequestCalls;
+        private int limitedRequestCalls;
+        private long requestSelfNanos;
+        private int maximumPreviewCalls;
+        private int limitedMaximumPreviewCalls;
+        private long maximumPreviewNanos;
+        private int maximumPreviewBypasses;
+        private int limitedMaximumPreviewBypasses;
+        private final Map<Object, Boolean> processInstances = new IdentityHashMap<>();
+        private long smallestRequestedRuns = Long.MAX_VALUE;
+        private long largestRequestedRuns;
+
+        private LargePatternProcessProfile(DynamicRecipePatternDetails details) {
+            this.recipeMapName = details.getRecipeMapName();
+            this.recipeKey = details.getRecipeKey();
+            this.multiplier = details.getRecipeRunsPerPattern();
+        }
+
+        private void recordRequest(Object process, long requestedPatternRuns, boolean limitsQuantity, boolean completed,
+                                   long selfNanos) {
+            recordProcessInstance(process);
+            requestCalls++;
+            if (!completed) failedRequestCalls++;
+            if (requestedPatternRuns == 1) oneRunRequestCalls++;
+            if (limitsQuantity) limitedRequestCalls++;
+            requestSelfNanos += Math.max(0L, selfNanos);
+            recordRequestedRuns(requestedPatternRuns);
+        }
+
+        private void recordMaximumPreview(Object process, long requestedPatternRuns, boolean limitsQuantity,
+                                          long elapsedNanos) {
+            recordProcessInstance(process);
+            maximumPreviewCalls++;
+            if (limitsQuantity) limitedMaximumPreviewCalls++;
+            maximumPreviewNanos += Math.max(0L, elapsedNanos);
+            recordRequestedRuns(requestedPatternRuns);
+        }
+
+        private void recordMaximumPreviewBypass(Object process, long requestedPatternRuns, boolean limitsQuantity) {
+            recordProcessInstance(process);
+            maximumPreviewBypasses++;
+            if (limitsQuantity) limitedMaximumPreviewBypasses++;
+            recordRequestedRuns(requestedPatternRuns);
+        }
+
+        private void recordRequestedRuns(long requestedPatternRuns) {
+            if (requestedPatternRuns <= 0) return;
+            smallestRequestedRuns = Math.min(smallestRequestedRuns, requestedPatternRuns);
+            largestRequestedRuns = Math.max(largestRequestedRuns, requestedPatternRuns);
+        }
+
+        private void recordProcessInstance(Object process) {
+            if (process != null) processInstances.put(process, Boolean.TRUE);
+        }
+
+        private String describe() {
+            String key = abbreviateLargePatternRecipeKey(recipeKey);
+            String runRange = smallestRequestedRuns == Long.MAX_VALUE ? "n/a" :
+                    smallestRequestedRuns == largestRequestedRuns ? Long.toString(smallestRequestedRuns) :
+                            smallestRequestedRuns + ".." + largestRequestedRuns;
+            return "{map=" + recipeMapName + " batch=" + multiplier + " key=" + key +
+                    " processes=" + processInstances.size() + " requests=" + requestCalls + " failed=" + failedRequestCalls +
+                    " oneRun=" + oneRunRequestCalls + " limited=" + limitedRequestCalls +
+                    " requestSelfMs=" + requestSelfNanos / 1_000_000L +
+                    " previewCalls=" + maximumPreviewCalls +
+                    " previewLimited=" + limitedMaximumPreviewCalls +
+                    " previewMs=" + maximumPreviewNanos / 1_000_000L +
+                    " previewBypasses=" + maximumPreviewBypasses +
+                    " bypassLimited=" + limitedMaximumPreviewBypasses +
+                    " requestedRuns=" + runRange + '}';
+        }
+
+        private String describeNode() {
+            return recipeMapName + "#batch=" + multiplier + '[' + abbreviateLargePatternRecipeKey(recipeKey) + ']';
+        }
+    }
+
+    /** One nested direct-process edge seen while AE2 expands a temporary large pattern. */
+    private record LargePatternProcessEdge(String parentRecipeKey, String childRecipeKey) {
     }
 
     private static final class LargePatternCalculationSummary {
@@ -198,6 +379,7 @@ public final class DynamicRecipePatternRegistry {
         private int exactDynamicInputTemplateBypasses;
         private int exactDynamicInputCacheBypasses;
         private int maximumCraftablePreviewBypasses;
+        private int ordinaryMaximumCraftablePreviewBypasses;
         private int candidateExpansionCalls;
         private long candidateExpansionNanos;
         private int exactDynamicInputExtractionCalls;
@@ -212,6 +394,13 @@ public final class DynamicRecipePatternRegistry {
         private long dynamicCraftingProcessRequestSelfNanos;
         private int largeCraftingProcessRequestCalls;
         private long largeCraftingProcessRequestSelfNanos;
+        private final Map<String, LargePatternProcessProfile> largePatternProcessProfiles = new HashMap<>();
+        /** Identity keys preserve distinct encoded patterns that happen to share one visible output. */
+        private final Map<IPatternDetails, NonDynamicMaximumPreviewProfile> nonDynamicMaximumPreviewProfiles =
+                new IdentityHashMap<>();
+        private final Map<LargePatternProcessEdge, Integer> largePatternProcessEdges = new HashMap<>();
+        private int maximumCraftingProcessRequestDepth;
+        private int reentrantCraftingProcessRequestCalls;
         private boolean slowProgressLogged;
 
         private LargePatternCalculationSummary(AEKey rootTarget) {
@@ -240,8 +429,15 @@ public final class DynamicRecipePatternRegistry {
             exactDynamicInputCacheBypasses++;
         }
 
-        private void recordMaximumCraftablePreviewBypass() {
+        private void recordMaximumCraftablePreviewBypass(Object process, IPatternDetails details, long requestedPatternRuns,
+                                                         boolean limitsQuantity) {
             maximumCraftablePreviewBypasses++;
+            LargePatternProcessProfile profile = getLargePatternProcessProfile(details);
+            if (profile != null) profile.recordMaximumPreviewBypass(process, requestedPatternRuns, limitsQuantity);
+        }
+
+        private void recordOrdinaryMaximumCraftablePreviewBypass() {
+            ordinaryMaximumCraftablePreviewBypasses++;
         }
 
         private void recordCandidateExpansion(long elapsedNanos) {
@@ -254,17 +450,24 @@ public final class DynamicRecipePatternRegistry {
             exactDynamicInputExtractionNanos += Math.max(0L, elapsedNanos);
         }
 
-        private void recordMaximumCraftablePreview(IPatternDetails details, long elapsedNanos) {
+        private void recordMaximumCraftablePreview(Object process, IPatternDetails details, long requestedPatternRuns,
+                                                   boolean limitsQuantity, long elapsedNanos) {
             long elapsed = Math.max(0L, elapsedNanos);
             maximumCraftablePreviewCalls++;
             maximumCraftablePreviewNanos += elapsed;
             if (details instanceof DynamicRecipePatternDetails) {
                 dynamicMaximumCraftablePreviewCalls++;
                 dynamicMaximumCraftablePreviewNanos += elapsed;
+            } else {
+                nonDynamicMaximumPreviewProfiles.computeIfAbsent(details, NonDynamicMaximumPreviewProfile::new)
+                        .record(process, requestedPatternRuns, limitsQuantity, elapsed);
             }
+            LargePatternProcessProfile profile = getLargePatternProcessProfile(details);
+            if (profile != null) profile.recordMaximumPreview(process, requestedPatternRuns, limitsQuantity, elapsed);
         }
 
-        private void recordCraftingProcessRequest(IPatternDetails details, long selfNanos) {
+        private void recordCraftingProcessRequest(Object process, IPatternDetails details, long requestedPatternRuns,
+                                                  boolean limitsQuantity, boolean completed, long selfNanos) {
             long self = Math.max(0L, selfNanos);
             craftingProcessRequestCalls++;
             craftingProcessRequestSelfNanos += self;
@@ -275,7 +478,105 @@ public final class DynamicRecipePatternRegistry {
             if (dynamic.isLargePattern()) {
                 largeCraftingProcessRequestCalls++;
                 largeCraftingProcessRequestSelfNanos += self;
+                getLargePatternProcessProfile(dynamic).recordRequest(process, requestedPatternRuns, limitsQuantity,
+                        completed, self);
             }
+        }
+
+        private void recordCraftingProcessRequestStart(CraftingProcessRequestTiming parent, IPatternDetails details,
+                                                       int requestDepth, boolean reentrant) {
+            maximumCraftingProcessRequestDepth = Math.max(maximumCraftingProcessRequestDepth, requestDepth);
+            if (reentrant) reentrantCraftingProcessRequestCalls++;
+            if (parent == null) return;
+
+            DynamicRecipePatternDetails parentDynamic = getLargeDynamicPattern(parent.details);
+            DynamicRecipePatternDetails childDynamic = getLargeDynamicPattern(details);
+            if (parentDynamic == null || childDynamic == null) return;
+
+            LargePatternProcessEdge edge = new LargePatternProcessEdge(parentDynamic.getRecipeKey(),
+                    childDynamic.getRecipeKey());
+            largePatternProcessEdges.merge(edge, 1, Integer::sum);
+        }
+
+        private LargePatternProcessProfile getLargePatternProcessProfile(IPatternDetails details) {
+            DynamicRecipePatternDetails dynamic = getLargeDynamicPattern(details);
+            return dynamic == null ? null : getLargePatternProcessProfile(dynamic);
+        }
+
+        @Nullable
+        private DynamicRecipePatternDetails getLargeDynamicPattern(IPatternDetails details) {
+            return details instanceof DynamicRecipePatternDetails dynamic && dynamic.isLargePattern() ? dynamic : null;
+        }
+
+        private LargePatternProcessProfile getLargePatternProcessProfile(DynamicRecipePatternDetails details) {
+            return largePatternProcessProfiles.computeIfAbsent(details.getRecipeKey(),
+                    ignored -> new LargePatternProcessProfile(details));
+        }
+
+        private boolean hasLargePatternProcessProfiles() {
+            return !largePatternProcessProfiles.isEmpty();
+        }
+
+        private boolean hasNonDynamicMaximumPreviewProfiles() {
+            return !nonDynamicMaximumPreviewProfiles.isEmpty();
+        }
+
+        private String describeLargePatternProcessHotspots() {
+            List<LargePatternProcessProfile> profiles = new ArrayList<>(largePatternProcessProfiles.values());
+            profiles.sort((left, right) -> {
+                int comparison = Integer.compare(right.requestCalls, left.requestCalls);
+                return comparison != 0 ? comparison : Long.compare(right.requestSelfNanos, left.requestSelfNanos);
+            });
+
+            StringBuilder description = new StringBuilder("unique=").append(profiles.size()).append(" top=[");
+            int limit = Math.min(MAX_LARGE_PATTERN_PROCESS_HOTSPOTS, profiles.size());
+            for (int index = 0; index < limit; index++) {
+                if (index > 0) description.append(", ");
+                description.append(profiles.get(index).describe());
+            }
+            return description.append(']').toString();
+        }
+
+        private String describeLargePatternProcessGraph() {
+            List<Map.Entry<LargePatternProcessEdge, Integer>> edges = new ArrayList<>(largePatternProcessEdges.entrySet());
+            edges.sort((left, right) -> Integer.compare(right.getValue(), left.getValue()));
+
+            StringBuilder description = new StringBuilder("maxDepth=")
+                    .append(maximumCraftingProcessRequestDepth)
+                    .append(" reentrantCalls=").append(reentrantCraftingProcessRequestCalls)
+                    .append(" edges=[");
+            int limit = Math.min(MAX_LARGE_PATTERN_PROCESS_EDGES, edges.size());
+            for (int index = 0; index < limit; index++) {
+                if (index > 0) description.append(", ");
+                Map.Entry<LargePatternProcessEdge, Integer> entry = edges.get(index);
+                LargePatternProcessEdge edge = entry.getKey();
+                description.append(describeLargePatternProcessNode(edge.parentRecipeKey()))
+                        .append(" -> ").append(describeLargePatternProcessNode(edge.childRecipeKey()))
+                        .append(" calls=").append(entry.getValue());
+            }
+            return description.append(']').toString();
+        }
+
+        private String describeNonDynamicMaximumPreviewHotspots() {
+            List<NonDynamicMaximumPreviewProfile> profiles =
+                    new ArrayList<>(nonDynamicMaximumPreviewProfiles.values());
+            profiles.sort((left, right) -> {
+                int comparison = Long.compare(right.elapsedNanos, left.elapsedNanos);
+                return comparison != 0 ? comparison : Integer.compare(right.calls, left.calls);
+            });
+
+            StringBuilder description = new StringBuilder("unique=").append(profiles.size()).append(" top=[");
+            int limit = Math.min(MAX_NON_DYNAMIC_MAXIMUM_PREVIEW_HOTSPOTS, profiles.size());
+            for (int index = 0; index < limit; index++) {
+                if (index > 0) description.append(", ");
+                description.append(profiles.get(index).describe());
+            }
+            return description.append(']').toString();
+        }
+
+        private String describeLargePatternProcessNode(String recipeKey) {
+            LargePatternProcessProfile profile = largePatternProcessProfiles.get(recipeKey);
+            return profile == null ? abbreviateLargePatternRecipeKey(recipeKey) : profile.describeNode();
         }
 
         private boolean shouldLogSlowProgress() {
@@ -380,8 +681,9 @@ public final class DynamicRecipePatternRegistry {
         ApplyGrayMod.LOGGER.info("RecipeMap large-pattern calculation root={} elapsedMs={} candidateNodes={} " +
                         "candidates={} dynamicCandidates={} replacements={} largestOrdinaryRuns={} " +
                         "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={} " +
-                        "maximumCraftablePreviewBypasses={} candidateExpansionMs={} candidateExpansionCalls={} " +
-                        "exactInputExtractionMs={} exactInputExtractionCalls={} maximumPreviewMs={} " +
+                        "maximumCraftablePreviewBypasses={} ordinaryMaximumCraftablePreviewBypasses={} " +
+                        "candidateExpansionMs={} candidateExpansionCalls={} exactInputExtractionMs={} " +
+                        "exactInputExtractionCalls={} maximumPreviewMs={} " +
                         "maximumPreviewCalls={} dynamicPreviewMs={} dynamicPreviewCalls={} processSelfMs={} " +
                         "processCalls={} dynamicProcessSelfMs={} dynamicProcessCalls={} largeProcessSelfMs={} " +
                         "largeProcessCalls={}",
@@ -389,7 +691,7 @@ public final class DynamicRecipePatternRegistry {
                 summary.totalCandidates, summary.dynamicCandidates, summary.replacedCandidates,
                 summary.largestOrdinaryRunCount, summary.largestMultiplier,
                 summary.exactDynamicInputTemplateBypasses, summary.exactDynamicInputCacheBypasses,
-                summary.maximumCraftablePreviewBypasses, summary.candidateExpansionNanos / 1_000_000L,
+                summary.maximumCraftablePreviewBypasses, summary.ordinaryMaximumCraftablePreviewBypasses, summary.candidateExpansionNanos / 1_000_000L,
                 summary.candidateExpansionCalls, summary.exactDynamicInputExtractionNanos / 1_000_000L,
                 summary.exactDynamicInputExtractionCalls, summary.maximumCraftablePreviewNanos / 1_000_000L,
                 summary.maximumCraftablePreviewCalls,
@@ -400,6 +702,17 @@ public final class DynamicRecipePatternRegistry {
                 summary.dynamicCraftingProcessRequestCalls,
                 summary.largeCraftingProcessRequestSelfNanos / 1_000_000L,
                 summary.largeCraftingProcessRequestCalls);
+        if (elapsedNanos >= SLOW_LARGE_PATTERN_CALCULATION_NANOS && summary.hasLargePatternProcessProfiles()) {
+            ApplyGrayMod.LOGGER.info("RecipeMap large-pattern process hotspots root={} {}", summary.rootTarget,
+                    summary.describeLargePatternProcessHotspots());
+            ApplyGrayMod.LOGGER.info("RecipeMap large-pattern process graph root={} {}", summary.rootTarget,
+                    summary.describeLargePatternProcessGraph());
+        }
+        if (elapsedNanos >= SLOW_LARGE_PATTERN_CALCULATION_NANOS &&
+                summary.hasNonDynamicMaximumPreviewProfiles()) {
+            ApplyGrayMod.LOGGER.info("RecipeMap large-pattern non-dynamic maximum-preview hotspots root={} {}",
+                    summary.rootTarget, summary.describeNonDynamicMaximumPreviewHotspots());
+        }
     }
 
     /** Counts the low-level fuzzy-template bypasses used by frozen dynamic RecipeMap inputs. */
@@ -420,20 +733,62 @@ public final class DynamicRecipePatternRegistry {
     }
 
     /**
-     * A temporary large detail representing exactly one AE2 execution can use the normal branch request itself as
+     * A dynamic RecipeMap detail representing exactly one AE2 execution can use the normal branch request itself as
      * the availability test. AE2 already performs that request in an isolated child simulation state and commits it
      * only after it produced output. More than one execution must retain AE2's partial-availability calculation.
      */
-    public static boolean canBypassLargePatternMaximumCraftablePreview(IPatternDetails details,
-                                                                         long requestedPatternRuns) {
-        return requestedPatternRuns == 1 && details instanceof DynamicRecipePatternDetails dynamic &&
-                dynamic.isLargePattern();
+    public static boolean canBypassDynamicPatternMaximumCraftablePreview(IPatternDetails details,
+                                                                           long requestedPatternRuns) {
+        return requestedPatternRuns == 1 && details instanceof DynamicRecipePatternDetails;
+    }
+
+    /**
+     * Whether the maximum-craftable preview may be skipped for this process.
+     *
+     * <p>One-run dynamic patterns are atomic and verify availability during the request itself. Ordinary processing
+     * patterns decoded by an ApplyGray provider may also skip the preview when every input can only be satisfied by
+     * direct stock or by atomic dynamic patterns: the request then performs exactly the recursive work the preview
+     * would have duplicated, and a request failure falls back to the node's other candidates just like an
+     * underestimated preview would. Patterns whose input subtree contains other ordinary patterns keep AE2's accurate
+     * (recursive) preview because they can legally consume a partial allocation across several candidates.</p>
+     */
+    public static boolean canBypassPatternMaximumCraftablePreview(IPatternDetails details, long requestedPatternRuns,
+                                                                  List<List<IPatternDetails>> candidatesPerInput) {
+        if (canBypassDynamicPatternMaximumCraftablePreview(details, requestedPatternRuns)) {
+            return true;
+        }
+        if (!(details instanceof AEProcessingPattern) || !ExactPatternInputRegistry.isRegisteredPattern(details)) {
+            return false;
+        }
+        return isOrdinaryPatternAtomicSafe(candidatesPerInput);
+    }
+
+    /** True when every input slot of the pattern can be satisfied without any non-dynamic child pattern. */
+    static boolean isOrdinaryPatternAtomicSafe(List<List<IPatternDetails>> candidatesPerInput) {
+        if (candidatesPerInput == null) return false;
+        for (List<IPatternDetails> candidates : candidatesPerInput) {
+            if (candidates == null) return false;
+            for (IPatternDetails candidate : candidates) {
+                if (!(candidate instanceof DynamicRecipePatternDetails)) return false;
+            }
+        }
+        return true;
+    }
+
+    /** Counts one skipped preview for an ApplyGray-hosted ordinary processing pattern. */
+    public static void recordOrdinaryPatternMaximumCraftablePreviewBypass() {
+        LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
+        if (summary != null) summary.recordOrdinaryMaximumCraftablePreviewBypass();
     }
 
     /** Counts the bounded atomic-attempt path once per branch, for the calculation-level diagnostic only. */
-    public static void recordLargePatternMaximumCraftablePreviewBypass() {
+    public static void recordDynamicPatternMaximumCraftablePreviewBypass(Object process, IPatternDetails details,
+                                                                          long requestedPatternRuns,
+                                                                          boolean limitsQuantity) {
         LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
-        if (summary != null) summary.recordMaximumCraftablePreviewBypass();
+        if (summary != null) {
+            summary.recordMaximumCraftablePreviewBypass(process, details, requestedPatternRuns, limitsQuantity);
+        }
     }
 
     /** Records the aggregate time spent replacing ordinary candidates with task-local large patterns. */
@@ -448,21 +803,36 @@ public final class DynamicRecipePatternRegistry {
         if (summary != null) summary.recordExactDynamicInputExtraction(elapsedNanos);
     }
 
-    /** Records an AE2 maximum-craftable preview that was not replaced by the atomic large-pattern path. */
-    public static void recordMaximumCraftablePreview(IPatternDetails details, long elapsedNanos) {
+    /** Records an AE2 maximum-craftable preview that was not replaced by the atomic dynamic-pattern path. */
+    public static void recordMaximumCraftablePreview(Object process, IPatternDetails details, long requestedPatternRuns,
+                                                      boolean limitsQuantity, long elapsedNanos) {
         LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
-        if (summary != null) summary.recordMaximumCraftablePreview(details, elapsedNanos);
+        if (summary != null) {
+            summary.recordMaximumCraftablePreview(process, details, requestedPatternRuns, limitsQuantity, elapsedNanos);
+        }
     }
 
     /** Starts one nested AE2 process-request timing scope only while this calculation's aggregate is active. */
-    public static boolean beginCraftingProcessRequest(IPatternDetails details) {
-        if (LARGE_PATTERN_CALCULATION_SUMMARY.get() == null) return false;
-        CRAFTING_PROCESS_REQUEST_TIMINGS.get().addFirst(new CraftingProcessRequestTiming(details));
+    public static boolean beginCraftingProcessRequest(Object process, IPatternDetails details, long requestedPatternRuns,
+                                                      boolean limitsQuantity) {
+        LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
+        if (summary == null) return false;
+        Deque<CraftingProcessRequestTiming> timings = CRAFTING_PROCESS_REQUEST_TIMINGS.get();
+        boolean reentrant = false;
+        for (CraftingProcessRequestTiming timing : timings) {
+            if (timing.process == process) {
+                reentrant = true;
+                break;
+            }
+        }
+        summary.recordCraftingProcessRequestStart(timings.peekFirst(), details, timings.size() + 1, reentrant);
+        timings.addFirst(new CraftingProcessRequestTiming(process, details,
+                requestedPatternRuns, limitsQuantity));
         return true;
     }
 
     /** Finishes a process request and attributes only its non-recursive work to the current detail type. */
-    public static void finishCraftingProcessRequest() {
+    public static void finishCraftingProcessRequest(boolean completed) {
         LargePatternCalculationSummary summary = LARGE_PATTERN_CALCULATION_SUMMARY.get();
         Deque<CraftingProcessRequestTiming> timings = CRAFTING_PROCESS_REQUEST_TIMINGS.get();
         if (summary == null || timings.isEmpty()) {
@@ -473,7 +843,8 @@ public final class DynamicRecipePatternRegistry {
         CraftingProcessRequestTiming timing = timings.removeFirst();
         long elapsedNanos = Math.max(0L, System.nanoTime() - timing.startedAtNanos);
         if (!timings.isEmpty()) timings.peekFirst().childNanos += elapsedNanos;
-        summary.recordCraftingProcessRequest(timing.details, elapsedNanos - timing.childNanos);
+        summary.recordCraftingProcessRequest(timing.process, timing.details, timing.requestedPatternRuns, timing.limitsQuantity,
+                completed, elapsedNanos - timing.childNanos);
         if (timings.isEmpty()) CRAFTING_PROCESS_REQUEST_TIMINGS.remove();
     }
 
@@ -1002,7 +1373,8 @@ public final class DynamicRecipePatternRegistry {
                     ApplyGrayMod.LOGGER.info("RecipeMap large-pattern calculation still running root={} candidateNodes={} " +
                                     "candidates={} dynamicCandidates={} replacements={} largestOrdinaryRuns={} " +
                                     "largestMultiplier={} exactInputTemplateBypasses={} exactInputCacheBypasses={} " +
-                                    "maximumCraftablePreviewBypasses={} candidateExpansionMs={} " +
+                                    "maximumCraftablePreviewBypasses={} ordinaryMaximumCraftablePreviewBypasses={} " +
+                                    "candidateExpansionMs={} " +
                                     "candidateExpansionCalls={} exactInputExtractionMs={} " +
                                     "exactInputExtractionCalls={} maximumPreviewMs={} maximumPreviewCalls={} " +
                                     "dynamicPreviewMs={} dynamicPreviewCalls={} processSelfMs={} processCalls={} " +
@@ -1012,6 +1384,7 @@ public final class DynamicRecipePatternRegistry {
                             summary.dynamicCandidates, summary.replacedCandidates, summary.largestOrdinaryRunCount,
                             summary.largestMultiplier, summary.exactDynamicInputTemplateBypasses,
                             summary.exactDynamicInputCacheBypasses, summary.maximumCraftablePreviewBypasses,
+                            summary.ordinaryMaximumCraftablePreviewBypasses,
                             summary.candidateExpansionNanos / 1_000_000L, summary.candidateExpansionCalls,
                             summary.exactDynamicInputExtractionNanos / 1_000_000L,
                             summary.exactDynamicInputExtractionCalls,

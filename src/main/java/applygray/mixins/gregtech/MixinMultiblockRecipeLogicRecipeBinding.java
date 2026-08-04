@@ -53,7 +53,8 @@ public abstract class MixinMultiblockRecipeLogicRecipeBinding {
         if (binding == null) return;
 
         if (!boundInput.isRecipeBindingCurrent()) {
-            warn(binding, "BINDING_UNAVAILABLE");
+            String reason = boundInput.getRecipeBindingUnavailableReason();
+            warn(binding, reason == null ? "BINDING_UNAVAILABLE" : reason);
             callback.setReturnValue(null);
             return;
         }

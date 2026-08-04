@@ -19,4 +19,13 @@ public interface IRecipeBoundInput extends IRecipeMapBoundInput {
     default boolean isRecipeBindingCurrent() {
         return true;
     }
+
+    /**
+     * Returns a stable reason code when {@link #isRecipeBindingCurrent()} is false, or {@code null} when the
+     * binding is current (or no reason is available).
+     */
+    @Nullable
+    default String getRecipeBindingUnavailableReason() {
+        return null;
+    }
 }

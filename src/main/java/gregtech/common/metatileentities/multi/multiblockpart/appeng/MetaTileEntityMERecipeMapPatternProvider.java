@@ -38,6 +38,7 @@ import ae2.api.networking.IGridNodeListener;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.KeyCounter;
 import com.cleanroommc.modularui.api.IPanelHandler;
+import org.jetbrains.annotations.Nullable;
 import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
@@ -883,19 +884,31 @@ public class MetaTileEntityMERecipeMapPatternProvider extends MetaTileEntityMEPa
      * and target output immediately before execution.
      */
     public boolean isRecipeBindingCurrent(RecipeBinding binding) {
-        if (binding == null ||
-                binding.getRecipeFingerprintVersion() != RecipeBinding.FINGERPRINT_VERSION ||
+        return getRecipeBindingUnavailableReason(binding) == null;
+    }
+
+    /**
+     * Distinguishes why a persisted binding cannot be executed right now, or {@code null} when it can. Recipe
+     * content reloads, controller route changes, and resolver failures all surface as distinct reason codes so a
+     * rejected execution can be attributed without guesswork.
+     */
+    @Nullable
+    public String getRecipeBindingUnavailableReason(RecipeBinding binding) {
+        if (binding == null) return "BINDING_NULL";
+        if (binding.getRecipeFingerprintVersion() != RecipeBinding.FINGERPRINT_VERSION ||
                 binding.getNormalizationVersion() != RecipeBinding.NORMALIZATION_VERSION) {
-            return false;
+            return "VERSION_MISMATCH";
         }
-        MultiblockControllerBase controller = getController();
-        RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(controller);
-        if (recipeMaps.length == 0) return false;
+        RecipeMap<?>[] recipeMaps = getExposedRecipeMaps(getController());
+        if (recipeMaps.length == 0) return "NO_ROUTED_RECIPEMAP";
+        String lastResolveFailure = null;
         for (RecipeMap<?> recipeMap : recipeMaps) {
-            if (binding.isForRecipeMap(recipeMap.getUnlocalizedName()) &&
-                    RecipeBindingResolver.resolve(binding, recipeMap).isResolved()) return true;
+            if (!binding.isForRecipeMap(recipeMap.getUnlocalizedName())) continue;
+            RecipeBindingResolver.Resolution resolution = RecipeBindingResolver.resolve(binding, recipeMap);
+            if (resolution.isResolved()) return null;
+            lastResolveFailure = resolution.getReasonCode();
         }
-        return false;
+        return lastResolveFailure == null ? "RECIPEMAP_NOT_ROUTED" : "RESOLVE_FAILED:" + lastResolveFailure;
     }
 
     private void queueCachedPatternUpdate() {

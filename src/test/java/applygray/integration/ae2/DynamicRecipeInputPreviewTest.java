@@ -9,6 +9,7 @@ import ae2.crafting.execution.InputTemplate;
 import net.minecraft.init.Bootstrap;
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
+import net.minecraft.world.World;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +61,67 @@ class DynamicRecipeInputPreviewTest {
 
         assertEquals(0, cache.get(input));
         assertFalse(cache.findFuzzy(input, FuzzyMode.IGNORE_ALL).isEmpty());
+    }
+
+    @Test
+    void returnsDirectTemplateForRegisteredProcessingPatternInput() {
+        AEItemKey input = key(Items.IRON_INGOT);
+        IPatternDetails.IInput patternInput = singleOptionInput(input);
+
+        ExactPatternInputRegistry.registerInput(patternInput);
+        try {
+            Iterable<InputTemplate> templates = DynamicRecipeInputPreview.getExactTemplates(patternInput);
+            assertNotNull(templates);
+            InputTemplate template = templates.iterator().next();
+            assertEquals(input, template.key());
+            assertEquals(1, template.amount());
+        } finally {
+            ExactPatternInputRegistry.clear();
+        }
+    }
+
+    @Test
+    void retainsFuzzyLookupForUnregisteredProcessingPatternInput() {
+        IPatternDetails.IInput patternInput = singleOptionInput(key(Items.IRON_INGOT));
+
+        assertNull(DynamicRecipeInputPreview.getExactTemplates(patternInput));
+    }
+
+    @Test
+    void nonProcessingPatternsAreNeverRegistered() {
+        AEItemKey iron = key(Items.IRON_INGOT);
+        DynamicRecipePatternDetails detail = detail(List.of(new GenericStack(iron, 3)),
+                List.of(List.of(new GenericStack(iron, 3))));
+
+        ExactPatternInputRegistry.registerPattern(detail);
+
+        assertFalse(ExactPatternInputRegistry.isExact(detail.getInputs()[0]));
+    }
+
+    private static IPatternDetails.IInput singleOptionInput(AEItemKey input) {
+        return new IPatternDetails.IInput() {
+            private final GenericStack[] options = {new GenericStack(input, 1)};
+
+            @Override
+            public GenericStack[] possibleInputs() {
+                return options.clone();
+            }
+
+            @Override
+            public long getMultiplier() {
+                return 1;
+            }
+
+            @Override
+            public boolean isValid(ae2.api.stacks.AEKey candidate, World level) {
+                return input.equals(candidate);
+            }
+
+            @Override
+            public ae2.api.stacks.AEKey getRemainingKey(ae2.api.stacks.AEKey template) {
+                return null;
+            }
+        };
     }
 
     private static DynamicRecipePatternDetails detail(List<GenericStack> inputs,

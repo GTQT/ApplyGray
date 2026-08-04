@@ -2,6 +2,7 @@ package applygray.integration.ae2;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.stacks.AEKey;
+import ae2.api.stacks.GenericStack;
 import ae2.crafting.execution.InputTemplate;
 import org.jetbrains.annotations.Nullable;
 
@@ -25,15 +26,27 @@ public final class DynamicRecipeInputPreview {
     }
 
     /**
-     * Returns the single exact template for a frozen RecipeMap input, or {@code null} when AE2 must retain its
-     * normal fuzzy/alternative lookup. Dynamic inputs are immutable, so this does not discard a valid alternative.
+     * Returns the single exact template for a frozen RecipeMap input or a processing pattern decoded by an ApplyGray
+     * provider, or {@code null} when AE2 must retain its normal fuzzy/alternative lookup. Both source kinds are
+     * immutable single-key inputs, so this does not discard a valid alternative.
      */
     @Nullable
     public static Iterable<InputTemplate> getExactTemplates(IPatternDetails.IInput input) {
-        if (!(input instanceof ExactDynamicRecipeInput exact) || !exact.isExactDynamicRecipeInput()) return null;
+        if (input == null) return null;
 
-        AEKey key = exact.getExactDynamicRecipeInputKey();
-        long amount = exact.getExactDynamicRecipeInputAmount();
+        AEKey key;
+        long amount;
+        if (input instanceof ExactDynamicRecipeInput exact && exact.isExactDynamicRecipeInput()) {
+            key = exact.getExactDynamicRecipeInputKey();
+            amount = exact.getExactDynamicRecipeInputAmount();
+        } else if (ExactPatternInputRegistry.isExact(input)) {
+            GenericStack[] options = input.possibleInputs();
+            if (options.length != 1 || options[0] == null || options[0].amount() <= 0) return null;
+            key = options[0].what();
+            amount = options[0].amount();
+        } else {
+            return null;
+        }
         if (key == null || amount <= 0) return null;
 
         InputTemplate template = new InputTemplate(key, amount);
