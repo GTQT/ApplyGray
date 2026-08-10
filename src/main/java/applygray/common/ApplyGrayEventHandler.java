@@ -3,11 +3,14 @@ package applygray.common;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.items.ApplyGrayMetaItems;
 import applygray.integration.ae2.rules.RecipePatternRules;
+import applygray.mattermanipulator.item.MatterManipulatorItems;
+import applygray.mattermanipulator.item.InstallManipulatorUpgradeRecipe;
 
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.registry.MTEManager;
 
 import net.minecraft.item.Item;
+import net.minecraft.item.crafting.IRecipe;
 import net.minecraftforge.event.RegistryEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
@@ -30,6 +33,12 @@ public final class ApplyGrayEventHandler {
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void registerItems(RegistryEvent.Register<Item> event) {
         ApplyGrayMetaItems.init(event.getRegistry());
+        MatterManipulatorItems.register(event.getRegistry());
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void registerMatterManipulatorRecipes(RegistryEvent.Register<IRecipe> event) {
+        event.getRegistry().register(InstallManipulatorUpgradeRecipe.INSTANCE);
     }
 
     /** One global hot-reload probe; RecipeMap providers must not each walk the rules directory. */

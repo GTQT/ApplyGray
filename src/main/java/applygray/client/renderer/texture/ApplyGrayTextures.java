@@ -23,6 +23,13 @@ public final class ApplyGrayTextures {
     public static final SimpleOverlayRenderer ME_DUAL_OUTPUT_HATCH_ACTIVE = overlay("overlay/appeng/me_dual_output_hatch_active");
     public static final SimpleOverlayRenderer ME_DUAL_OUTPUT_HATCH = overlay("overlay/appeng/me_dual_output_hatch");
 
+    public static final SimpleOverlayRenderer MATTER_MANIPULATOR_UPLINK_FRONT_OFF =
+            overlay("matter_manipulator/uplink/front_off");
+    public static final SimpleOverlayRenderer MATTER_MANIPULATOR_UPLINK_FRONT_IDLE_GLOW =
+            overlay("matter_manipulator/uplink/front_idle_glow");
+    public static final SimpleOverlayRenderer MATTER_MANIPULATOR_UPLINK_FRONT_ACTIVE_GLOW =
+            overlay("matter_manipulator/uplink/front_active_glow");
+
     private ApplyGrayTextures() {}
 
     public static void init() {}

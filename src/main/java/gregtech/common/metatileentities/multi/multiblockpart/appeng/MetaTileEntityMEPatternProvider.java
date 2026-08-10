@@ -21,6 +21,8 @@ import gregtech.api.capability.impl.NotifiableItemStackHandler;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.AbilityInstances;
+import gregtech.api.mattermanipulator.ISmartCopyLinkable;
+import gregtech.api.mattermanipulator.SmartCopyLink;
 import gregtech.api.mui.GTGuiTextures;
 import gregtech.api.mui.GTGuis;
 import gregtech.api.mui.sync.PagedWidgetSyncHandler;
@@ -42,6 +44,7 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.Constants;
+import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.IFluidTank;
 import net.minecraftforge.fluids.capability.IFluidTankProperties;
@@ -96,6 +99,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import static gregtech.api.util.AE2PatternCompat.toGenericStack;
 
@@ -112,7 +116,7 @@ import static gregtech.api.util.AE2PatternCompat.toGenericStack;
  * </ul>
  */
 public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPart
-        implements IMEPatternProviderPart {
+        implements IMEPatternProviderPart, ISmartCopyLinkable {
 
     // ==================== 缓冲区池（数量由等级决定）====================
     protected final int bufferCount;
@@ -125,6 +129,12 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     private final List<MetaTileEntityPatternProviderMappingSlave> mappingSlaves = new ArrayList<>();
     private final List<MetaTileEntityMEPatternProviderProxy> proxies = new ArrayList<>();
     private final List<MetaTileEntityAEPatternRegistrar> orePrefixRegistrars = new ArrayList<>();
+    private final List<MetaTileEntityMEPatternProvider> smartCopyDependents = new ArrayList<>();
+
+    @Nullable
+    private SmartCopyLink smartCopyLink;
+    @Nullable
+    private MetaTileEntityMEPatternProvider smartCopySource;
 
     // ==================== 由等级决定的参数 ====================
     // 样板卡槽数量 = tier * tier（如 EV=16, IV=25, LuV=36）
@@ -135,6 +145,11 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     // 缓冲区配方消耗后延迟释放的 tick 数（防止不同配方抢占同一缓冲区）
     private static final int DEFAULT_UNLOCK_DELAY = 10;
     private static final int BUFFER_POOL_NBT_VERSION = 3;
+    private static final String SMART_COPY_LINK_KEY = "SmartCopyLink";
+    private static final String SMART_COPY_DIMENSION_KEY = "Dimension";
+    private static final String SMART_COPY_X_KEY = "X";
+    private static final String SMART_COPY_Y_KEY = "Y";
+    private static final String SMART_COPY_Z_KEY = "Z";
 
     public MetaTileEntityMEPatternProvider(ResourceLocation metaTileEntityId, int tier) {
         super(metaTileEntityId, tier, false);
@@ -223,10 +238,142 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         return new FluidTankList(false);
     }
 
+    // ==================== Matter Manipulator Smart Copy ====================
+
+    @Override
+    public Optional<SmartCopyLink> getSmartCopyLink() {
+        return Optional.ofNullable(smartCopyLink);
+    }
+
+    @Override
+    public boolean setSmartCopyLink(SmartCopyLink source) {
+        if (source == null || source.equals(getSmartCopyEndpointIdentity())) return false;
+        if (source.equals(smartCopyLink)) return true;
+
+        detachSmartCopySource();
+        SmartCopyPatternProviderRegistry.unregisterTarget(this);
+        smartCopyLink = source;
+        SmartCopyPatternProviderRegistry.registerTarget(source, this);
+        getResolvedSmartCopySource();
+        refreshSmartCopyPatterns();
+        return true;
+    }
+
+    @Override
+    public void clearSmartCopyLink() {
+        if (smartCopyLink == null) return;
+        detachSmartCopySource();
+        SmartCopyPatternProviderRegistry.unregisterTarget(this);
+        smartCopyLink = null;
+        refreshSmartCopyPatterns();
+    }
+
+    @Nullable
+    SmartCopyLink getSmartCopyEndpointIdentity() {
+        World world = getWorld();
+        return world == null ? null : new SmartCopyLink(world.provider.getDimension(), getPos());
+    }
+
+    @Nullable
+    private MetaTileEntityMEPatternProvider getResolvedSmartCopySource() {
+        if (smartCopyLink == null) return null;
+        if (smartCopySource != null && smartCopySource.isValid() &&
+                smartCopySource.getSmartCopyLink().isEmpty()) {
+            return smartCopySource;
+        }
+
+        detachSmartCopySource();
+        World sourceWorld = DimensionManager.getWorld(smartCopyLink.sourceDimension());
+        if (sourceWorld == null || !sourceWorld.isBlockLoaded(smartCopyLink.sourcePosition())) return null;
+        TileEntity tile = sourceWorld.getTileEntity(smartCopyLink.sourcePosition());
+        if (!(tile instanceof IGregTechTileEntity holder)) return null;
+        MetaTileEntity candidate = holder.getMetaTileEntity();
+        if (!(candidate instanceof MetaTileEntityMEPatternProvider source) || source == this ||
+                source.getSmartCopyLink().isPresent()) {
+            return null;
+        }
+
+        smartCopySource = source;
+        source.addSmartCopyDependent(this);
+        return source;
+    }
+
+    private void detachSmartCopySource() {
+        if (smartCopySource != null) {
+            smartCopySource.removeSmartCopyDependent(this);
+            smartCopySource = null;
+        }
+    }
+
+    private void addSmartCopyDependent(MetaTileEntityMEPatternProvider dependent) {
+        if (!smartCopyDependents.contains(dependent)) {
+            smartCopyDependents.add(dependent);
+        }
+    }
+
+    private void removeSmartCopyDependent(MetaTileEntityMEPatternProvider dependent) {
+        smartCopyDependents.remove(dependent);
+    }
+
+    void onSmartCopySourceChanged(MetaTileEntityMEPatternProvider source) {
+        if (smartCopyLink == null || !smartCopyLink.equals(source.getSmartCopyEndpointIdentity()) ||
+                source.getSmartCopyLink().isPresent()) {
+            return;
+        }
+        if (smartCopySource != source) {
+            detachSmartCopySource();
+            smartCopySource = source;
+            source.addSmartCopyDependent(this);
+        }
+        refreshSmartCopyPatterns();
+    }
+
+    void onSmartCopySourceRemoved(MetaTileEntityMEPatternProvider source) {
+        if (smartCopySource != source) return;
+        smartCopySource = null;
+        refreshSmartCopyPatterns();
+    }
+
+    private void refreshSmartCopyPatterns() {
+        if (getWorld() != null && !getWorld().isRemote) {
+            markDirty();
+            notifyBlockUpdate();
+        }
+        queueCraftingProviderRefresh();
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (getWorld() == null || getWorld().isRemote) return;
+        if (smartCopyLink != null) {
+            SmartCopyPatternProviderRegistry.registerTarget(smartCopyLink, this);
+            getResolvedSmartCopySource();
+        }
+        SmartCopyPatternProviderRegistry.sourceAvailable(this);
+    }
+
+    @Override
+    public void setPatternDetails() {
+        super.setPatternDetails();
+        if (smartCopyLink != null || smartCopyDependents == null) return;
+        for (MetaTileEntityMEPatternProvider dependent : new ArrayList<>(smartCopyDependents)) {
+            dependent.onSmartCopySourceChanged(this);
+        }
+        SmartCopyPatternProviderRegistry.sourcePatternsChanged(this);
+    }
+
     // ==================== 缓冲区能力注册 ====================
 
     @Override
     public void registerAbilities(@NotNull AbilityInstances abilityInstances) {
+        MetaTileEntityMEPatternProvider source = getResolvedSmartCopySource();
+        if (smartCopyLink != null) {
+            if (source != null) {
+                source.registerAbilities(abilityInstances);
+            }
+            return;
+        }
         // 收集缓冲区，并按最近匹配时间降序排列（最近使用的在前）。
         // 24 个缓存区是固定能力入口；每个入口内部的有效材料槽按样板签名动态重建。
         // 移植自 PH-Mod 的 PiorityBuffer 排序机制，优化配方缓存命中率
@@ -237,10 +384,30 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         }
     }
 
+    @Override
+    public List<? extends IPatternDetails> getAvailablePatterns() {
+        if (smartCopyLink == null) return super.getAvailablePatterns();
+        if (!isActive()) return Collections.emptyList();
+        MetaTileEntityMEPatternProvider source = getResolvedSmartCopySource();
+        return source == null ? Collections.emptyList() : source.getAvailablePatterns();
+    }
+
     // ==================== AE2 推送与缓冲区分配 ====================
 
     @Override
     public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
+        if (smartCopyLink != null) {
+            if (!isActive()) {
+                logPatternPushRejected("linked machine is not active");
+                return false;
+            }
+            MetaTileEntityMEPatternProvider source = getResolvedSmartCopySource();
+            if (source == null) {
+                logPatternPushRejected("Smart Copy source is unavailable");
+                return false;
+            }
+            return source.pushPattern(patternDetails, inputHolder, multiplier);
+        }
         if (!isActive()) {
             logPatternPushRejected("machine is not active");
             return false;
@@ -250,6 +417,10 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     @Override
     public boolean isBusy() {
+        if (smartCopyLink != null) {
+            MetaTileEntityMEPatternProvider source = getResolvedSmartCopySource();
+            return source == null || source.isBusy();
+        }
         // 所有缓冲区都不为空时视为繁忙
         for (PatternBuffer buffer : bufferPool) {
             if (buffer.isEmpty()) {
@@ -722,6 +893,17 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         data.setBoolean("hideInfo", isHideInfo());
         data.setString("showName", getShowName());
 
+        if (smartCopyLink != null) {
+            NBTTagCompound linkData = new NBTTagCompound();
+            linkData.setInteger(SMART_COPY_DIMENSION_KEY, smartCopyLink.sourceDimension());
+            linkData.setInteger(SMART_COPY_X_KEY, smartCopyLink.sourcePosition().getX());
+            linkData.setInteger(SMART_COPY_Y_KEY, smartCopyLink.sourcePosition().getY());
+            linkData.setInteger(SMART_COPY_Z_KEY, smartCopyLink.sourcePosition().getZ());
+            data.setTag(SMART_COPY_LINK_KEY, linkData);
+        } else {
+            data.removeTag(SMART_COPY_LINK_KEY);
+        }
+
         // 序列化缓冲区池
         NBTTagList bufferListTag = new NBTTagList();
         for (PatternBuffer buffer : bufferPool) {
@@ -751,6 +933,16 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
         setHideInfo(data.getBoolean("hideInfo"));
         setShowName(data.getString("showName"));
+
+        if (data.hasKey(SMART_COPY_LINK_KEY, Constants.NBT.TAG_COMPOUND)) {
+            NBTTagCompound linkData = data.getCompoundTag(SMART_COPY_LINK_KEY);
+            smartCopyLink = new SmartCopyLink(linkData.getInteger(SMART_COPY_DIMENSION_KEY),
+                    new BlockPos(linkData.getInteger(SMART_COPY_X_KEY), linkData.getInteger(SMART_COPY_Y_KEY),
+                            linkData.getInteger(SMART_COPY_Z_KEY)));
+        } else {
+            smartCopyLink = null;
+        }
+        smartCopySource = null;
 
         // 反序列化缓冲区池
         int persistedBufferVersion = data.getInteger("BufferPoolVersion");
@@ -848,6 +1040,13 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
     @Override
     public void onRemoval() {
+        SmartCopyPatternProviderRegistry.sourceRemoved(this);
+        SmartCopyPatternProviderRegistry.unregisterTarget(this);
+        detachSmartCopySource();
+        for (MetaTileEntityMEPatternProvider dependent : new ArrayList<>(smartCopyDependents)) {
+            dependent.onSmartCopySourceRemoved(this);
+        }
+        smartCopyDependents.clear();
         // 先尝试退还所有缓冲区物品到 AE 网络
         refundAll();
         // Notify all linked slaves and proxies that master is gone

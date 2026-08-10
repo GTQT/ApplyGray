@@ -1,13 +1,16 @@
 package applygray;
 
 import applygray.api.ApplyGrayAPI;
+import applygray.common.ApplyGrayCommonProxy;
 import applygray.common.ApplyGrayMetaTileEntities;
 import applygray.common.ApplyGrayRecipes;
 import applygray.integration.ApplyGrayIntegrationBootstrap;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.integration.theoneprobe.TheOneProbeIntegration;
+import applygray.mattermanipulator.network.MatterManipulatorNetwork;
 
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
@@ -30,10 +33,16 @@ public class ApplyGrayMod {
     @Mod.Instance
     public static ApplyGrayMod instance;
 
+    @SidedProxy(clientSide = "applygray.client.ApplyGrayClientProxy",
+                serverSide = "applygray.common.ApplyGrayCommonProxy")
+    public static ApplyGrayCommonProxy proxy;
+
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         LOGGER.info("Loading Applied Energistics 2 Supergiant integration for GregTech");
         RecipePatternRules.initialize(event.getModConfigurationDirectory());
+        MatterManipulatorNetwork.initialize();
+        proxy.preInit(event);
         TheOneProbeIntegration.enqueueIMC();
         ApplyGrayIntegrationBootstrap.init();
         ApplyGrayMetaTileEntities.init();

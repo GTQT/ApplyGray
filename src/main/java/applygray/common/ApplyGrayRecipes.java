@@ -1,5 +1,7 @@
 package applygray.common;
 
+import applygray.mattermanipulator.item.MatterManipulatorItems;
+
 import gregtech.api.GTValues;
 import gregtech.api.recipes.ModHandler;
 import gregtech.api.recipes.RecipeMaps;
@@ -12,6 +14,7 @@ import static gregtech.api.GTValues.HV;
 import static gregtech.api.GTValues.IV;
 import static gregtech.api.GTValues.LuV;
 import static gregtech.api.GTValues.UHV;
+import static gregtech.api.GTValues.ZPM;
 
 import net.minecraft.item.ItemStack;
 import static gregtech.api.recipes.RecipeMaps.ASSEMBLER_RECIPES;
@@ -25,6 +28,7 @@ import static gregtech.common.items.MetaItems.ELECTRIC_PUMP_IV;
 import static gregtech.api.unification.ore.OrePrefix.circuit;
 import static gregtech.common.metatileentities.MetaTileEntities.DUAL_EXPORT_HATCH;
 import static gregtech.common.metatileentities.MetaTileEntities.DUAL_IMPORT_HATCH;
+import static gregtech.common.metatileentities.MetaTileEntities.ENERGY_INPUT_HATCH;
 
 import gregtech.api.unification.material.MarkerMaterial;
 
@@ -37,6 +41,7 @@ public class ApplyGrayRecipes {
     public static void init() {
         registerMEAssemblerRecipes();
         registerMEDualHatchRecipes();
+        registerMatterManipulatorRecipes();
     }
 
     private static void registerMEDualHatchRecipes() {
@@ -135,5 +140,88 @@ public class ApplyGrayRecipes {
                 ApplyGrayMetaTileEntities.ITEM_EXPORT_BUS_ME.getStackForm());
         ModHandler.addShapedRecipe("me_item_bus_input_to_output", ApplyGrayMetaTileEntities.ITEM_EXPORT_BUS_ME.getStackForm(), "d", "B", 'B',
                 ApplyGrayMetaTileEntities.ITEM_IMPORT_BUS_ME.getStackForm());
+    }
+
+    /**
+     * Target-native progression for the four tool tiers, their installable upgrades, and the Quantum Uplink pair.
+     *
+     * <p>These recipes intentionally use the current GregTech component chain instead of retaining 1.7.10 meta-item
+     * identifiers. The controller and connector therefore remain discoverable through normal JEI recipe lookup.</p>
+     */
+    private static void registerMatterManipulatorRecipes() {
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.POWER_UNIT_IV)
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_HV)
+                .input(gregtech.common.items.MetaItems.SENSOR_HV)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[HV].toLowerCase()), 2)
+                .output(MatterManipulatorItems.MK0)
+                .duration(400).EUt(VA[HV]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.MK0)
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_EV)
+                .input(gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[EV].toLowerCase()), 2)
+                .output(MatterManipulatorItems.MK1)
+                .duration(600).EUt(VA[EV]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.MK1)
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_IV)
+                .input(gregtech.common.items.MetaItems.QUANTUM_ASSEMBLY_IV)
+                .input(gregtech.common.items.MetaItems.EMITTER_IV)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[IV].toLowerCase()), 2)
+                .output(MatterManipulatorItems.MK2)
+                .duration(800).EUt(VA[IV]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.MK2)
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
+                .input(gregtech.common.items.MetaItems.QUANTUM_MAINFRAME_ZPM)
+                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[ZPM].toLowerCase()), 2)
+                .output(MatterManipulatorItems.MK3)
+                .duration(1_200).EUt(VA[ZPM]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
+                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .input(gregtech.common.items.MetaItems.SENSOR_ZPM)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[ZPM].toLowerCase()), 4)
+                .output(ApplyGrayMetaTileEntities.QUANTUM_UPLINK)
+                .duration(1_200).EUt(VA[ZPM]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(ApplyGrayMetaTileEntities.ITEM_IMPORT_BUS_ME)
+                .input(ENERGY_INPUT_HATCH[ZPM])
+                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .input(gregtech.common.items.MetaItems.SENSOR_ZPM)
+                .input(circuit, MarkerMaterial.create(GTValues.VN[ZPM].toLowerCase()), 2)
+                .output(ApplyGrayMetaTileEntities.QUANTUM_UPLINK_ME_HATCH)
+                .duration(800).EUt(VA[ZPM]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
+                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .output(MatterManipulatorItems.POWER_P2P_UPGRADE)
+                .duration(400).EUt(VA[ZPM]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.ROBOT_ARM_HV)
+                .input(gregtech.common.items.MetaItems.SENSOR_HV)
+                .output(MatterManipulatorItems.MINING_UPGRADE)
+                .duration(200).EUt(VA[HV]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.CONVEYOR_MODULE_IV)
+                .input(gregtech.common.items.MetaItems.ELECTRIC_MOTOR_IV)
+                .output(MatterManipulatorItems.SPEED_UPGRADE)
+                .duration(200).EUt(VA[IV]).buildAndRegister();
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_IV)
+                .input(gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV)
+                .output(MatterManipulatorItems.POWER_EFFICIENCY_UPGRADE)
+                .duration(200).EUt(VA[IV]).buildAndRegister();
     }
 }

@@ -2,6 +2,8 @@ package applygray.common;
 
 import applygray.api.ApplyGrayAPI;
 import applygray.ApplyGrayMod;
+import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplink;
+import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplinkHatch;
 
 import gregtech.api.GTValues;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEDualExportHatch;
@@ -61,11 +63,16 @@ public class ApplyGrayMetaTileEntities {
     // ME Gas Hatches (IDs 2890-2905)
     public static final MetaTileEntityMEGasHatch[] ME_GAS_HATCH = new MetaTileEntityMEGasHatch[GTValues.V.length - 1];
 
+    // Matter Manipulator Quantum Uplink (IDs 5000-5001)
+    public static MetaTileEntityQuantumUplink QUANTUM_UPLINK;
+    public static MetaTileEntityQuantumUplinkHatch QUANTUM_UPLINK_ME_HATCH;
+
     public static void init() {
         registerMEHatches();
         registerExtendedMEDevices();
+        registerMatterManipulatorUplink();
         ApplyGrayMod.LOGGER.info("Registered {} AE-enabled GregTech machines",
-                13 + ME_PATTERN_PROVIDER.length + PATTERN_MAPPING_SLAVE.length +
+                15 + ME_PATTERN_PROVIDER.length + PATTERN_MAPPING_SLAVE.length +
                         ME_MUFFLER_HATCH.length + ME_GAS_HATCH.length);
     }
 
@@ -138,5 +145,12 @@ public class ApplyGrayMetaTileEntities {
             ME_GAS_HATCH[i] = new MetaTileEntityMEGasHatch(ApplyGrayAPI.id("me_gas_hatch." + voltageName), tier);
             registerMetaTileEntity(2890 + i, ME_GAS_HATCH[i]);
         }
+    }
+
+    private static void registerMatterManipulatorUplink() {
+        QUANTUM_UPLINK = registerMetaTileEntity(5000,
+                new MetaTileEntityQuantumUplink(ApplyGrayAPI.id("matter_manipulator.quantum_uplink")));
+        QUANTUM_UPLINK_ME_HATCH = registerMetaTileEntity(5001,
+                new MetaTileEntityQuantumUplinkHatch(ApplyGrayAPI.id("matter_manipulator.quantum_uplink_hatch")));
     }
 }

@@ -25,6 +25,9 @@
     "supergiant.AccessorPatternAccessSupportContainerTracker",
     "supergiant.MixinContainerPatternAccessTermRecipeMapClear",
     "supergiant.MixinContainerPEATermRecipeMapClear",
+    "supergiant.MixinAEBasePartSmartCopyLifecycle",
+    "supergiant.MixinPatternProviderPartSmartCopy",
+    "supergiant.MixinPatternProviderLogicSmartCopy",
     "supergiantfc.MixinUtil",
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],
