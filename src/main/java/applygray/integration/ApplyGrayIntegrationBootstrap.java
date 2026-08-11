@@ -5,10 +5,8 @@ import applygray.client.renderer.texture.ApplyGrayTextures;
 
 import gregtech.api.color.ColoredBlockContainer;
 import gregtech.api.color.containers.AE2ColorContainer;
-import gregtech.api.metatileentity.MachineBlockHighlighter;
 import gregtech.api.pattern.StructureItemSourceRegistry;
 import gregtech.api.util.GTUtility;
-import gregtech.client.renderer.handler.BlockPosHighlightRenderer;
 import gregtech.client.utils.ItemRenderCompat;
 import gregtech.common.items.tool.rotation.AECustomBlockRotations;
 import net.minecraftforge.fml.common.FMLCommonHandler;
@@ -36,11 +34,6 @@ public final class ApplyGrayIntegrationBootstrap {
         private static void init() {
             ApplyGrayTextures.init();
             ItemRenderCompat.registerExtractor(new AE2RepresentativeStackExtractor());
-            MachineBlockHighlighter.setHandler((player, pos) -> {
-                double distance = Math.sqrt(pos.distanceSq(player.getPosition()));
-                long until = (long) (System.currentTimeMillis() + 500 * distance);
-                BlockPosHighlightRenderer.renderBlockBoxHighLight(pos, Math.max(500L, until - System.currentTimeMillis()));
-            });
         }
     }
 }

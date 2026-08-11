@@ -2347,7 +2347,6 @@ public final class DynamicRecipePatternRegistry {
         facts.put("inputOrePrefixes", Collections.unmodifiableSet(inputOrePrefixes));
         facts.put("deterministicOutputMaterials", Collections.unmodifiableSet(deterministicOutputMaterials));
         facts.put("chancedOutputMaterials", Collections.unmodifiableSet(chancedOutputMaterials));
-        facts.put("craftTweakerRecipe", recipe.getIsCTRecipe());
         facts.put("groovyRecipe", recipe.isGroovyRecipe());
         facts.put("usesDustInput", usesDust);
         facts.put("usesPriorityDustInput", usesPriorityDust);

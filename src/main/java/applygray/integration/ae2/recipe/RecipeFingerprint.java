@@ -73,7 +73,6 @@ public final class RecipeFingerprint {
         // Do not rely on a dependency object's toString() contract for persistent identity.
         result.append("category=").append(recipe.getRecipeCategory() == null ? "<null>" :
                 recipe.getRecipeCategory().getUniqueID()).append('\n');
-        result.append("ct=").append(recipe.getIsCTRecipe()).append('\n');
         result.append("groovy=").append(recipe.isGroovyRecipe()).append('\n');
         List<String> properties = new ArrayList<>();
         for (Map.Entry<RecipeProperty<?>, Object> property : recipe.propertyStorage().entrySet()) {
