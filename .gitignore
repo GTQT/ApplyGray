@@ -78,6 +78,7 @@ local.properties
 /classes/
 /out/
 /build/
+/libs/
 /src/test/*
 !/src/test/java/
 !/src/test/java/**/*.java
