@@ -5,6 +5,7 @@ import applygray.common.items.ApplyGrayMetaItems;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.mattermanipulator.item.MatterManipulatorItems;
 import applygray.mattermanipulator.item.InstallManipulatorUpgradeRecipe;
+import applygray.mattermanipulator.item.UpgradeManipulatorTierRecipe;
 
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.registry.MTEManager;
@@ -39,6 +40,9 @@ public final class ApplyGrayEventHandler {
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void registerMatterManipulatorRecipes(RegistryEvent.Register<IRecipe> event) {
         event.getRegistry().register(InstallManipulatorUpgradeRecipe.INSTANCE);
+        event.getRegistry().register(UpgradeManipulatorTierRecipe.MK1);
+        event.getRegistry().register(UpgradeManipulatorTierRecipe.MK2);
+        event.getRegistry().register(UpgradeManipulatorTierRecipe.MK3);
     }
 
     /** One global hot-reload probe; RecipeMap providers must not each walk the rules directory. */

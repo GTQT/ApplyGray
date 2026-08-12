@@ -1,5 +1,11 @@
 package applygray.mattermanipulator.item;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
 import applygray.mattermanipulator.state.ManipulatorTier;
 import applygray.mattermanipulator.state.ManipulatorUpgrade;
 
@@ -20,16 +26,43 @@ public final class MatterManipulatorItems {
     public static final ItemManipulatorUpgrade POWER_EFFICIENCY_UPGRADE =
             new ItemManipulatorUpgrade(ManipulatorUpgrade.POWER_EFFICIENCY);
 
+    private static final Map<ManipulatorComponent, ItemManipulatorComponent> COMPONENTS = createComponents();
+    private static final List<Item> ALL_ITEMS = createAllItems();
+
     private MatterManipulatorItems() {}
 
+    public static ItemManipulatorComponent component(ManipulatorComponent component) {
+        return COMPONENTS.get(component);
+    }
+
+    public static List<Item> allItems() {
+        return ALL_ITEMS;
+    }
+
     public static void register(IForgeRegistry<Item> registry) {
-        registry.register(MK0);
-        registry.register(MK1);
-        registry.register(MK2);
-        registry.register(MK3);
-        registry.register(POWER_P2P_UPGRADE);
-        registry.register(MINING_UPGRADE);
-        registry.register(SPEED_UPGRADE);
-        registry.register(POWER_EFFICIENCY_UPGRADE);
+        ALL_ITEMS.forEach(registry::register);
+    }
+
+    private static Map<ManipulatorComponent, ItemManipulatorComponent> createComponents() {
+        EnumMap<ManipulatorComponent, ItemManipulatorComponent> components =
+                new EnumMap<>(ManipulatorComponent.class);
+        for (ManipulatorComponent component : ManipulatorComponent.values()) {
+            components.put(component, new ItemManipulatorComponent(component));
+        }
+        return Collections.unmodifiableMap(components);
+    }
+
+    private static List<Item> createAllItems() {
+        List<Item> items = new ArrayList<>();
+        items.add(MK0);
+        items.add(MK1);
+        items.add(MK2);
+        items.add(MK3);
+        items.addAll(COMPONENTS.values());
+        items.add(POWER_P2P_UPGRADE);
+        items.add(MINING_UPGRADE);
+        items.add(SPEED_UPGRADE);
+        items.add(POWER_EFFICIENCY_UPGRADE);
+        return Collections.unmodifiableList(items);
     }
 }

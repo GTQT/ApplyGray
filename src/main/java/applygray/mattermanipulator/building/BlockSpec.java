@@ -2,14 +2,16 @@ package applygray.mattermanipulator.building;
 
 import java.util.Objects;
 
+import applygray.mattermanipulator.state.ManipulatorTransform;
+
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.util.Mirror;
-import net.minecraft.util.Rotation;
+import net.minecraft.block.properties.IProperty;
+import net.minecraft.util.EnumFacing;
 import net.minecraftforge.common.util.Constants;
 
 /**
@@ -61,14 +63,32 @@ public final class BlockSpec {
         return template.isEmpty();
     }
 
-    /** Applies a target 1.12.2 structure transform while preserving the resulting item metadata. */
-    public BlockSpec transformed(Mirror mirror, Rotation rotation) {
-        Objects.requireNonNull(mirror, "mirror");
-        Objects.requireNonNull(rotation, "rotation");
+    /** Applies a target three-dimensional transform to portable facing and axis properties. */
+    public BlockSpec transformed(ManipulatorTransform transform) {
+        Objects.requireNonNull(transform, "transform");
         if (template.isEmpty()) return air();
 
         IBlockState state = stateFor(template);
-        return state == null ? this : fromState(state.withMirror(mirror).withRotation(rotation));
+        if (state == null) return this;
+        IBlockState transformed = state;
+        for (IProperty<?> property : state.getPropertyKeys()) {
+            Comparable<?> value = state.getValue(property);
+            if (value instanceof EnumFacing facing) {
+                transformed = withTransformedProperty(transformed, property, transform.apply(facing));
+            } else if (value instanceof EnumFacing.Axis axis) {
+                transformed = withTransformedProperty(transformed, property, transform.apply(axis));
+            }
+        }
+        return fromState(transformed);
+    }
+
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private static IBlockState withTransformedProperty(IBlockState state, IProperty property, Comparable value) {
+        if (!property.getAllowedValues().contains(value)) {
+            throw new IllegalArgumentException("The block state cannot represent transformed property " +
+                    property.getName() + '=' + value);
+        }
+        return state.withProperty(property, value);
     }
 
     public ItemStack toStack() {

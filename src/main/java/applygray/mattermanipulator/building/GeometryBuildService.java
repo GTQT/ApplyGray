@@ -56,20 +56,22 @@ public final class GeometryBuildService {
             throw new IllegalArgumentException("startIndex is outside the geometry plan");
         }
 
-        int nextOperationIndex = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
+        int batchEnd = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
         BuildingContext context = new BuildingContext(request.player().world, request.player(), request.manipulatorStack(),
                 request.hand(), request.state().removalMode(),
                 request.state().hasUpgrade(ManipulatorUpgrade.POWER_EFFICIENCY),
                 request.tier().hasCapability(ManipulatorCapability.REMOVAL) ||
                         request.state().hasUpgrade(ManipulatorUpgrade.MINING));
-        List<PreparedBlockChange> changes = new ArrayList<>(nextOperationIndex - startIndex);
-        for (int index = startIndex; index < nextOperationIndex; index++) {
+        List<PreparedBlockChange> changes = new ArrayList<>(batchEnd - startIndex);
+        for (int index = startIndex; index < batchEnd; index++) {
             BoundGeometryOperation operation = plan.operations().get(index);
             changes.add(adapters.prepareApply(context, operation.operation().location().position(), operation.block()));
         }
 
-        BuildTransaction transaction = BuildTransaction.prepare(changes, request.materialSources(), request.powerSource());
-        return new GeometryBuildResult(plan, startIndex, nextOperationIndex, transaction.execute());
+        BuildTransaction.PreparedBatch batch = BuildTransaction.prepareLargestPrefix(changes, request.materialSources(),
+                request.powerSource());
+        int nextOperationIndex = startIndex + batch.changeCount();
+        return new GeometryBuildResult(plan, startIndex, nextOperationIndex, batch.transaction().execute());
     }
 
     private static void validateRequest(GeometryBuildRequest request) {

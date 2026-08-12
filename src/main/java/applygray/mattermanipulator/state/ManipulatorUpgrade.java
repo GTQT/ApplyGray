@@ -28,6 +28,10 @@ public enum ManipulatorUpgrade {
         return providedCapabilities;
     }
 
+    public String translationKey() {
+        return "item.applygray.matter_manipulator_upgrade_" + name().toLowerCase() + ".name";
+    }
+
     public static int toMask(Set<ManipulatorUpgrade> upgrades) {
         int mask = 0;
         for (ManipulatorUpgrade upgrade : upgrades) {

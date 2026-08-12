@@ -14,21 +14,25 @@ import io.netty.buffer.ByteBuf;
 public final class ExecuteManipulatorOperationMessage implements IMessage {
 
     private EnumHand hand;
+    private Action action;
 
     public ExecuteManipulatorOperationMessage() {}
 
-    public ExecuteManipulatorOperationMessage(EnumHand hand) {
+    public ExecuteManipulatorOperationMessage(EnumHand hand, Action action) {
         this.hand = hand;
+        this.action = action;
     }
 
     @Override
     public void fromBytes(ByteBuf buffer) {
         hand = buffer.readBoolean() ? EnumHand.MAIN_HAND : EnumHand.OFF_HAND;
+        action = buffer.readBoolean() ? Action.START : Action.STOP;
     }
 
     @Override
     public void toBytes(ByteBuf buffer) {
         buffer.writeBoolean(hand == EnumHand.MAIN_HAND);
+        buffer.writeBoolean(action == Action.START);
     }
 
     public static final class Handler implements IMessageHandler<ExecuteManipulatorOperationMessage, IMessage> {
@@ -36,9 +40,13 @@ public final class ExecuteManipulatorOperationMessage implements IMessage {
         @Override
         public IMessage onMessage(ExecuteManipulatorOperationMessage message, MessageContext context) {
             EntityPlayerMP player = context.getServerHandler().player;
-            player.getServerWorld().addScheduledTask(() -> MatterManipulatorBuildManager.startOrCancel(player,
-                    message.hand));
+            player.getServerWorld().addScheduledTask(() -> {
+                if (message.action == Action.START) MatterManipulatorBuildManager.start(player, message.hand);
+                else MatterManipulatorBuildManager.stop(player, message.hand);
+            });
             return null;
         }
     }
+
+    public enum Action { START, STOP }
 }

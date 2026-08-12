@@ -25,6 +25,8 @@ public final class MatterManipulatorNetwork {
                 0, Side.SERVER);
         CHANNEL.registerMessage(ConfigureManipulatorMessage.Handler.class, ConfigureManipulatorMessage.class, 1,
                 Side.SERVER);
+        CHANNEL.registerMessage(PickManipulatorBlockMessage.Handler.class, PickManipulatorBlockMessage.class, 3,
+                Side.SERVER);
     }
 
     /** Registered only through the client proxy so dedicated servers never resolve client GUI classes. */

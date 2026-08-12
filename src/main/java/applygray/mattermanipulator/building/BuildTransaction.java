@@ -5,6 +5,9 @@ import java.util.List;
 import java.util.Objects;
 
 import applygray.mattermanipulator.inventory.MaterialSource;
+import applygray.mattermanipulator.inventory.InsufficientResourcesException;
+import applygray.mattermanipulator.inventory.InsufficientOutputCapacityException;
+import applygray.mattermanipulator.inventory.InsufficientPowerException;
 import applygray.mattermanipulator.inventory.EnergyTransaction;
 import applygray.mattermanipulator.inventory.OutputTransaction;
 import applygray.mattermanipulator.inventory.PowerSource;
@@ -15,8 +18,8 @@ import applygray.mattermanipulator.inventory.ResourceTransaction;
 /**
  * Commits resources before applying prepared world changes and compensates both sides on failure.
  *
- * <p>One transaction is intentionally bounded to a single build batch. The future queued executor uses the tier's
- * batch limit to avoid holding a massive world rollback journal on the server thread.</p>
+ * <p>One transaction is intentionally bounded to a single build batch. The queued executor uses the tier's batch
+ * limit to avoid holding a massive world rollback journal on the server thread.</p>
  */
 public final class BuildTransaction {
 
@@ -66,19 +69,37 @@ public final class BuildTransaction {
                 EnergyTransaction.prepare(powerSource, energyCost));
     }
 
+    /** Prepares the longest executable prefix so partial inventories can build immediately. */
+    public static PreparedBatch prepareLargestPrefix(List<? extends PreparedBlockChange> changes,
+                                                     List<? extends MaterialSource> sources, PowerSource powerSource) {
+        RuntimeException lastFailure = null;
+        for (int size = changes.size(); size >= 1; size--) {
+            try {
+                return new PreparedBatch(size, prepare(changes.subList(0, size), sources, powerSource));
+            } catch (InsufficientResourcesException | InsufficientOutputCapacityException |
+                     InsufficientPowerException exception) {
+                lastFailure = exception;
+            }
+        }
+        if (changes.isEmpty()) return new PreparedBatch(0, prepare(changes, sources, powerSource));
+        throw lastFailure == null ? new IllegalStateException("No executable build prefix") : lastFailure;
+    }
+
+    public record PreparedBatch(int changeCount, BuildTransaction transaction) {}
+
     public Result execute() {
         if (state != State.PREPARED) throw new IllegalStateException("Build transaction is " + state);
 
         if (!energy.commit()) {
             state = State.ENERGY_FAILURE;
-            return new Result(state, false, false, true, true, false, null, energy.state().toString());
+            return new Result(state, false, 0, false, true, true, false, null, energy.state().toString());
         }
 
         ResourceTransaction.Result resourceResult = resources.commit();
         if (!resourceResult.committed()) {
             boolean energyCompensationSucceeded = energy.compensateCommitted();
             state = State.RESOURCE_FAILURE;
-            return new Result(state, false, false, resourceResult.rollbackSucceeded(), true,
+            return new Result(state, false, 0, false, resourceResult.rollbackSucceeded(), true,
                     energyCompensationSucceeded, null, resourceResult.failedSource());
         }
 
@@ -87,7 +108,7 @@ public final class BuildTransaction {
             boolean resourceCompensationSucceeded = resources.compensateCommitted();
             boolean energyCompensationSucceeded = energy.compensateCommitted();
             state = State.OUTPUT_FAILURE;
-            return new Result(state, false, false, resourceCompensationSucceeded, outputResult.rollbackSucceeded(),
+            return new Result(state, false, 0, false, resourceCompensationSucceeded, outputResult.rollbackSucceeded(),
                     energyCompensationSucceeded, null, outputResult.failedDestination());
         }
 
@@ -99,7 +120,7 @@ public final class BuildTransaction {
                 change.apply();
             }
             state = State.COMMITTED;
-            return new Result(state, true, true, true, true, true, null, "");
+            return new Result(state, true, applied.size(), true, true, true, true, null, "");
         } catch (RuntimeException exception) {
             boolean worldRollbackSucceeded = rollbackWorld(applied);
             boolean outputCompensationSucceeded = outputs.compensateCommitted();
@@ -109,7 +130,7 @@ public final class BuildTransaction {
                     energyCompensationSucceeded
                     ? State.ROLLED_BACK
                     : State.ROLLBACK_FAILED;
-            return new Result(state, false, worldRollbackSucceeded, resourceCompensationSucceeded,
+            return new Result(state, false, applied.size(), worldRollbackSucceeded, resourceCompensationSucceeded,
                     outputCompensationSucceeded, energyCompensationSucceeded, exception, "");
         }
     }
@@ -140,7 +161,7 @@ public final class BuildTransaction {
         ROLLBACK_FAILED
     }
 
-    public record Result(State state, boolean committed, boolean worldRollbackSucceeded,
+    public record Result(State state, boolean committed, int worldChanges, boolean worldRollbackSucceeded,
                          boolean resourceRollbackSucceeded, boolean outputRollbackSucceeded,
                          boolean energyRollbackSucceeded, RuntimeException failure, String failedSource) {}
 }

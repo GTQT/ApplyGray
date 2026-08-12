@@ -18,7 +18,7 @@ import net.minecraftforge.common.util.Constants;
  */
 public final class ManipulatorState {
 
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 10;
 
     private static final String KEY_SCHEMA = "Schema";
     private static final String KEY_SHAPE = "Shape";
@@ -29,8 +29,7 @@ public final class ManipulatorState {
     private static final String KEY_SELECTION_A = "SelectionA";
     private static final String KEY_SELECTION_B = "SelectionB";
     private static final String KEY_SELECTION_C = "SelectionC";
-    private static final String KEY_COPY_ROTATION = "CopyRotation";
-    private static final String KEY_COPY_MIRROR = "CopyMirror";
+    private static final String KEY_COPY_TRANSFORM = "CopyTransform";
     private static final String KEY_COPY_REPEAT_X = "CopyRepeatX";
     private static final String KEY_COPY_REPEAT_Y = "CopyRepeatY";
     private static final String KEY_COPY_REPEAT_Z = "CopyRepeatZ";
@@ -39,6 +38,7 @@ public final class ManipulatorState {
     private static final String KEY_EXCHANGE_REPLACEMENT = "ExchangeReplacement";
     private static final String KEY_CABLE_MATERIAL = "CableMaterial";
     private static final String KEY_UPLINK_ADDRESS = "UplinkAddress";
+    private static final String KEY_PICK_TARGET = "PickTarget";
 
     private ManipulatorShape shape = ManipulatorShape.LINE;
     private ManipulatorPlaceMode placeMode = ManipulatorPlaceMode.GEOMETRY;
@@ -48,8 +48,7 @@ public final class ManipulatorState {
     private ManipulatorLocation selectionA;
     private ManipulatorLocation selectionB;
     private ManipulatorLocation selectionC;
-    private ManipulatorRotation copyRotation = ManipulatorRotation.NONE;
-    private ManipulatorMirror copyMirror = ManipulatorMirror.NONE;
+    private ManipulatorTransform copyTransform = ManipulatorTransform.identity();
     private int copyRepeatX = 1;
     private int copyRepeatY = 1;
     private int copyRepeatZ = 1;
@@ -58,6 +57,7 @@ public final class ManipulatorState {
     private WeightedBlockList exchangeReplacement = new WeightedBlockList(BlockSpec.air());
     private BlockSpec cableMaterial = BlockSpec.air();
     private Long uplinkAddress;
+    private ManipulatorPickTarget pickTarget = ManipulatorPickTarget.ALL;
 
     public ManipulatorShape shape() {
         return shape;
@@ -113,20 +113,12 @@ public final class ManipulatorState {
         selectionC = null;
     }
 
-    public ManipulatorRotation copyRotation() {
-        return copyRotation;
+    public ManipulatorTransform copyTransform() {
+        return copyTransform;
     }
 
-    public void setCopyRotation(ManipulatorRotation copyRotation) {
-        this.copyRotation = Objects.requireNonNull(copyRotation, "copyRotation");
-    }
-
-    public ManipulatorMirror copyMirror() {
-        return copyMirror;
-    }
-
-    public void setCopyMirror(ManipulatorMirror copyMirror) {
-        this.copyMirror = Objects.requireNonNull(copyMirror, "copyMirror");
+    public void setCopyTransform(ManipulatorTransform copyTransform) {
+        this.copyTransform = Objects.requireNonNull(copyTransform, "copyTransform");
     }
 
     public int copyRepeatX() {
@@ -182,6 +174,14 @@ public final class ManipulatorState {
         this.uplinkAddress = uplinkAddress;
     }
 
+    public ManipulatorPickTarget pickTarget() {
+        return pickTarget;
+    }
+
+    public void setPickTarget(ManipulatorPickTarget pickTarget) {
+        this.pickTarget = Objects.requireNonNull(pickTarget, "pickTarget");
+    }
+
     public boolean hasUpgrade(ManipulatorUpgrade upgrade) {
         return installedUpgrades.contains(upgrade);
     }
@@ -222,8 +222,7 @@ public final class ManipulatorState {
         writeLocation(data, KEY_SELECTION_A, selectionA);
         writeLocation(data, KEY_SELECTION_B, selectionB);
         writeLocation(data, KEY_SELECTION_C, selectionC);
-        data.setString(KEY_COPY_ROTATION, copyRotation.name());
-        data.setString(KEY_COPY_MIRROR, copyMirror.name());
+        data.setTag(KEY_COPY_TRANSFORM, copyTransform.writeToNbt());
         data.setInteger(KEY_COPY_REPEAT_X, copyRepeatX);
         data.setInteger(KEY_COPY_REPEAT_Y, copyRepeatY);
         data.setInteger(KEY_COPY_REPEAT_Z, copyRepeatZ);
@@ -232,6 +231,7 @@ public final class ManipulatorState {
         data.setTag(KEY_EXCHANGE_REPLACEMENT, exchangeReplacement.writeToNbt());
         data.setTag(KEY_CABLE_MATERIAL, cableMaterial.writeToNbt());
         if (uplinkAddress != null) data.setLong(KEY_UPLINK_ADDRESS, uplinkAddress);
+        data.setString(KEY_PICK_TARGET, pickTarget.name());
         return data;
     }
 
@@ -241,7 +241,7 @@ public final class ManipulatorState {
         }
 
         int schema = data.getInteger(KEY_SCHEMA);
-        if (schema != 4 && schema != 5 && schema != SCHEMA_VERSION) return new ManipulatorState();
+        if (schema != SCHEMA_VERSION) return new ManipulatorState();
 
         ManipulatorState state = new ManipulatorState();
         state.shape = readEnum(data, KEY_SHAPE, ManipulatorShape.class, state.shape);
@@ -256,12 +256,13 @@ public final class ManipulatorState {
         state.selectionA = ManipulatorLocation.readFrom(data, KEY_SELECTION_A);
         state.selectionB = ManipulatorLocation.readFrom(data, KEY_SELECTION_B);
         state.selectionC = ManipulatorLocation.readFrom(data, KEY_SELECTION_C);
-        state.copyRotation = readEnum(data, KEY_COPY_ROTATION, ManipulatorRotation.class, state.copyRotation);
-        state.copyMirror = readEnum(data, KEY_COPY_MIRROR, ManipulatorMirror.class, state.copyMirror);
+        if (data.hasKey(KEY_COPY_TRANSFORM, Constants.NBT.TAG_COMPOUND)) {
+            state.copyTransform = ManipulatorTransform.readFromNbt(data.getCompoundTag(KEY_COPY_TRANSFORM));
+        }
         state.copyRepeatX = readRepeat(data, KEY_COPY_REPEAT_X);
         state.copyRepeatY = readRepeat(data, KEY_COPY_REPEAT_Y);
         state.copyRepeatZ = readRepeat(data, KEY_COPY_REPEAT_Z);
-        if (schema >= SCHEMA_VERSION) state.smartCopy = data.getBoolean(KEY_SMART_COPY);
+        state.smartCopy = data.getBoolean(KEY_SMART_COPY);
         if (data.hasKey(KEY_EXCHANGE_WHITELIST, Constants.NBT.TAG_COMPOUND)) {
             state.exchangeWhitelist = WeightedBlockList.readFromNbt(data.getCompoundTag(KEY_EXCHANGE_WHITELIST), null);
         }
@@ -272,10 +273,11 @@ public final class ManipulatorState {
         if (data.hasKey(KEY_CABLE_MATERIAL, Constants.NBT.TAG_COMPOUND)) {
             state.cableMaterial = BlockSpec.readFromNbt(data.getCompoundTag(KEY_CABLE_MATERIAL));
         }
-        if (schema >= SCHEMA_VERSION && data.hasKey(KEY_UPLINK_ADDRESS, Constants.NBT.TAG_LONG)) {
+        if (data.hasKey(KEY_UPLINK_ADDRESS, Constants.NBT.TAG_LONG)) {
             long address = data.getLong(KEY_UPLINK_ADDRESS);
             state.uplinkAddress = address == 0L ? null : address;
         }
+        state.pickTarget = readEnum(data, KEY_PICK_TARGET, ManipulatorPickTarget.class, state.pickTarget);
         return state;
     }
 
@@ -308,10 +310,11 @@ public final class ManipulatorState {
         if (this == other) return true;
         if (!(other instanceof ManipulatorState state)) return false;
         return shape == state.shape && placeMode == state.placeMode && removalMode == state.removalMode &&
-                copyRotation == state.copyRotation && copyMirror == state.copyMirror && smartCopy == state.smartCopy &&
+                copyTransform.equals(state.copyTransform) && smartCopy == state.smartCopy &&
                 copyRepeatX == state.copyRepeatX && copyRepeatY == state.copyRepeatY && copyRepeatZ == state.copyRepeatZ &&
                 exchangeWhitelist.equals(state.exchangeWhitelist) && exchangeReplacement.equals(state.exchangeReplacement) &&
                 cableMaterial.equals(state.cableMaterial) && Objects.equals(uplinkAddress, state.uplinkAddress) &&
+                pickTarget == state.pickTarget &&
                 installedUpgrades.equals(state.installedUpgrades) &&
                 geometryConfiguration.equals(state.geometryConfiguration) &&
                 Objects.equals(selectionA, state.selectionA) && Objects.equals(selectionB, state.selectionB) &&
@@ -321,7 +324,7 @@ public final class ManipulatorState {
     @Override
     public int hashCode() {
         return Objects.hash(shape, placeMode, removalMode, installedUpgrades, geometryConfiguration, selectionA,
-                selectionB, selectionC, copyRotation, copyMirror, copyRepeatX, copyRepeatY, copyRepeatZ, smartCopy,
-                exchangeWhitelist, exchangeReplacement, cableMaterial, uplinkAddress);
+                selectionB, selectionC, copyTransform, copyRepeatX, copyRepeatY, copyRepeatZ, smartCopy,
+                exchangeWhitelist, exchangeReplacement, cableMaterial, uplinkAddress, pickTarget);
     }
 }

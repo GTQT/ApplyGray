@@ -14,6 +14,7 @@ import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.ResourceRequirement;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
+import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import gregtech.api.block.machines.BlockMachine;
 import gregtech.api.metatileentity.MetaTileEntity;
@@ -34,9 +35,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
-import net.minecraft.util.Mirror;
 import net.minecraft.util.NonNullList;
-import net.minecraft.util.Rotation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.MinecraftForge;
@@ -97,13 +96,13 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
     }
 
     @Override
-    public CapturedBlock transformCapture(CapturedBlock captured, Mirror mirror, Rotation rotation) {
+    public CapturedBlock transformCapture(CapturedBlock captured, ManipulatorTransform transform) {
         Objects.requireNonNull(captured, "captured");
         if (!(captured.data() instanceof PortableData data)) {
             throw new IllegalArgumentException("GregTech capture has incompatible data");
         }
         return new CapturedBlock(captured.source(), captured.specification(), captured.adapterId(),
-                data.transformed(mirror, rotation));
+                data.transformed(transform));
     }
 
     @Override
@@ -336,14 +335,6 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         return (value & 1 << side.getIndex()) != 0;
     }
 
-    private static int transformedMask(int value, Mirror mirror, Rotation rotation) {
-        int transformed = 0;
-        for (EnumFacing side : EnumFacing.VALUES) {
-            if (isSet(value, side)) transformed |= 1 << rotation.rotate(mirror.mirror(side)).getIndex();
-        }
-        return transformed;
-    }
-
     private enum PortableType {
         MTE,
         PIPE
@@ -359,7 +350,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
         int componentCount();
 
-        PortableData transformed(Mirror mirror, Rotation rotation);
+        PortableData transformed(ManipulatorTransform transform);
     }
 
     private static final class MteData implements PortableData {
@@ -445,8 +436,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         }
 
         @Override
-        public MteData transformed(Mirror mirror, Rotation rotation) {
-            EnumFacing transformed = frontFacing == null ? null : rotation.rotate(mirror.mirror(frontFacing));
+        public MteData transformed(ManipulatorTransform transform) {
+            EnumFacing transformed = frontFacing == null ? null : transform.apply(frontFacing);
             return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink);
         }
 
@@ -550,9 +541,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         }
 
         @Override
-        public PipeData transformed(Mirror mirror, Rotation rotation) {
-            return new PipeData(pipeStack, inputMaterial, transformedMask(connections, mirror, rotation),
-                    transformedMask(blockedConnections, mirror, rotation), paintingColor, frameMaterial);
+        public PipeData transformed(ManipulatorTransform transform) {
+            return new PipeData(pipeStack, inputMaterial, transform.applyFacingMask(connections),
+                    transform.applyFacingMask(blockedConnections), paintingColor, frameMaterial);
         }
 
         private ItemStack pipeStack() {

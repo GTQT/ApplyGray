@@ -53,15 +53,17 @@ public final class ExchangeBuildService {
             throw new IllegalArgumentException("startIndex is outside the exchange plan");
         }
 
-        int nextOperationIndex = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
+        int batchEnd = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
         BuildingContext context = context(request);
-        List<PreparedBlockChange> changes = new ArrayList<>(nextOperationIndex - startIndex);
-        for (int index = startIndex; index < nextOperationIndex; index++) {
+        List<PreparedBlockChange> changes = new ArrayList<>(batchEnd - startIndex);
+        for (int index = startIndex; index < batchEnd; index++) {
             BoundExchangeOperation operation = plan.operations().get(index);
             changes.add(adapters.prepareApply(context, operation.position(), operation.replacement()));
         }
-        BuildTransaction transaction = BuildTransaction.prepare(changes, request.materialSources(), request.powerSource());
-        return new ExchangeBuildResult(plan, startIndex, nextOperationIndex, transaction.execute());
+        BuildTransaction.PreparedBatch batch = BuildTransaction.prepareLargestPrefix(changes, request.materialSources(),
+                request.powerSource());
+        int nextOperationIndex = startIndex + batch.changeCount();
+        return new ExchangeBuildResult(plan, startIndex, nextOperationIndex, batch.transaction().execute());
     }
 
     private static BuildingContext context(ExchangeBuildRequest request) {

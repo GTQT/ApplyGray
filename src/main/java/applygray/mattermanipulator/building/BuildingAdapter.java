@@ -1,8 +1,8 @@
 package applygray.mattermanipulator.building;
 
+import applygray.mattermanipulator.state.ManipulatorTransform;
+
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.Mirror;
-import net.minecraft.util.Rotation;
 
 /**
  * Target-specific boundary for safely preparing a block change.
@@ -25,8 +25,8 @@ public interface BuildingAdapter {
     CapturedBlock capture(BuildingContext context, BlockPos position);
 
     /** Applies a target transform to the adapter-owned capture before it is placed at a copy destination. */
-    default CapturedBlock transformCapture(CapturedBlock captured, Mirror mirror, Rotation rotation) {
-        return captured.withSpecification(captured.specification().transformed(mirror, rotation));
+    default CapturedBlock transformCapture(CapturedBlock captured, ManipulatorTransform transform) {
+        return captured.withSpecification(captured.specification().transformed(transform));
     }
 
     /** Prepares a placement from an earlier adapter-owned capture. */

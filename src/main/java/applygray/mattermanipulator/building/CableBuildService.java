@@ -48,6 +48,9 @@ public final class CableBuildService {
         if (!request.tier().hasCapability(ManipulatorCapability.CABLES)) {
             throw new IllegalArgumentException("The selected Matter Manipulator tier cannot place cables");
         }
+        if (request.state().cableMaterial().isAir()) {
+            throw new IllegalArgumentException("No cable material is configured; select a cable before building");
+        }
         ManipulatorLocation a = request.state().selectionA();
         ManipulatorLocation b = request.state().selectionB();
         if (a == null || b == null) {

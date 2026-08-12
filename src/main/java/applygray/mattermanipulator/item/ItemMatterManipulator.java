@@ -1,9 +1,12 @@
 package applygray.mattermanipulator.item;
 
 import java.util.List;
+import java.util.StringJoiner;
 
+import applygray.ApplyGrayMod;
 import applygray.api.ApplyGrayAPI;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
+import applygray.mattermanipulator.network.ExecuteManipulatorOperationMessage;
 import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorState;
@@ -15,13 +18,17 @@ import applygray.mattermanipulator.uplink.UplinkEndpoint;
 import gregtech.api.capability.GregtechCapabilities;
 import gregtech.api.capability.IElectricItem;
 import gregtech.api.capability.impl.ElectricItem;
+import gregtech.api.GTValues;
 
 import net.minecraft.creativetab.CreativeTabs;
+import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.EnumAction;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.EnumActionResult;
@@ -37,8 +44,8 @@ import net.minecraftforge.common.util.Constants;
 /**
  * The four target-native Matter Manipulator items.
  *
- * <p>This initial runtime layer persists selection state and supplies GregTech energy. World mutation remains in the
- * later transaction layer, so a partly migrated tool cannot consume or duplicate resources.</p>
+ * <p>The item owns selection state, GregTech electric capability, interaction charging, and remote Uplink charging.
+ * World mutation is delegated to the server-only bounded transaction executor.</p>
  */
 public final class ItemMatterManipulator extends Item {
 
@@ -98,9 +105,33 @@ public final class ItemMatterManipulator extends Item {
         return new ElectricItem(stack, tier.maximumCharge(), tier.voltageTier(), true, false);
     }
 
+    /** Matches GT5U's creative entries: expose both an empty tool and a fully charged tool. */
+    @Override
+    public void getSubItems(CreativeTabs creativeTab, net.minecraft.util.NonNullList<ItemStack> subItems) {
+        if (!isInCreativeTab(creativeTab)) return;
+
+        ItemStack empty = new ItemStack(this);
+        subItems.add(empty);
+
+        ItemStack charged = new ItemStack(this);
+        IElectricItem electricItem = charged.getCapability(GregtechCapabilities.CAPABILITY_ELECTRIC_ITEM, null);
+        if (electricItem != null) {
+            electricItem.charge(tier.maximumCharge(), tier.voltageTier(), true, false);
+        }
+        subItems.add(charged);
+    }
+
     @Override
     public EnumActionResult onItemUse(EntityPlayer player, World world, BlockPos position, EnumHand hand,
                                       EnumFacing facing, float hitX, float hitY, float hitZ) {
+        if (player.isSneaking()) {
+            player.setActiveHand(hand);
+            if (world.isRemote) {
+                MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
+                        ExecuteManipulatorOperationMessage.Action.START));
+            }
+            return EnumActionResult.SUCCESS;
+        }
         if (world.isRemote) return EnumActionResult.SUCCESS;
 
         ItemStack stack = player.getHeldItem(hand);
@@ -125,19 +156,37 @@ public final class ItemMatterManipulator extends Item {
     @Override
     public ActionResult<ItemStack> onItemRightClick(World world, EntityPlayer player, EnumHand hand) {
         ItemStack stack = player.getHeldItem(hand);
-        if (!player.isSneaking()) return ActionResult.newResult(EnumActionResult.PASS, stack);
-
-        if (!world.isRemote) {
-            ManipulatorState state = state(stack);
-            state.clearSelections();
-            saveState(stack, state);
-            if (player instanceof EntityPlayerMP serverPlayer) {
-                MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
+        if (player.isSneaking()) {
+            player.setActiveHand(hand);
+            if (world.isRemote) {
+                MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
+                        ExecuteManipulatorOperationMessage.Action.START));
             }
-            player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.selection.cleared"),
-                    true);
+            return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
         }
+
+        if (world.isRemote) ApplyGrayMod.proxy.openMatterManipulatorConfiguration(hand);
         return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
+    }
+
+    @Override
+    public int getMaxItemUseDuration(ItemStack stack) {
+        return 72_000;
+    }
+
+    @Override
+    public EnumAction getItemUseAction(ItemStack stack) {
+        return EnumAction.BOW;
+    }
+
+    @Override
+    public void onPlayerStoppedUsing(ItemStack stack, World world, EntityLivingBase entity, int timeLeft) {
+        if (!world.isRemote || !(entity instanceof EntityPlayer player)) return;
+        int useTicks = getMaxItemUseDuration(stack) - timeLeft;
+        if (useTicks < 1) return;
+        EnumHand hand = player.getHeldItemMainhand() == stack ? EnumHand.MAIN_HAND : EnumHand.OFF_HAND;
+        MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
+                ExecuteManipulatorOperationMessage.Action.STOP));
     }
 
     @Override
@@ -168,12 +217,104 @@ public final class ItemMatterManipulator extends Item {
     public void addInformation(ItemStack stack, World world, List<String> tooltip,
                                net.minecraft.client.util.ITooltipFlag flag) {
         ManipulatorState state = state(stack);
-        tooltip.add(TextFormatting.GRAY + "Tier: " + tier.name());
-        tooltip.add(TextFormatting.GRAY + "Mode: " + state.placeMode().name());
-        tooltip.add(TextFormatting.DARK_GRAY + "Selection: " + selectionSummary(state));
-        if (state.uplinkAddress() != null) {
-            tooltip.add(TextFormatting.DARK_AQUA + "Uplink: " + Long.toUnsignedString(state.uplinkAddress(), 16));
+        if (!GuiScreen.isShiftKeyDown()) {
+            tooltip.add(translate("applygray.matter_manipulator.tooltip.hold_shift"));
+        } else {
+            if (hasCapability(stack, ManipulatorCapability.AE_NETWORK)) {
+                tooltip.add(translate("applygray.matter_manipulator.tooltip.me_connection"));
+            }
+            if (hasCapability(stack, ManipulatorCapability.UPLINK)) {
+                if (state.uplinkAddress() == null) {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.uplink.none"));
+                } else {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.uplink.address",
+                            Long.toUnsignedString(state.uplinkAddress(), 16)));
+                }
+            }
+            if (tier.capabilities().stream().filter(capability -> capability == ManipulatorCapability.GEOMETRY ||
+                    capability == ManipulatorCapability.COPYING || capability == ManipulatorCapability.MOVING ||
+                    capability == ManipulatorCapability.EXCHANGING || capability == ManipulatorCapability.CABLES)
+                    .count() > 1 || state.installedUpgrades().stream().anyMatch(upgrade ->
+                            upgrade.providedCapabilities().stream().anyMatch(capability ->
+                                    capability == ManipulatorCapability.COPYING || capability == ManipulatorCapability.MOVING ||
+                                    capability == ManipulatorCapability.EXCHANGING || capability == ManipulatorCapability.CABLES))) {
+                tooltip.add(translate("applygray.matter_manipulator.tooltip.mode", localizedEnum(state.placeMode())));
+            }
+            if (hasCapability(stack, ManipulatorCapability.REMOVAL)) {
+                tooltip.add(translate("applygray.matter_manipulator.tooltip.removing", localizedEnum(state.removalMode())));
+            }
+            switch (state.placeMode()) {
+                case GEOMETRY -> {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.shape", localizedEnum(state.shape())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.coord_a", locationText(state.selectionA())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.coord_b", locationText(state.selectionB())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.corner", materials(state.geometryConfiguration().corners())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.edge", materials(state.geometryConfiguration().edges())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.face", materials(state.geometryConfiguration().faces())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.volume", materials(state.geometryConfiguration().volumes())));
+                }
+                case COPYING -> {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.copy_a", locationText(state.selectionA())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.copy_b", locationText(state.selectionB())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.paste", locationText(state.selectionC())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.stack", state.copyRepeatX(), state.copyRepeatY(), state.copyRepeatZ()));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.transform", state.copyTransform().axisSummary()));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.smart_copy", state.smartCopy()
+                            ? translate("applygray.matter_manipulator.tooltip.on")
+                            : translate("applygray.matter_manipulator.tooltip.off")));
+                }
+                case MOVING -> {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.cut_a", locationText(state.selectionA())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.cut_b", locationText(state.selectionB())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.paste", locationText(state.selectionC())));
+                }
+                case EXCHANGING -> {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.removable", materials(state.exchangeWhitelist())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.replacing", materials(state.exchangeReplacement())));
+                }
+                case CABLES -> {
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.coord_a", locationText(state.selectionA())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.coord_b", locationText(state.selectionB())));
+                    tooltip.add(translate("applygray.matter_manipulator.tooltip.cable", display(state.cableMaterial())));
+                }
+            }
+            if (!state.installedUpgrades().isEmpty()) {
+                tooltip.add(translate("applygray.matter_manipulator.tooltip.installed_upgrades"));
+                for (ManipulatorUpgrade upgrade : state.installedUpgrades()) {
+                    tooltip.add(TextFormatting.GRAY + "- " + translate(upgrade.translationKey()));
+                }
+            }
         }
+        IElectricItem electricItem = stack.getCapability(GregtechCapabilities.CAPABILITY_ELECTRIC_ITEM, null);
+        long charge = electricItem == null ? 0L : electricItem.discharge(Long.MAX_VALUE, tier.voltageTier(), true, true, true);
+        tooltip.add(translate("applygray.matter_manipulator.tooltip.voltage", charge, tier.maximumCharge(),
+                GTValues.V[tier.voltageTier()], GTValues.VN[tier.voltageTier()]));
+    }
+
+    private static String translate(String key, Object... args) {
+        return net.minecraft.client.resources.I18n.format(key, args);
+    }
+
+    private static String localizedEnum(Enum<?> value) {
+        return translate("applygray.matter_manipulator.enum." + value.name().toLowerCase());
+    }
+
+    private static String locationText(ManipulatorLocation location) {
+        return location == null ? translate("applygray.matter_manipulator.tooltip.none") :
+                location.position().getX() + ", " + location.position().getY() + ", " + location.position().getZ() +
+                        " (" + location.dimension() + ")";
+    }
+
+    private static String display(applygray.mattermanipulator.building.BlockSpec specification) {
+        return specification.isAir() ? translate("applygray.matter_manipulator.tooltip.none") :
+                specification.toStack().getDisplayName();
+    }
+
+    private static String materials(applygray.mattermanipulator.building.WeightedBlockList list) {
+        if (list.entries().isEmpty()) return translate("applygray.matter_manipulator.tooltip.none");
+        StringJoiner joiner = new StringJoiner(", ");
+        list.entries().forEach(entry -> joiner.add(display(entry.spec()) + (entry.weight() == 1 ? "" : " x" + entry.weight())));
+        return joiner.toString();
     }
 
     private static SelectionSlot markNextSelection(ManipulatorState state, ManipulatorLocation location) {

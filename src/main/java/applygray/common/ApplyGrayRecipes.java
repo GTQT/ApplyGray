@@ -1,6 +1,7 @@
 package applygray.common;
 
 import applygray.mattermanipulator.item.MatterManipulatorItems;
+import applygray.mattermanipulator.item.ManipulatorComponent;
 
 import gregtech.api.GTValues;
 import gregtech.api.recipes.ModHandler;
@@ -149,39 +150,17 @@ public class ApplyGrayRecipes {
      * identifiers. The controller and connector therefore remain discoverable through normal JEI recipe lookup.</p>
      */
     private static void registerMatterManipulatorRecipes() {
+        registerManipulatorComponents();
+
         ASSEMBLER_RECIPES.recipeBuilder()
-                .input(gregtech.common.items.MetaItems.POWER_UNIT_IV)
-                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_HV)
-                .input(gregtech.common.items.MetaItems.SENSOR_HV)
-                .input(circuit, MarkerMaterial.create(GTValues.VN[HV].toLowerCase()), 2)
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLUEPRINT))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.POWER_CORE_MK0))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.COMPUTER_CORE_MK0))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.TELEPORTER_CORE_MK0))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.FRAME_MK0))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.LENS_ASSEMBLY_MK0))
                 .output(MatterManipulatorItems.MK0)
                 .duration(400).EUt(VA[HV]).buildAndRegister();
-
-        ASSEMBLER_RECIPES.recipeBuilder()
-                .input(MatterManipulatorItems.MK0)
-                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_EV)
-                .input(gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV)
-                .input(circuit, MarkerMaterial.create(GTValues.VN[EV].toLowerCase()), 2)
-                .output(MatterManipulatorItems.MK1)
-                .duration(600).EUt(VA[EV]).buildAndRegister();
-
-        ASSEMBLER_RECIPES.recipeBuilder()
-                .input(MatterManipulatorItems.MK1)
-                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_IV)
-                .input(gregtech.common.items.MetaItems.QUANTUM_ASSEMBLY_IV)
-                .input(gregtech.common.items.MetaItems.EMITTER_IV)
-                .input(circuit, MarkerMaterial.create(GTValues.VN[IV].toLowerCase()), 2)
-                .output(MatterManipulatorItems.MK2)
-                .duration(800).EUt(VA[IV]).buildAndRegister();
-
-        ASSEMBLER_RECIPES.recipeBuilder()
-                .input(MatterManipulatorItems.MK2)
-                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
-                .input(gregtech.common.items.MetaItems.QUANTUM_MAINFRAME_ZPM)
-                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
-                .input(circuit, MarkerMaterial.create(GTValues.VN[ZPM].toLowerCase()), 2)
-                .output(MatterManipulatorItems.MK3)
-                .duration(1_200).EUt(VA[ZPM]).buildAndRegister();
 
         ASSEMBLER_RECIPES.recipeBuilder()
                 .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
@@ -201,27 +180,112 @@ public class ApplyGrayRecipes {
                 .duration(800).EUt(VA[ZPM]).buildAndRegister();
 
         ASSEMBLER_RECIPES.recipeBuilder()
-                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
-                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLANK_UPGRADE))
+                .input(MatterManipulatorItems.component(ManipulatorComponent.QUANTUM_DOWNLINK))
                 .output(MatterManipulatorItems.POWER_P2P_UPGRADE)
                 .duration(400).EUt(VA[ZPM]).buildAndRegister();
 
         ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLANK_UPGRADE))
                 .input(gregtech.common.items.MetaItems.ROBOT_ARM_HV)
                 .input(gregtech.common.items.MetaItems.SENSOR_HV)
                 .output(MatterManipulatorItems.MINING_UPGRADE)
                 .duration(200).EUt(VA[HV]).buildAndRegister();
 
         ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLANK_UPGRADE))
                 .input(gregtech.common.items.MetaItems.CONVEYOR_MODULE_IV)
                 .input(gregtech.common.items.MetaItems.ELECTRIC_MOTOR_IV)
                 .output(MatterManipulatorItems.SPEED_UPGRADE)
                 .duration(200).EUt(VA[IV]).buildAndRegister();
 
         ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLANK_UPGRADE))
                 .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_IV)
                 .input(gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV)
                 .output(MatterManipulatorItems.POWER_EFFICIENCY_UPGRADE)
                 .duration(200).EUt(VA[IV]).buildAndRegister();
+    }
+
+    private static void registerManipulatorComponents() {
+        ModHandler.addShapedRecipe("matter_manipulator_blueprint",
+                new ItemStack(MatterManipulatorItems.component(ManipulatorComponent.BLUEPRINT)), "PPP", "CSC", "PPP",
+                'P', net.minecraft.init.Items.PAPER,
+                'C', gregtech.common.items.MetaItems.INTEGRATED_CIRCUIT.getStackForm(),
+                'S', gregtech.common.items.MetaItems.SENSOR_HV.getStackForm());
+
+        registerTierComponents(0, HV,
+                gregtech.common.items.MetaItems.POWER_UNIT_HV.getStackForm(),
+                gregtech.common.items.MetaItems.SENSOR_HV.getStackForm(),
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_HV.getStackForm(),
+                gregtech.common.items.MetaItems.ROBOT_ARM_HV.getStackForm(),
+                gregtech.common.items.MetaItems.EMITTER_HV.getStackForm());
+        registerTierComponents(1, EV,
+                gregtech.common.items.MetaItems.POWER_UNIT_EV.getStackForm(),
+                gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV.getStackForm(),
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_EV.getStackForm(),
+                gregtech.common.items.MetaItems.ROBOT_ARM_EV.getStackForm(),
+                gregtech.common.items.MetaItems.EMITTER_EV.getStackForm());
+        registerTierComponents(2, IV,
+                gregtech.common.items.MetaItems.POWER_UNIT_IV.getStackForm(),
+                gregtech.common.items.MetaItems.QUANTUM_ASSEMBLY_IV.getStackForm(),
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_IV.getStackForm(),
+                gregtech.common.items.MetaItems.ROBOT_ARM_IV.getStackForm(),
+                gregtech.common.items.MetaItems.EMITTER_IV.getStackForm());
+        registerTierComponents(3, ZPM,
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM.getStackForm(),
+                gregtech.common.items.MetaItems.QUANTUM_MAINFRAME_ZPM.getStackForm(),
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM.getStackForm(),
+                gregtech.common.items.MetaItems.ROBOT_ARM_ZPM.getStackForm(),
+                gregtech.common.items.MetaItems.EMITTER_ZPM.getStackForm());
+
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.COMPUTER_CORE_MK2))
+                .input(gregtech.common.items.MetaItems.EMITTER_IV)
+                .input(gregtech.common.items.MetaItems.SENSOR_IV)
+                .output(MatterManipulatorItems.component(ManipulatorComponent.ME_DOWNLINK))
+                .duration(400).EUt(VA[IV]).buildAndRegister();
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.ME_DOWNLINK))
+                .input(gregtech.common.items.MetaItems.FIELD_GENERATOR_ZPM)
+                .input(gregtech.common.items.MetaItems.EMITTER_ZPM)
+                .output(MatterManipulatorItems.component(ManipulatorComponent.QUANTUM_DOWNLINK))
+                .duration(800).EUt(VA[ZPM]).buildAndRegister();
+        ASSEMBLER_RECIPES.recipeBuilder()
+                .input(MatterManipulatorItems.component(ManipulatorComponent.BLUEPRINT))
+                .input(gregtech.common.items.MetaItems.QUANTUM_PROCESSOR_EV)
+                .output(MatterManipulatorItems.component(ManipulatorComponent.BLANK_UPGRADE))
+                .duration(200).EUt(VA[EV]).buildAndRegister();
+    }
+
+    private static void registerTierComponents(int tier, int voltageTier, ItemStack power, ItemStack computer,
+                                               ItemStack teleporter, ItemStack frame, ItemStack lens) {
+        ManipulatorComponent[] components = tierComponents(tier);
+        ItemStack blueprint = new ItemStack(MatterManipulatorItems.component(ManipulatorComponent.BLUEPRINT));
+        ItemStack[] primaryIngredients = {power, computer, teleporter, frame, lens};
+        gregtech.api.items.metaitem.MetaItem<?>.MetaValueItem[] secondaryIngredients = {
+                gregtech.common.items.MetaItems.FIELD_GENERATOR_HV,
+                gregtech.common.items.MetaItems.SENSOR_HV,
+                gregtech.common.items.MetaItems.EMITTER_HV,
+                gregtech.common.items.MetaItems.CONVEYOR_MODULE_HV,
+                gregtech.common.items.MetaItems.SENSOR_HV
+        };
+        for (int index = 0; index < components.length; index++) {
+            ASSEMBLER_RECIPES.recipeBuilder()
+                    .inputs(blueprint.copy())
+                    .inputs(primaryIngredients[index].copy())
+                    .input(secondaryIngredients[index])
+                    .input(circuit, MarkerMaterial.create(GTValues.VN[voltageTier].toLowerCase()), 2)
+                    .output(MatterManipulatorItems.component(components[index]))
+                    .duration(200 + tier * 200).EUt(VA[voltageTier]).buildAndRegister();
+        }
+    }
+
+    private static ManipulatorComponent[] tierComponents(int tier) {
+        int offset = 1 + tier * 5;
+        ManipulatorComponent[] values = ManipulatorComponent.values();
+        return new ManipulatorComponent[] {
+                values[offset], values[offset + 1], values[offset + 2], values[offset + 3], values[offset + 4]
+        };
     }
 }

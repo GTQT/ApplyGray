@@ -128,6 +128,11 @@ public final class MatterManipulatorPreviewRenderer {
     private static void addGeometryPreview(List<PreviewBox> boxes, ManipulatorState state, int dimension) {
         GeometrySelection selection = state.geometrySelection();
         if (!selection.isComplete() || selection.a().dimension() != dimension) return;
+        List<BlockPos> anchors = new ArrayList<>();
+        anchors.add(selection.a().position());
+        anchors.add(selection.b().position());
+        if (selection.c() != null) anchors.add(selection.c().position());
+        addRegionPreview(boxes, anchors, 0.15F, 0.60F, 0.75F, 0.90F);
         GeometryPlan plan = GeometryPlanner.plan(selection, MAX_DETAILED_VOXELS + 1);
         addOperationPreview(boxes, plan.operations().stream().map(operation -> operation.location().position()).toList(),
                 0.25F, 0.95F, 0.85F);
@@ -138,6 +143,7 @@ public final class MatterManipulatorPreviewRenderer {
         ManipulatorLocation b = state.selectionB();
         if (!sameDimension(dimension, a, b)) return;
         BlockPos pinned = GeometryPlanner.pinToAxes(a.position(), b.position());
+        addRegionPreview(boxes, List.of(a.position(), pinned), 0.15F, 0.60F, 0.75F, 0.90F);
         GeometryPlan plan = GeometryPlanner.plan(new GeometrySelection(ManipulatorShape.LINE, a,
                 new ManipulatorLocation(dimension, pinned), null), MAX_DETAILED_VOXELS + 1);
         addOperationPreview(boxes, plan.operations().stream().map(operation -> operation.location().position()).toList(),
@@ -151,9 +157,11 @@ public final class MatterManipulatorPreviewRenderer {
         if (!sameDimension(dimension, a, b, c)) return;
 
         addRegionPreview(boxes, a, b, dimension, 0.20F, 0.75F, 1.00F);
-        CopyPlan plan = CopyPlanner.plan(a, b, c, new CopyTransform(state.copyRotation(), state.copyMirror(),
+        CopyPlan plan = CopyPlanner.plan(a, b, c, new CopyTransform(state.copyTransform(),
                 state.copyRepeatX(), state.copyRepeatY(), state.copyRepeatZ()), MAX_DETAILED_VOXELS + 1);
-        addOperationPreview(boxes, plan.operations().stream().map(operation -> operation.target()).toList(), 0.95F,
+        List<BlockPos> targets = plan.operations().stream().map(operation -> operation.target()).toList();
+        addRegionPreview(boxes, targets, 0.75F, 0.50F, 0.15F, 0.90F);
+        addOperationPreview(boxes, targets, 0.95F,
                 0.35F, 0.20F);
     }
 
@@ -177,7 +185,13 @@ public final class MatterManipulatorPreviewRenderer {
     private static void addRegionPreview(List<PreviewBox> boxes, ManipulatorLocation a, ManipulatorLocation b,
                                          int dimension, float red, float green, float blue) {
         if (!sameDimension(dimension, a, b)) return;
-        boxes.add(new PreviewBox(bounds(List.of(a.position(), b.position())), red, green, blue, 0.85F));
+        addRegionPreview(boxes, List.of(a.position(), b.position()), red, green, blue, 0.85F);
+    }
+
+    private static void addRegionPreview(List<PreviewBox> boxes, List<BlockPos> positions, float red, float green,
+                                         float blue, float alpha) {
+        if (positions.isEmpty()) return;
+        boxes.add(new PreviewBox(bounds(positions), red, green, blue, alpha));
     }
 
     private static boolean sameDimension(int dimension, ManipulatorLocation... locations) {

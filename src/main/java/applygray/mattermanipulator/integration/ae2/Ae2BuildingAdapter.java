@@ -12,6 +12,7 @@ import applygray.mattermanipulator.building.CapturedBlock;
 import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
+import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import ae2.api.implementations.items.IFacadeItem;
 import ae2.api.inventories.InternalInventory;
@@ -31,8 +32,6 @@ import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
-import net.minecraft.util.Mirror;
-import net.minecraft.util.Rotation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.NonNullList;
@@ -86,13 +85,13 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     }
 
     @Override
-    public CapturedBlock transformCapture(CapturedBlock captured, Mirror mirror, Rotation rotation) {
+    public CapturedBlock transformCapture(CapturedBlock captured, ManipulatorTransform transform) {
         Objects.requireNonNull(captured, "captured");
         if (!(captured.data() instanceof Ae2BusCaptureData data)) {
             throw new IllegalArgumentException("AE2 cable bus capture has incompatible data");
         }
         return new CapturedBlock(captured.source(), captured.specification(), captured.adapterId(),
-                data.transformed(mirror, rotation));
+                data.transformed(transform));
     }
 
     @Override

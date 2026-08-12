@@ -1,0 +1,6 @@
+{
+  "parent": "item/generated",
+  "textures": {
+    "layer0": "applygray:items/matter_manipulator_power_core_mk1"
+  }
+}

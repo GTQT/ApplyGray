@@ -3,8 +3,8 @@ package applygray.mattermanipulator.building;
 import java.util.List;
 import java.util.Objects;
 
-import net.minecraft.util.Mirror;
-import net.minecraft.util.Rotation;
+import applygray.mattermanipulator.state.ManipulatorTransform;
+
 import net.minecraft.util.math.BlockPos;
 
 /** Ordered target-adapter registry. Specialised GT and AE2 adapters are registered before the vanilla fallback. */
@@ -48,11 +48,10 @@ public final class BuildingAdapterRegistry {
                 "No target building adapter can capture this block");
     }
 
-    public CapturedBlock transformCapture(CapturedBlock captured, Mirror mirror, Rotation rotation) {
+    public CapturedBlock transformCapture(CapturedBlock captured, ManipulatorTransform transform) {
         Objects.requireNonNull(captured, "captured");
-        Objects.requireNonNull(mirror, "mirror");
-        Objects.requireNonNull(rotation, "rotation");
-        return adapterFor(captured).transformCapture(captured, mirror, rotation);
+        Objects.requireNonNull(transform, "transform");
+        return adapterFor(captured).transformCapture(captured, transform);
     }
 
     public PreparedBlockChange prepareApply(BuildingContext context, BlockPos position, CapturedBlock captured) {

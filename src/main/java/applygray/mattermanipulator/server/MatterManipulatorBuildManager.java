@@ -88,16 +88,10 @@ public final class MatterManipulatorBuildManager {
 
     private MatterManipulatorBuildManager() {}
 
-    /** Starts the selected operation mode or cancels this player's current operation. */
-    public static void startOrCancel(EntityPlayerMP player, EnumHand hand) {
+    /** Starts the selected operation immediately; subsequent server ticks execute bounded batches. */
+    public static void start(EntityPlayerMP player, EnumHand hand) {
         UUID playerId = player.getUniqueID();
-        PendingBuild current = ACTIVE_BUILDS.remove(playerId);
-        if (current != null) {
-            ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation canceled for {}", current.kind,
-                    player.getName());
-            player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.canceled"), true);
-            return;
-        }
+        if (ACTIVE_BUILDS.containsKey(playerId)) return;
 
         ItemStack stack = player.getHeldItem(hand);
         if (!(stack.getItem() instanceof ItemMatterManipulator manipulator)) {
@@ -109,6 +103,33 @@ public final class MatterManipulatorBuildManager {
             ManipulatorState state = copyState(manipulator.state(stack));
             PendingBuild pending = createPendingBuild(player, hand, stack, manipulator, state);
             ACTIVE_BUILDS.put(playerId, pending);
+            if (pending.kind == BuildKind.GEOMETRY || pending.kind == BuildKind.CABLE) {
+                int air = 0;
+                for (BoundGeometryOperation operation : (pending.kind == BuildKind.GEOMETRY
+                        ? ((BoundGeometryPlan) pending.plan).operations()
+                        : ((BoundGeometryPlan) pending.plan).operations())) {
+                    if (operation.block().isAir()) air++;
+                }
+                ApplyGrayMod.LOGGER.info("Matter Manipulator {} plan for {}: {} operation(s), {} air operation(s)",
+                        pending.kind, player.getName(), pending.operationCount, air);
+            }
+            try {
+                if (runNextStep(player, stack, pending)) {
+                    ACTIVE_BUILDS.remove(playerId);
+                    int changed = pending.lastWorldChanges;
+                    ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation completed immediately for {}: {} world change(s)",
+                            pending.kind, player.getName(), changed);
+                    player.sendStatusMessage(new TextComponentTranslation(changed == 0
+                            ? "applygray.matter_manipulator.build.no_changes"
+                            : "applygray.matter_manipulator.build.complete", changed == 0 ? 0 : pending.operationCount), true);
+                    return;
+                }
+                pending.ticksUntilNextBatch = batchInterval(pending) - 1;
+            } catch (RuntimeException exception) {
+                ACTIVE_BUILDS.remove(playerId);
+                reportStartFailure(player, exception);
+                return;
+            }
             ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation started for {} with {} block(s)", pending.kind,
                     player.getName(), pending.operationCount);
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.started",
@@ -116,6 +137,14 @@ public final class MatterManipulatorBuildManager {
         } catch (RuntimeException exception) {
             reportStartFailure(player, exception);
         }
+    }
+
+    /** Stops the operation when the player releases the use key. */
+    public static void stop(EntityPlayerMP player, EnumHand hand) {
+        PendingBuild current = ACTIVE_BUILDS.remove(player.getUniqueID());
+        if (current == null || current.hand != hand) return;
+        ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation canceled for {}", current.kind, player.getName());
+        player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.canceled"), true);
     }
 
     /**
@@ -217,10 +246,12 @@ public final class MatterManipulatorBuildManager {
             try {
                 if (runNextStep(player, stack, pending)) {
                     iterator.remove();
-                    ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation completed for {} with {} block(s)",
-                            pending.kind, player.getName(), pending.operationCount);
-                    player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.complete",
-                            pending.operationCount), true);
+                    int changed = pending.lastWorldChanges;
+                    ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation completed for {} with {} block(s), {} world change(s)",
+                            pending.kind, player.getName(), pending.operationCount, changed);
+                    player.sendStatusMessage(new TextComponentTranslation(changed == 0
+                            ? "applygray.matter_manipulator.build.no_changes"
+                            : "applygray.matter_manipulator.build.complete", changed == 0 ? 0 : pending.operationCount), true);
                 } else {
                     pending.ticksUntilNextBatch = batchInterval(pending) - 1;
                 }
@@ -287,6 +318,7 @@ public final class MatterManipulatorBuildManager {
                         pending.manipulator.tier(), pending.state, access.materialSources, access.powerSource);
                 GeometryBuildResult result = GEOMETRY_SERVICE.executeNextBatch(request,
                         (BoundGeometryPlan) pending.plan, pending.nextOperationIndex);
+                logBatchResult(player, pending, result.transaction());
                 if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
                 pending.nextOperationIndex = result.nextOperationIndex();
                 yield result.complete();
@@ -296,6 +328,7 @@ public final class MatterManipulatorBuildManager {
                         pending.state, access.materialSources, access.powerSource);
                 CopyBuildResult result = COPY_SERVICE.executeNextBatch(request, (BoundCopyPlan) pending.plan,
                         pending.nextOperationIndex);
+                logBatchResult(player, pending, result.transaction());
                 if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
                 pending.nextOperationIndex = result.nextOperationIndex();
                 yield result.complete();
@@ -304,6 +337,7 @@ public final class MatterManipulatorBuildManager {
                 MoveBuildRequest request = new MoveBuildRequest(player, stack, pending.hand, pending.manipulator.tier(),
                         pending.state, access.materialSources, access.powerSource);
                 MoveBuildResult result = MOVE_SERVICE.execute(request, (CopyPlan) pending.plan);
+                logBatchResult(player, pending, result.transaction());
                 if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
                 yield true;
             }
@@ -312,6 +346,7 @@ public final class MatterManipulatorBuildManager {
                         pending.manipulator.tier(), pending.state, access.materialSources, access.powerSource);
                 ExchangeBuildResult result = EXCHANGE_SERVICE.executeNextBatch(request, (BoundExchangePlan) pending.plan,
                         pending.nextOperationIndex);
+                logBatchResult(player, pending, result.transaction());
                 if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
                 pending.nextOperationIndex = result.nextOperationIndex();
                 yield result.complete();
@@ -321,11 +356,20 @@ public final class MatterManipulatorBuildManager {
                         pending.state, access.materialSources, access.powerSource);
                 GeometryBuildResult result = CABLE_SERVICE.executeNextBatch(request, (BoundGeometryPlan) pending.plan,
                         pending.nextOperationIndex);
+                logBatchResult(player, pending, result.transaction());
                 if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
                 pending.nextOperationIndex = result.nextOperationIndex();
                 yield result.complete();
             }
         };
+    }
+
+    private static void logBatchResult(EntityPlayerMP player, PendingBuild pending, BuildTransaction.Result result) {
+        pending.lastWorldChanges = result.worldChanges();
+        if (!result.committed()) {
+            ApplyGrayMod.LOGGER.warn("Matter Manipulator {} batch failed for {}: state={}, source={}, failure={}",
+                    pending.kind, player.getName(), result.state(), result.failedSource(), result.failure());
+        }
     }
 
     private static int batchInterval(PendingBuild pending) {
@@ -531,6 +575,7 @@ public final class MatterManipulatorBuildManager {
         private final int operationCount;
         private int nextOperationIndex;
         private int ticksUntilNextBatch;
+        private int lastWorldChanges;
 
         private PendingBuild(UUID playerId, EnumHand hand, ItemMatterManipulator manipulator, ManipulatorState state,
                              BuildKind kind, Object plan, int operationCount) {

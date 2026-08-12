@@ -71,6 +71,15 @@ public final class GeometryConfiguration {
         }
     }
 
+    /** Replaces all four geometry roles, matching the source manipulator's default ALL pick mode. */
+    public void setAll(BlockSpec specification) {
+        Objects.requireNonNull(specification, "specification");
+        corners.setSingle(specification);
+        edges.setSingle(specification);
+        faces.setSingle(specification);
+        volumes.setSingle(specification);
+    }
+
     public NBTTagCompound writeToNbt() {
         NBTTagCompound data = new NBTTagCompound();
         data.setTag(KEY_CORNERS, corners.writeToNbt());

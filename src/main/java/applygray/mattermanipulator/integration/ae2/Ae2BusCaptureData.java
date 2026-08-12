@@ -10,11 +10,10 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.CapturedBlockData;
 import applygray.mattermanipulator.inventory.ResourceRequirement;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
+import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumFacing;
-import net.minecraft.util.Mirror;
-import net.minecraft.util.Rotation;
 import org.jetbrains.annotations.Nullable;
 
 /** Explicit AE2 cable-bus state represented solely by public dismantle-item stacks and facade stacks. */
@@ -70,17 +69,16 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
     }
 
     /** Produces a side-correct snapshot for a mirrored and rotated copy operation. */
-    public Ae2BusCaptureData transformed(Mirror mirror, Rotation rotation) {
-        Objects.requireNonNull(mirror, "mirror");
-        Objects.requireNonNull(rotation, "rotation");
+    public Ae2BusCaptureData transformed(ManipulatorTransform transform) {
+        Objects.requireNonNull(transform, "transform");
         List<Part> transformedParts = new ArrayList<>(parts.size());
         List<Facade> transformedFacades = new ArrayList<>(facades.size());
         for (Part part : parts) {
-            transformedParts.add(new Part(transformFacing(part.side, mirror, rotation), part.stack,
+            transformedParts.add(new Part(transformFacing(part.side, transform), part.stack,
                     part.patternProviderContents));
         }
         for (Facade facade : facades) {
-            transformedFacades.add(new Facade(transformFacing(facade.side, mirror, rotation), facade.stack));
+            transformedFacades.add(new Facade(transformFacing(facade.side, transform), facade.stack));
         }
         return new Ae2BusCaptureData(transformedParts, transformedFacades);
     }
@@ -93,8 +91,8 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         return withoutSettings(parts.getFirst().stack);
     }
 
-    private static EnumFacing transformFacing(EnumFacing side, Mirror mirror, Rotation rotation) {
-        return side == null ? null : rotation.rotate(mirror.mirror(side));
+    private static EnumFacing transformFacing(EnumFacing side, ManipulatorTransform transform) {
+        return side == null ? null : transform.apply(side);
     }
 
     private static BlockSpec withoutSettings(ItemStack stack) {

@@ -29,7 +29,7 @@ public final class CopyBuildService {
     public BoundCopyPlan createPlan(CopyBuildRequest request) {
         Objects.requireNonNull(request, "request");
         validateRequest(request);
-        CopyTransform transform = new CopyTransform(request.state().copyRotation(), request.state().copyMirror(),
+        CopyTransform transform = new CopyTransform(request.state().copyTransform(),
                 request.state().copyRepeatX(), request.state().copyRepeatY(), request.state().copyRepeatZ());
         CopyPlan positions = CopyPlanner.plan(request.state().selectionA(), request.state().selectionB(),
                 request.state().selectionC(), transform, GeometryPlanner.DEFAULT_MAX_OPERATION_COUNT);
@@ -39,8 +39,7 @@ public final class CopyBuildService {
         List<BoundCopyOperation> operations = new ArrayList<>(positions.operations().size());
         for (CopyPositionOperation operation : positions.operations()) {
             CapturedBlock captured = adapters.capture(context, operation.source());
-            CapturedBlock transformed = adapters.transformCapture(captured, request.state().copyMirror().minecraftMirror(),
-                    request.state().copyRotation().minecraftRotation());
+            CapturedBlock transformed = adapters.transformCapture(captured, request.state().copyTransform());
             operations.add(new BoundCopyOperation(operation.source(), operation.target(), transformed));
         }
         return new BoundCopyPlan(positions, operations);
@@ -54,15 +53,17 @@ public final class CopyBuildService {
             throw new IllegalArgumentException("startIndex is outside the copy plan");
         }
 
-        int nextOperationIndex = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
+        int batchEnd = Math.min(plan.operations().size(), startIndex + request.tier().blocksPerBatch());
         BuildingContext context = context(request);
-        List<PreparedBlockChange> changes = new ArrayList<>(nextOperationIndex - startIndex);
-        for (int index = startIndex; index < nextOperationIndex; index++) {
+        List<PreparedBlockChange> changes = new ArrayList<>(batchEnd - startIndex);
+        for (int index = startIndex; index < batchEnd; index++) {
             BoundCopyOperation operation = plan.operations().get(index);
             changes.add(adapters.prepareApply(context, operation.target(), operation.captured()));
         }
-        BuildTransaction transaction = BuildTransaction.prepare(changes, request.materialSources(), request.powerSource());
-        return new CopyBuildResult(plan, startIndex, nextOperationIndex, transaction.execute());
+        BuildTransaction.PreparedBatch batch = BuildTransaction.prepareLargestPrefix(changes, request.materialSources(),
+                request.powerSource());
+        int nextOperationIndex = startIndex + batch.changeCount();
+        return new CopyBuildResult(plan, startIndex, nextOperationIndex, batch.transaction().execute());
     }
 
     private static BuildingContext context(CopyBuildRequest request) {
