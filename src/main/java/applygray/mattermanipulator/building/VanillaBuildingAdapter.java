@@ -74,11 +74,6 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
             throw new BuildingException(BuildingException.Reason.REMOVAL_NOT_ALLOWED, position,
                     "The configured removal mode does not permit replacing the target block");
         }
-        if (!context.world().mayPlace(targetState.getBlock(), position, false, EnumFacing.UP, context.player())) {
-            throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
-                    "The target block cannot be placed at this position");
-        }
-
         return new VanillaPlacementChange(context, position, originalState, targetState, specification,
                 dropsFor(context, position, originalState));
     }
@@ -323,7 +318,21 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
         public void apply() {
             verifyOriginalState();
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
+            // Vanilla's mayPlace check rejects occupied positions. Replacement permission was validated during
+            // preparation, so clear the old block first and run the placement check against the actual post-removal
+            // world state. BuildTransaction restores the snapshot if any later step fails.
+            if (!isAir(context, position, originalState) &&
+                    !context.world().setBlockState(position, Blocks.AIR.getDefaultState(), WORLD_UPDATE_FLAGS)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "Minecraft rejected removal of the replaced block");
+            }
+            if (!context.world().mayPlace(targetState.getBlock(), position, false, EnumFacing.UP, context.player())) {
+                rollback();
+                throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
+                        "The target block cannot be placed after removing the original block");
+            }
             if (!context.world().setBlockState(position, targetState, WORLD_UPDATE_FLAGS)) {
+                rollback();
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
                         "Minecraft rejected the requested block state");
             }

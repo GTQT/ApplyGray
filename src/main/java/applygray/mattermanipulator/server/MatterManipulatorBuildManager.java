@@ -25,6 +25,7 @@ import applygray.mattermanipulator.building.ExchangeBuildService;
 import applygray.mattermanipulator.building.GeometryBuildRequest;
 import applygray.mattermanipulator.building.GeometryBuildResult;
 import applygray.mattermanipulator.building.GeometryBuildService;
+import applygray.mattermanipulator.building.GeometryConfiguration;
 import applygray.mattermanipulator.building.MoveBuildRequest;
 import applygray.mattermanipulator.building.MoveBuildResult;
 import applygray.mattermanipulator.building.MoveBuildService;
@@ -110,8 +111,22 @@ public final class MatterManipulatorBuildManager {
                         : ((BoundGeometryPlan) pending.plan).operations())) {
                     if (operation.block().isAir()) air++;
                 }
-                ApplyGrayMod.LOGGER.info("Matter Manipulator {} plan for {}: {} operation(s), {} air operation(s)",
-                        pending.kind, player.getName(), pending.operationCount, air);
+                if (pending.kind == BuildKind.GEOMETRY) {
+                    var geometry = ((BoundGeometryPlan) pending.plan).geometry();
+                    GeometryConfiguration configuration = pending.state.geometryConfiguration();
+                    ApplyGrayMod.LOGGER.info("Matter Manipulator GEOMETRY selection for {}: shape={}, A={}, B={}, C={}, "
+                                    + "materialSlots corner={} edge={} face={} volume={}, plannedRoles corner={} edge={} face={} volume={}, operations={}, air={}",
+                            player.getName(), pending.state.shape(), pending.state.selectionA(), pending.state.selectionB(),
+                            pending.state.selectionC(), configuration.corners().entries().size(),
+                            configuration.edges().entries().size(), configuration.faces().entries().size(),
+                            configuration.volumes().entries().size(), geometry.count(applygray.mattermanipulator.planning.VoxelRole.CORNER),
+                            geometry.count(applygray.mattermanipulator.planning.VoxelRole.EDGE),
+                            geometry.count(applygray.mattermanipulator.planning.VoxelRole.FACE),
+                            geometry.count(applygray.mattermanipulator.planning.VoxelRole.VOLUME), pending.operationCount, air);
+                } else {
+                    ApplyGrayMod.LOGGER.info("Matter Manipulator {} plan for {}: {} operation(s), {} air operation(s)",
+                            pending.kind, player.getName(), pending.operationCount, air);
+                }
             }
             try {
                 if (runNextStep(player, stack, pending)) {
@@ -510,8 +525,11 @@ public final class MatterManipulatorBuildManager {
             return;
         }
         if (exception instanceof BuildingException building) {
+            ApplyGrayMod.LOGGER.warn("Matter Manipulator operation rejected for {} at {}: reason={}, message={}",
+                    player.getName(), building.position(), building.reason(), building.getMessage());
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.rejected",
-                    building.position().getX(), building.position().getY(), building.position().getZ()), true);
+                    building.position().getX(), building.position().getY(), building.position().getZ(),
+                    building.reason().name()), true);
             return;
         }
         if (exception instanceof InsufficientResourcesException) {
@@ -538,8 +556,11 @@ public final class MatterManipulatorBuildManager {
 
     private static void reportBatchFailure(EntityPlayerMP player, BuildTransaction.Result result) {
         if (result.failure() instanceof BuildingException building) {
+            ApplyGrayMod.LOGGER.warn("Matter Manipulator batch rejected for {} at {}: reason={}, message={}",
+                    player.getName(), building.position(), building.reason(), building.getMessage());
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.rejected",
-                    building.position().getX(), building.position().getY(), building.position().getZ()), true);
+                    building.position().getX(), building.position().getY(), building.position().getZ(),
+                    building.reason().name()), true);
         } else if (result.state() == BuildTransaction.State.OUTPUT_FAILURE) {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.no_output"), true);
         } else if (result.state() == BuildTransaction.State.ENERGY_FAILURE ||
