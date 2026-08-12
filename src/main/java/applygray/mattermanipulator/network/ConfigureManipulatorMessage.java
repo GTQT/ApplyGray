@@ -7,6 +7,7 @@ import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorPickTarget;
+import applygray.mattermanipulator.state.ManipulatorPendingAction;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
 import applygray.mattermanipulator.state.ManipulatorSelectionActions;
 import applygray.mattermanipulator.state.ManipulatorShape;
@@ -226,17 +227,15 @@ public final class ConfigureManipulatorMessage implements IMessage {
                             new BlockPos(0, message.value, 0));
                     case SHIFT_SELECTIONS_Z -> ManipulatorSelectionActions.shiftSourceRegion(state,
                             new BlockPos(0, 0, message.value));
-                    case PICK_CORNER -> state.setPickTarget(ManipulatorPickTarget.CORNER);
-                    case PICK_EDGE -> state.setPickTarget(ManipulatorPickTarget.EDGE);
-                    case PICK_FACE -> state.setPickTarget(ManipulatorPickTarget.FACE);
-                    case PICK_VOLUME -> state.setPickTarget(ManipulatorPickTarget.VOLUME);
-                    case PICK_ALL -> state.setPickTarget(ManipulatorPickTarget.ALL);
-                    case PICK_EXCHANGE_WHITELIST_SET ->
-                        state.setPickTarget(ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
-                    case PICK_EXCHANGE_WHITELIST_ADD ->
-                        state.setPickTarget(ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
-                    case PICK_EXCHANGE_REPLACEMENT -> state.setPickTarget(ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
-                    case PICK_CABLE -> state.setPickTarget(ManipulatorPickTarget.CABLE);
+                    case PICK_CORNER -> setPick(state, ManipulatorPickTarget.CORNER, ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                    case PICK_EDGE -> setPick(state, ManipulatorPickTarget.EDGE, ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                    case PICK_FACE -> setPick(state, ManipulatorPickTarget.FACE, ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                    case PICK_VOLUME -> setPick(state, ManipulatorPickTarget.VOLUME, ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                    case PICK_ALL -> setPick(state, ManipulatorPickTarget.ALL, ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                    case PICK_EXCHANGE_WHITELIST_SET -> setPick(state, ManipulatorPickTarget.EXCHANGE_WHITELIST_SET, ManipulatorPendingAction.EXCH_SET_REPLACE);
+                    case PICK_EXCHANGE_WHITELIST_ADD -> setPick(state, ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD, ManipulatorPendingAction.EXCH_ADD_REPLACE);
+                    case PICK_EXCHANGE_REPLACEMENT -> setPick(state, ManipulatorPickTarget.EXCHANGE_REPLACEMENT, ManipulatorPendingAction.EXCH_SET_TARGET);
+                    case PICK_CABLE -> setPick(state, ManipulatorPickTarget.CABLE, ManipulatorPendingAction.PICK_CABLE);
                 }
             } catch (IllegalArgumentException exception) {
                 player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.config.denied"), true);
@@ -261,6 +260,7 @@ public final class ConfigureManipulatorMessage implements IMessage {
             };
             requireCapability(manipulator, stack, capability);
             state.setPlaceMode(mode);
+            state.setPendingAction(ManipulatorPendingAction.NONE);
             state.setPickTarget(switch (mode) {
                 case GEOMETRY -> ManipulatorPickTarget.ALL;
                 case EXCHANGING -> ManipulatorPickTarget.EXCHANGE_REPLACEMENT;
@@ -268,6 +268,12 @@ public final class ConfigureManipulatorMessage implements IMessage {
                 case COPYING, MOVING -> state.pickTarget();
             });
             state.clearSelections();
+        }
+
+        private static void setPick(ManipulatorState state, ManipulatorPickTarget target,
+                                    ManipulatorPendingAction action) {
+            state.setPickTarget(target);
+            state.setPendingAction(action);
         }
 
         private static void preparePaste(ItemMatterManipulator manipulator, ItemStack stack, ManipulatorState state) {

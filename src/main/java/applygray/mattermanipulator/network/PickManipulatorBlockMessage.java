@@ -5,6 +5,9 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
 import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
 import applygray.mattermanipulator.state.ManipulatorState;
+import applygray.mattermanipulator.state.ManipulatorPlaceMode;
+import applygray.mattermanipulator.state.ManipulatorPickTarget;
+import applygray.mattermanipulator.state.ManipulatorPendingAction;
 
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
@@ -56,12 +59,23 @@ public final class PickManipulatorBlockMessage implements IMessage {
             RayTraceResult hit = player.world.rayTraceBlocks(start, start.add(player.getLook(1.0F).scale(6.0D)),
                     false, true, false);
             if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) return;
+            ManipulatorState state = manipulator.state(stack);
             BlockSpec specification = BlockSpec.fromState(player.world.getBlockState(hit.getBlockPos()));
             if (specification.isAir()) return;
 
-            ManipulatorState state = manipulator.state(stack);
+            ManipulatorPickTarget target = switch (state.placeMode()) {
+                case GEOMETRY -> state.pickTarget();
+                case EXCHANGING -> player.isSneaking()
+                        ? ManipulatorPickTarget.EXCHANGE_WHITELIST_SET
+                        : ManipulatorPickTarget.EXCHANGE_REPLACEMENT;
+                case CABLES -> ManipulatorPickTarget.CABLE;
+                case COPYING, MOVING -> null;
+            };
+            if (target == null) return;
+            state.setPickTarget(target);
             ManipulatorMaterialPicker.Result result = ManipulatorMaterialPicker.apply(state, specification,
-                    player.isSneaking());
+                    player.isSneaking() && state.placeMode() == ManipulatorPlaceMode.GEOMETRY);
+            state.setPendingAction(ManipulatorPendingAction.NONE);
             manipulator.saveState(stack, state);
             ApplyGrayMod.LOGGER.info("Matter Manipulator material picked by {}: target={}, geometry={}/{}/{}/{}",
                     player.getName(), state.pickTarget(), state.geometryConfiguration().corners().select(new java.util.Random(0L)),

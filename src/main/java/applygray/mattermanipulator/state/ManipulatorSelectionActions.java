@@ -11,10 +11,12 @@ public final class ManipulatorSelectionActions {
 
     public static void beginCopy(ManipulatorState state) {
         beginSelection(state, ManipulatorPlaceMode.COPYING);
+        state.setPendingAction(ManipulatorPendingAction.MARK_COPY_A);
     }
 
     public static void beginMove(ManipulatorState state) {
         beginSelection(state, ManipulatorPlaceMode.MOVING);
+        state.setPendingAction(ManipulatorPendingAction.MARK_CUT_A);
     }
 
     public static void preparePaste(ManipulatorState state) {
@@ -23,11 +25,13 @@ public final class ManipulatorSelectionActions {
             state.setPlaceMode(ManipulatorPlaceMode.COPYING);
         }
         state.setSelectionC(null);
+        state.setPendingAction(ManipulatorPendingAction.MARK_PASTE);
     }
 
     public static void reset(ManipulatorState state) {
         Objects.requireNonNull(state, "state");
         state.clearSelections();
+        state.setPendingAction(ManipulatorPendingAction.NONE);
         resetTransform(state);
     }
 

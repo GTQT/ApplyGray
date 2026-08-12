@@ -10,6 +10,10 @@ import applygray.mattermanipulator.network.ExecuteManipulatorOperationMessage;
 import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorState;
+import applygray.mattermanipulator.state.ManipulatorPendingAction;
+import applygray.mattermanipulator.state.ManipulatorPlaceMode;
+import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
+import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.state.ManipulatorTier;
 import applygray.mattermanipulator.state.ManipulatorUpgrade;
 import applygray.mattermanipulator.uplink.MatterManipulatorUplinkRegistry;
@@ -136,8 +140,40 @@ public final class ItemMatterManipulator extends Item {
 
         ItemStack stack = player.getHeldItem(hand);
         ManipulatorState state = state(stack);
+        if (state.pendingAction() == ManipulatorPendingAction.GEOM_SELECTING_BLOCK ||
+                state.pendingAction() == ManipulatorPendingAction.EXCH_SET_TARGET ||
+                state.pendingAction() == ManipulatorPendingAction.EXCH_SET_REPLACE ||
+                state.pendingAction() == ManipulatorPendingAction.EXCH_ADD_REPLACE ||
+                state.pendingAction() == ManipulatorPendingAction.PICK_CABLE) {
+            BlockSpec picked = BlockSpec.fromState(world.getBlockState(position));
+            if (!picked.isAir()) {
+                if (state.pendingAction() == ManipulatorPendingAction.EXCH_SET_TARGET) {
+                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
+                } else if (state.pendingAction() == ManipulatorPendingAction.EXCH_SET_REPLACE) {
+                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
+                } else if (state.pendingAction() == ManipulatorPendingAction.EXCH_ADD_REPLACE) {
+                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
+                } else if (state.pendingAction() == ManipulatorPendingAction.PICK_CABLE) {
+                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.CABLE);
+                }
+                ManipulatorMaterialPicker.apply(state, picked, player.isSneaking() &&
+                        state.pendingAction() == ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+                state.setPendingAction(ManipulatorPendingAction.NONE);
+                saveState(stack, state);
+                if (player instanceof EntityPlayerMP serverPlayer) MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
+                return EnumActionResult.SUCCESS;
+            }
+        }
         BlockPos selectedPosition = player.isSneaking() ? position : position.offset(facing);
-        SelectionSlot slot = markNextSelection(state, ManipulatorLocation.fromWorld(world, selectedPosition));
+        ManipulatorLocation location = ManipulatorLocation.fromWorld(world, selectedPosition);
+        SelectionSlot slot = applyPendingSelection(state, location);
+        if (slot == null && state.pendingAction() == ManipulatorPendingAction.NONE) {
+            slot = markNextSelection(state, location);
+            if (slot == SelectionSlot.A && (state.placeMode() == ManipulatorPlaceMode.GEOMETRY ||
+                    state.placeMode() == ManipulatorPlaceMode.EXCHANGING || state.placeMode() == ManipulatorPlaceMode.CABLES)) {
+                state.setPendingAction(ManipulatorPendingAction.MOVING_COORDS);
+            }
+        }
         if (slot == null) {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.selection.complete"),
                     true);
@@ -151,6 +187,26 @@ public final class ItemMatterManipulator extends Item {
         player.sendStatusMessage(new TextComponentTranslation(slot.translationKey, selectedPosition.getX(),
                 selectedPosition.getY(), selectedPosition.getZ(), world.provider.getDimension()), true);
         return EnumActionResult.SUCCESS;
+    }
+
+    private static SelectionSlot applyPendingSelection(ManipulatorState state, ManipulatorLocation location) {
+        switch (state.pendingAction()) {
+            case MARK_COPY_A -> { state.setSelectionA(location); state.setPendingAction(ManipulatorPendingAction.MARK_COPY_B); return SelectionSlot.A; }
+            case MARK_COPY_B -> { state.setSelectionB(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.B; }
+            case MARK_CUT_A -> { state.setSelectionA(location); state.setPendingAction(ManipulatorPendingAction.MARK_CUT_B); return SelectionSlot.A; }
+            case MARK_CUT_B -> { state.setSelectionB(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.B; }
+            case MARK_PASTE -> { state.setSelectionC(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.C; }
+            case MOVING_COORDS -> {
+                if (state.selectionA() == null) state.setSelectionA(location);
+                else if (state.selectionB() == null) state.setSelectionB(location);
+                else if (state.shape().requiresThirdPoint() && state.selectionC() == null) state.setSelectionC(location);
+                if (state.selectionB() != null && (!state.shape().requiresThirdPoint() || state.selectionC() != null)) {
+                    state.setPendingAction(ManipulatorPendingAction.NONE);
+                }
+                return state.selectionC() != null ? SelectionSlot.C : SelectionSlot.B;
+            }
+            default -> { return null; }
+        }
     }
 
     @Override
@@ -242,6 +298,10 @@ public final class ItemMatterManipulator extends Item {
             }
             if (hasCapability(stack, ManipulatorCapability.REMOVAL)) {
                 tooltip.add(translate("applygray.matter_manipulator.tooltip.removing", localizedEnum(state.removalMode())));
+            }
+            if (state.pendingAction() != ManipulatorPendingAction.NONE) {
+                tooltip.add(translate("applygray.matter_manipulator.tooltip.pending",
+                        localizedEnum(state.pendingAction())));
             }
             switch (state.placeMode()) {
                 case GEOMETRY -> {

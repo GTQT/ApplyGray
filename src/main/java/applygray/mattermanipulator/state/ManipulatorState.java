@@ -18,7 +18,7 @@ import net.minecraftforge.common.util.Constants;
  */
 public final class ManipulatorState {
 
-    public static final int SCHEMA_VERSION = 10;
+    public static final int SCHEMA_VERSION = 11;
 
     private static final String KEY_SCHEMA = "Schema";
     private static final String KEY_SHAPE = "Shape";
@@ -39,6 +39,7 @@ public final class ManipulatorState {
     private static final String KEY_CABLE_MATERIAL = "CableMaterial";
     private static final String KEY_UPLINK_ADDRESS = "UplinkAddress";
     private static final String KEY_PICK_TARGET = "PickTarget";
+    private static final String KEY_PENDING_ACTION = "PendingAction";
 
     private ManipulatorShape shape = ManipulatorShape.LINE;
     private ManipulatorPlaceMode placeMode = ManipulatorPlaceMode.GEOMETRY;
@@ -58,6 +59,7 @@ public final class ManipulatorState {
     private BlockSpec cableMaterial = BlockSpec.air();
     private Long uplinkAddress;
     private ManipulatorPickTarget pickTarget = ManipulatorPickTarget.ALL;
+    private ManipulatorPendingAction pendingAction = ManipulatorPendingAction.NONE;
 
     public ManipulatorShape shape() {
         return shape;
@@ -182,6 +184,12 @@ public final class ManipulatorState {
         this.pickTarget = Objects.requireNonNull(pickTarget, "pickTarget");
     }
 
+    public ManipulatorPendingAction pendingAction() { return pendingAction; }
+
+    public void setPendingAction(ManipulatorPendingAction action) {
+        this.pendingAction = Objects.requireNonNull(action, "action");
+    }
+
     public boolean hasUpgrade(ManipulatorUpgrade upgrade) {
         return installedUpgrades.contains(upgrade);
     }
@@ -232,6 +240,7 @@ public final class ManipulatorState {
         data.setTag(KEY_CABLE_MATERIAL, cableMaterial.writeToNbt());
         if (uplinkAddress != null) data.setLong(KEY_UPLINK_ADDRESS, uplinkAddress);
         data.setString(KEY_PICK_TARGET, pickTarget.name());
+        data.setString(KEY_PENDING_ACTION, pendingAction.name());
         return data;
     }
 
@@ -278,6 +287,7 @@ public final class ManipulatorState {
             state.uplinkAddress = address == 0L ? null : address;
         }
         state.pickTarget = readEnum(data, KEY_PICK_TARGET, ManipulatorPickTarget.class, state.pickTarget);
+        state.pendingAction = readEnum(data, KEY_PENDING_ACTION, ManipulatorPendingAction.class, state.pendingAction);
         return state;
     }
 
@@ -314,7 +324,7 @@ public final class ManipulatorState {
                 copyRepeatX == state.copyRepeatX && copyRepeatY == state.copyRepeatY && copyRepeatZ == state.copyRepeatZ &&
                 exchangeWhitelist.equals(state.exchangeWhitelist) && exchangeReplacement.equals(state.exchangeReplacement) &&
                 cableMaterial.equals(state.cableMaterial) && Objects.equals(uplinkAddress, state.uplinkAddress) &&
-                pickTarget == state.pickTarget &&
+                pickTarget == state.pickTarget && pendingAction == state.pendingAction &&
                 installedUpgrades.equals(state.installedUpgrades) &&
                 geometryConfiguration.equals(state.geometryConfiguration) &&
                 Objects.equals(selectionA, state.selectionA) && Objects.equals(selectionB, state.selectionB) &&
@@ -325,6 +335,6 @@ public final class ManipulatorState {
     public int hashCode() {
         return Objects.hash(shape, placeMode, removalMode, installedUpgrades, geometryConfiguration, selectionA,
                 selectionB, selectionC, copyTransform, copyRepeatX, copyRepeatY, copyRepeatZ, smartCopy,
-                exchangeWhitelist, exchangeReplacement, cableMaterial, uplinkAddress, pickTarget);
+                exchangeWhitelist, exchangeReplacement, cableMaterial, uplinkAddress, pickTarget, pendingAction);
     }
 }
