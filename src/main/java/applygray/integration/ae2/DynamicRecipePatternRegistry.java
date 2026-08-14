@@ -2432,6 +2432,10 @@ public final class DynamicRecipePatternRegistry {
     private static void logCandidateDecision(ProviderSnapshot source, AEKey target, RecipeMap<?> recipeMap,
                                              NormalizedRecipe normalized, RuleDecision decision,
                                              String decisionName, String reasonCode, long startedAtNanos) {
+        // Standalone graph capture can inspect thousands of valid recipes in one task. Recording and formatting an
+        // accepted/OK event for every edge dominates the actual local DP and immediately evicts useful diagnostics.
+        // Rejections and abnormal outcomes remain visible; the successful path is covered by one task summary.
+        if (isStandalonePatternGeneration() && "accepted".equals(decisionName) && "OK".equals(reasonCode)) return;
         long elapsedMillis = startedAtNanos <= 0 ? 0 : Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000L);
         PlanningMode planningMode = resolveCandidatePlanningMode(source, decision);
         ProviderDiagnosticEvent event = new ProviderDiagnosticEvent(source.providerId, source.position,
@@ -3688,9 +3692,7 @@ public final class DynamicRecipePatternRegistry {
             PatternCandidate candidate = candidates == null ? null :
                     findCandidateByRecipeKey(candidates, step.edgeId());
             if (candidate != null) {
-                RouteCostEstimator inputSelector = new RouteCostEstimator(candidate.source.grid, this,
-                        newRouteCostBudget());
-                EncodedRecipe frozen = inputSelector.freezeExactPlannedInputs(candidate, step);
+                EncodedRecipe frozen = RouteCostEstimator.freezeExactPlannedInputs(candidate, step);
                 if (frozen == null) return null;
                 DynamicRecipePatternDetails detail = createPatternDetail(candidate, frozen);
                 if (!isPatternAvailableFor(step.target(), detail)) return null;
@@ -4062,6 +4064,7 @@ public final class DynamicRecipePatternRegistry {
 
         /** Freezes the already selected occurrence plan without reopening target-level route choices. */
         private int materializeOccurrencePlan(CraftingRecoverySession session, RoutePlan<AEKey> plan) {
+            long startedAt = System.nanoTime();
             Map<AEKey, List<DynamicRecipePatternDetails>> selectedByTarget = new LinkedHashMap<>();
             Set<AEKey> plannedTargets = new LinkedHashSet<>();
             int dynamicSteps = 0;
@@ -4096,9 +4099,7 @@ public final class DynamicRecipePatternRegistry {
                     continue;
                 }
 
-                RouteCostEstimator inputSelector = new RouteCostEstimator(candidate.source.grid, this,
-                        newRouteCostBudget());
-                EncodedRecipe frozen = inputSelector.freezeExactPlannedInputs(candidate, step);
+                EncodedRecipe frozen = RouteCostEstimator.freezeExactPlannedInputs(candidate, step);
                 if (frozen == null) {
                     unresolvedSteps++;
                     session.markTransientGraphIncomplete();
@@ -4125,9 +4126,9 @@ public final class DynamicRecipePatternRegistry {
             }
             session.freezeStandaloneSelection(plannedTargets.size());
             ApplyGrayMod.LOGGER.info("RecipeMap standalone occurrence plan frozen root={} steps={} targets={} " +
-                            "dynamicSteps={} normalSteps={} unresolvedSteps={} targetLevelRescoring=0",
+                            "dynamicSteps={} normalSteps={} unresolvedSteps={} targetLevelRescoring=0 elapsedMs={}",
                     session.rootTarget, plan.steps().size(), plannedTargets.size(), dynamicSteps, normalSteps,
-                    unresolvedSteps);
+                    unresolvedSteps, (System.nanoTime() - startedAt) / 1_000_000L);
             return plannedTargets.size();
         }
 
@@ -4710,10 +4711,15 @@ public final class DynamicRecipePatternRegistry {
         private void selectBestCandidate(AEKey target, List<PatternCandidate> candidates) {
             if (candidates.isEmpty()) return;
             long startedAt = System.nanoTime();
+            CraftingRecoverySession timingSession = CRAFTING_RECOVERY_SESSION.get();
+            boolean logStandaloneRootTiming = isStandalonePatternGeneration() && timingSession != null &&
+                    timingSession.matches(this) && timingSession.isRootTarget(target);
+            int initialCandidateCount = candidates.size();
             RouteCostEstimator estimator = new RouteCostEstimator(candidates.get(0).source.grid, this,
                     newRouteCostBudget());
             if (!retainCycleSafeCandidates(target, candidates, estimator)) return;
             if (rejectIncompletePlanning(target, candidates, estimator)) return;
+            long cycleCompletedAt = System.nanoTime();
             long comparisonAmount = routeComparisonAmount(candidates,
                     candidate -> RouteEdge.of(candidate).getNetOutput(target));
             if (candidates.size() < 2) {
@@ -4741,6 +4747,7 @@ public final class DynamicRecipePatternRegistry {
                 int cost = compareRouteAndStaticCost(planningMode, quickCost, staticCost);
                 return cost != 0 ? cost : compareCandidates(left, right);
             });
+            long quickCompletedAt = System.nanoTime();
 
             PatternCandidate staticSelection = candidates.get(0);
             boolean stockOnlySelection = quickCosts.get(candidates.get(0)).isFullyStocked() &&
@@ -4787,9 +4794,11 @@ public final class DynamicRecipePatternRegistry {
                     candidates.add(0, selected);
                 }
             }
+            long refinementCompletedAt = System.nanoTime();
 
             estimator.commitSelectedPlan(candidates.get(0), target, comparisonAmount);
             if (rejectIncompletePlanning(target, candidates, estimator)) return;
+            long commitCompletedAt = System.nanoTime();
 
             if (isStandalonePatternGeneration() && candidates.get(0) != staticSelection) {
                 CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
@@ -4800,6 +4809,16 @@ public final class DynamicRecipePatternRegistry {
 
             logChemicalProductSolidSelection(target, candidates, quickCosts, refinedCosts, refinedProgress,
                     stockOnlySelection);
+            if (logStandaloneRootTiming) {
+                ApplyGrayMod.LOGGER.info("RecipeMap standalone root phase timings target={} candidates={}/{} " +
+                                "refined={} cycleMs={} quickMs={} refineMs={} commitMs={} totalMs={}",
+                        target, candidates.size(), initialCandidateCount, refinedCosts.size(),
+                        (cycleCompletedAt - startedAt) / 1_000_000L,
+                        (quickCompletedAt - cycleCompletedAt) / 1_000_000L,
+                        (refinementCompletedAt - quickCompletedAt) / 1_000_000L,
+                        (commitCompletedAt - refinementCompletedAt) / 1_000_000L,
+                        (commitCompletedAt - startedAt) / 1_000_000L);
+            }
 
             OptimalRebuildContext optimalRebuild = getActiveOptimalRebuild();
             if (optimalRebuild != null) {
@@ -6563,7 +6582,8 @@ public final class DynamicRecipePatternRegistry {
 
         /** Returns null when a completed plan no longer matches the captured recipe definition. */
         @Nullable
-        private EncodedRecipe freezeExactPlannedInputs(PatternCandidate candidate, RoutePlan.Step<AEKey> step) {
+        private static EncodedRecipe freezeExactPlannedInputs(PatternCandidate candidate,
+                                                               RoutePlan.Step<AEKey> step) {
             RouteEdge edge = RouteEdge.of(candidate);
             PlanMaterializer.Result<GenericStack> materialized = PlanMaterializer.resolveInputs(step,
                     edge.inputs.length, (inputIndex, planned) -> {
@@ -6781,6 +6801,7 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private void commitSelectedPlan(PatternCandidate selected, AEKey target, long requestedAmount) {
+            long startedAt = System.nanoTime();
             RouteEdge edge = RouteEdge.of(selected);
             String planKey = rootScoreKey(edge, requestedAmount);
             CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
@@ -6788,44 +6809,22 @@ public final class DynamicRecipePatternRegistry {
                     session.isRootTarget(target);
             LocalRouteScorer.Result<AEKey> local = localScoresByRootEdge.get(planKey);
             LocalRouteScorer.Result<AEKey> initialLocal = local;
-            int selectedRouteGrants = 0;
-            int materializationGrants = 0;
-            if (local == null && budget.hasRemainingTime()) {
-                estimateRootWithQuota(edge, target, requestedAmount,
-                        getLimits().getMaxPlannerStatesPerTarget());
-                local = localScoresByRootEdge.get(planKey);
-                selectedRouteGrants++;
-            }
-            int selectedRouteQuota = getLimits().getMaxPlannerStatesPerTarget();
-            while (local != null && local.quotaLimited() && budget.hasRemainingTime()) {
-                int available = budget.getRemainingExpansions();
-                int quota = Math.max(1, Math.min(selectedRouteQuota, available));
-                estimateRootWithQuota(edge, target, requestedAmount, quota);
-                local = localScoresByRootEdge.get(planKey);
-                selectedRouteGrants++;
-                if (local == null || !local.quotaLimited() || selectedRouteQuota == Integer.MAX_VALUE) break;
-                selectedRouteQuota = selectedRouteQuota > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE :
-                        selectedRouteQuota * 2;
-            }
-            selectedRouteQuota = getLimits().getMaxPlannerStatesPerTarget();
-            while (local != null && local.routePlan() == null &&
-                    (local.complete() || local.quotaLimited()) && budget.hasRemainingTime()) {
-                int available = budget.getRemainingExpansions();
-                int quota = Math.max(1, Math.min(selectedRouteQuota, available));
+            int commitCalls = 0;
+            if ((local == null || local.routePlan() == null && (local.complete() || local.quotaLimited())) &&
+                    budget.hasRemainingTime()) {
+                // Candidate ranking already selected this root. Continue its memoized local DP and enter the shared
+                // inventory/co-product pass in the same call. Giving the winner the remaining calculation allowance
+                // also prevents a quota-truncated PlanBuild from replaying every completed occurrence on the retry.
+                int quota = Math.max(1, budget.getRemainingExpansions());
                 local = materializeSelectedRootWithQuota(edge, target, requestedAmount, quota);
-                materializationGrants++;
-                if (local.routePlan() != null || !local.quotaLimited() || selectedRouteQuota == Integer.MAX_VALUE) {
-                    break;
-                }
-                selectedRouteQuota = selectedRouteQuota > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE :
-                        selectedRouteQuota * 2;
+                commitCalls = 1;
             }
             if (standaloneRoot) {
                 ApplyGrayMod.LOGGER.info("RecipeMap standalone selected local-plan root={} edge={} " +
-                                "scoringGrants={} materializationGrants={} " +
+                                "commitCalls={} commitMs={} " +
                                 "initial[complete={},reasonCode={},selectedTargets={}] " +
                                 "final[complete={},reasonCode={},selectedTargets={}]",
-                        target, edge.id, selectedRouteGrants, materializationGrants,
+                        target, edge.id, commitCalls, (System.nanoTime() - startedAt) / 1_000_000L,
                         initialLocal != null && initialLocal.complete(),
                         initialLocal == null ? "NOT_SCORED" : initialLocal.reasonCode(),
                         initialLocal == null ? 0 : initialLocal.selectedTargets(),
@@ -6841,8 +6840,10 @@ public final class DynamicRecipePatternRegistry {
                 }
                 if (standaloneRoot) {
                     ApplyGrayMod.LOGGER.info("RecipeMap standalone occurrence plan materialized root={} edge={} " +
-                                    "steps={} localExpansions={} strategy=LOCAL_DP_OCCURRENCE reasonCode=OK",
-                            target, edge.id, local.routePlan().steps().size(), local.expansions());
+                                    "steps={} localExpansions={} scoreExpansions={} repairExpansions={} " +
+                                    "boundPrunedEdges={} strategy=LOCAL_DP_OCCURRENCE reasonCode=OK",
+                            target, edge.id, local.routePlan().steps().size(), local.expansions(),
+                            local.scoreExpansions(), local.repairExpansions(), local.boundPrunedEdges());
                 }
                 return;
             }

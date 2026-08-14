@@ -163,13 +163,44 @@ class LocalRouteScorerTest {
         LocalRouteScorer.Result<String> result = scorer.score(root, "target", 1, 1);
 
         assertTrue(result.quotaLimited());
-        assertEquals(2, result.selectedTargets());
+        assertEquals(1, result.selectedTargets());
 
         LocalRouteScorer.Result<String> completed = scorer.scoreSelected(root, "target", 1, 16);
 
         assertTrue(completed.complete());
+        assertEquals(1, completed.expansions());
+        assertEquals(completed.expansions(), completed.scoreExpansions() + completed.repairExpansions());
         assertEquals(3, completed.routePlan().steps().size());
         assertEquals(3, completed.selectedTargets());
+    }
+
+    @Test
+    void completedIncumbentPrunesAnEdgeWhosePartialCostCannotRecover() {
+        TestContext context = new TestContext(Map.of("cheap-ore", 1L, "expensive-ore", 100L, "unused-ore", 1L));
+        RouteModel.Edge<String> cheap = edge("a-cheap", input("cheap-ore"), "part");
+        RouteModel.Edge<String> firstExpensiveInput = edge("make-first", input("expensive-ore"), "first");
+        RouteModel.Edge<String> unusedSecondInput = edge("make-unused", input("unused-ore"), "second");
+        RouteModel.Edge<String> dominated = edge("b-dominated", List.of(input("first"), input("second")),
+                "part");
+        RecipeGraphIndex<String, RouteModel.Edge<String>> graph = new RecipeGraphIndex.Builder<String,
+                RouteModel.Edge<String>>(key -> key)
+                .addEdge("part", cheap.id(), cheap, List.of(List.of("cheap-ore")))
+                .addEdge("part", dominated.id(), dominated, List.of(List.of("first"), List.of("second")))
+                .addEdge("first", firstExpensiveInput.id(), firstExpensiveInput, List.of(List.of("expensive-ore")))
+                .addEdge("second", unusedSecondInput.id(), unusedSecondInput, List.of(List.of("unused-ore")))
+                .addNode("target")
+                .build();
+        RouteModel.Edge<String> root = edge("root", input("part"), "target");
+        LocalRouteScorer<String> scorer = new LocalRouteScorer<>(graph, context, RoutePolicy.deterministic(),
+                new LocalRouteScorer.Limits(16, 16));
+
+        LocalRouteScorer.Result<String> result = scorer.scoreSelected(root, "target", 1, 16);
+
+        assertTrue(result.complete());
+        assertEquals(List.of("a-cheap"), result.routePlan().childrenOf(0).stream()
+                .map(RoutePlan.Step::edgeId).toList());
+        assertEquals(2, result.scoreExpansions());
+        assertEquals(1, result.boundPrunedEdges());
     }
 
     private static RouteModel.Edge<String> edge(String id, RouteModel.Input<String> input,
