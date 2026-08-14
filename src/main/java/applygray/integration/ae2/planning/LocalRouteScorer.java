@@ -44,6 +44,8 @@ public final class LocalRouteScorer<K> {
         }
     }
 
+    private record ProducingEdge<K>(RouteModel.Edge<K> edge, long netOutput) {}
+
     private static final class Node<K> {
 
         private final K target;
@@ -87,7 +89,7 @@ public final class LocalRouteScorer<K> {
     /** Resumable work for one demand; completed children still graduate into the context-independent memo. */
     private static final class DemandProgress<K> {
 
-        private List<RouteModel.Edge<K>> edges;
+        private List<ProducingEdge<K>> edges;
         private int edgeIndex;
         private Node<K> best;
         private EdgeProgress<K> activeEdge;
@@ -146,7 +148,7 @@ public final class LocalRouteScorer<K> {
     private final Limits limits;
     private final Map<MemoKey<K>, Node<K>> memo = new HashMap<>();
     private final Map<ProgressKey<K>, DemandProgress<K>> demandProgress = new HashMap<>();
-    private final Map<K, List<RouteModel.Edge<K>>> producingEdges = new HashMap<>();
+    private final Map<K, List<ProducingEdge<K>>> producingEdges = new HashMap<>();
     private final Map<RouteModel.Input<K>, List<RouteModel.Amount<K>>> orderedAlternatives =
             new java.util.IdentityHashMap<>();
 
@@ -369,13 +371,13 @@ public final class LocalRouteScorer<K> {
             budget.expansions++;
             progress = new DemandProgress<>();
             if (budget.retainsFrontier()) {
-                List<RouteModel.Edge<K>> edges = new ArrayList<>(producingEdges(key));
+                List<ProducingEdge<K>> edges = new ArrayList<>(producingEdges(key));
                 edges.sort((left, right) -> {
-                    long leftCrafts = divideRoundUp(remaining, left.netOutput(key));
-                    long rightCrafts = divideRoundUp(remaining, right.netOutput(key));
-                    int cost = routePolicy.compare(edgeCost(left, leftCrafts, depth + 1),
-                            edgeCost(right, rightCrafts, depth + 1));
-                    return cost != 0 ? cost : left.id().compareTo(right.id());
+                    long leftCrafts = divideRoundUp(remaining, left.netOutput());
+                    long rightCrafts = divideRoundUp(remaining, right.netOutput());
+                    int cost = routePolicy.compare(edgeCost(left.edge(), leftCrafts, depth + 1),
+                            edgeCost(right.edge(), rightCrafts, depth + 1));
+                    return cost != 0 ? cost : left.edge().id().compareTo(right.edge().id());
                 });
                 progress.edges = List.copyOf(edges);
             } else {
@@ -389,9 +391,10 @@ public final class LocalRouteScorer<K> {
         boolean addedToPath = childAncestors.add(key);
         try {
             while (progress.edgeIndex < progress.edges.size()) {
-                RouteModel.Edge<K> edge = progress.edges.get(progress.edgeIndex);
+                ProducingEdge<K> producing = progress.edges.get(progress.edgeIndex);
+                RouteModel.Edge<K> edge = producing.edge();
                 if (progress.activeEdge == null) {
-                    long crafts = divideRoundUp(remaining, edge.netOutput(key));
+                    long crafts = divideRoundUp(remaining, producing.netOutput());
                     progress.activeEdge = new EdgeProgress<>(key, edge, crafts, depth + 1, childAncestors,
                             edgeCost(edge, crafts, depth + 1), budget.retainsFrontier());
                 }
@@ -499,16 +502,17 @@ public final class LocalRouteScorer<K> {
     }
 
     /** Immutable per-output edge order reused by the selected winner's non-resumable scoring pass. */
-    private List<RouteModel.Edge<K>> producingEdges(K key) {
+    private List<ProducingEdge<K>> producingEdges(K key) {
         return producingEdges.computeIfAbsent(key, ignored -> {
-            List<RouteModel.Edge<K>> edges = new ArrayList<>();
+            List<ProducingEdge<K>> edges = new ArrayList<>();
             for (RecipeGraphIndex.HyperEdge<K, RouteModel.Edge<K>> hyperEdge : graph.edgesFrom(key)) {
                 RouteModel.Edge<K> edge = hyperEdge.value();
-                if (edge.netOutput(key) > 0) edges.add(edge);
+                long netOutput = edge.netOutput(key);
+                if (netOutput > 0) edges.add(new ProducingEdge<>(edge, netOutput));
             }
             edges.sort((left, right) -> {
-                int cost = routePolicy.compare(edgeCost(left, 1, 1), edgeCost(right, 1, 1));
-                return cost != 0 ? cost : left.id().compareTo(right.id());
+                int cost = routePolicy.compare(edgeCost(left.edge(), 1, 1), edgeCost(right.edge(), 1, 1));
+                return cost != 0 ? cost : left.edge().id().compareTo(right.edge().id());
             });
             return List.copyOf(edges);
         });
