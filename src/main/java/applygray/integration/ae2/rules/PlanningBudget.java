@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 public final class PlanningBudget {
 
     public static final PlanningBudget DEFAULT = new PlanningBudget(
-            512, 8, 8, 8, 32, 16, 16, 64, 512, 2_000,
+            512, 8, 8, 8, 32, 16, 16, 64, 8_192, 512, 2_000,
             4_096, 8_000,
             512, 2_048, 1_000, BudgetExhaustionPolicy.DEGRADE,
             CycleSafetyExhaustionPolicy.RUNTIME_RECOVERY);
@@ -25,6 +25,7 @@ public final class PlanningBudget {
     private final int maxInputAlternatives;
     private final int maxRouteDepth;
     private final int maxRouteExpansionsPerTarget;
+    private final int maxPlannerStatesPerTarget;
     private final int maxRouteExpansionsPerCalculation;
     private final long maxRouteCalculationMillis;
     private final int maxStandaloneRouteExpansionsPerCalculation;
@@ -38,7 +39,8 @@ public final class PlanningBudget {
     private PlanningBudget(int maxRecipesPerTarget, int maxCandidatesPerTarget,
                            int maxDynamicCandidatesForCost, int maxRefinedCandidates,
                            int maxNormalPatternsPerTarget, int maxInputAlternatives, int maxRouteDepth,
-                           int maxRouteExpansionsPerTarget, int maxRouteExpansionsPerCalculation,
+                           int maxRouteExpansionsPerTarget, int maxPlannerStatesPerTarget,
+                           int maxRouteExpansionsPerCalculation,
                            long maxRouteCalculationMillis, int maxStandaloneRouteExpansionsPerCalculation,
                            long maxStandaloneRouteCalculationMillis, int maxSccNodes, int maxSccEdges,
                            long maxSccAnalysisMillis, BudgetExhaustionPolicy exhaustionPolicy,
@@ -53,6 +55,8 @@ public final class PlanningBudget {
         this.maxRouteDepth = requirePositive(maxRouteDepth, "maxRouteDepth");
         this.maxRouteExpansionsPerTarget = requirePositive(maxRouteExpansionsPerTarget,
                 "maxRouteExpansionsPerTarget");
+        this.maxPlannerStatesPerTarget = requirePositive(maxPlannerStatesPerTarget,
+                "maxPlannerStatesPerTarget");
         this.maxRouteExpansionsPerCalculation = requirePositive(maxRouteExpansionsPerCalculation,
                 "maxRouteExpansionsPerCalculation");
         this.maxRouteCalculationMillis = requirePositive(maxRouteCalculationMillis, "maxRouteCalculationMillis");
@@ -102,6 +106,10 @@ public final class PlanningBudget {
 
     public int getMaxRouteExpansionsPerTarget() {
         return maxRouteExpansionsPerTarget;
+    }
+
+    public int getMaxPlannerStatesPerTarget() {
+        return maxPlannerStatesPerTarget;
     }
 
     public int getMaxRouteExpansionsPerCalculation() {
@@ -160,7 +168,8 @@ public final class PlanningBudget {
 
     public String summarize() {
         return "recipes=" + maxRecipesPerTarget + ", candidates=" + maxCandidatesPerTarget +
-                ", depth=" + maxRouteDepth + ", expansions=" + maxRouteExpansionsPerCalculation +
+                ", depth=" + maxRouteDepth + ", states=" + maxPlannerStatesPerTarget +
+                ", expansions=" + maxRouteExpansionsPerCalculation +
                 ", routeMs=" + maxRouteCalculationMillis + ", scc=" + maxSccNodes + '/' + maxSccEdges +
                 ", standaloneTreeNodes=" + maxStandaloneRouteExpansionsPerCalculation +
                 ", standaloneRouteMs=" + maxStandaloneRouteCalculationMillis +
@@ -190,6 +199,7 @@ public final class PlanningBudget {
         private final Setting<Integer> maxInputAlternatives;
         private final Setting<Integer> maxRouteDepth;
         private final Setting<Integer> maxRouteExpansionsPerTarget;
+        private final Setting<Integer> maxPlannerStatesPerTarget;
         private final Setting<Integer> maxRouteExpansionsPerCalculation;
         private final Setting<Long> maxRouteCalculationMillis;
         private final Setting<Integer> maxStandaloneRouteExpansionsPerCalculation;
@@ -209,6 +219,7 @@ public final class PlanningBudget {
             maxInputAlternatives = new Setting<>(defaults.maxInputAlternatives);
             maxRouteDepth = new Setting<>(defaults.maxRouteDepth);
             maxRouteExpansionsPerTarget = new Setting<>(defaults.maxRouteExpansionsPerTarget);
+            maxPlannerStatesPerTarget = new Setting<>(defaults.maxPlannerStatesPerTarget);
             maxRouteExpansionsPerCalculation = new Setting<>(defaults.maxRouteExpansionsPerCalculation);
             maxRouteCalculationMillis = new Setting<>(defaults.maxRouteCalculationMillis);
             maxStandaloneRouteExpansionsPerCalculation =
@@ -251,6 +262,10 @@ public final class PlanningBudget {
 
         public void maxRouteExpansionsPerTarget(int value, int priority, String source) {
             maxRouteExpansionsPerTarget.set(requirePositive(value, "maxRouteExpansionsPerTarget"), priority, source);
+        }
+
+        public void maxPlannerStatesPerTarget(int value, int priority, String source) {
+            maxPlannerStatesPerTarget.set(requirePositive(value, "maxPlannerStatesPerTarget"), priority, source);
         }
 
         public void maxRouteExpansionsPerCalculation(int value, int priority, String source) {
@@ -297,7 +312,8 @@ public final class PlanningBudget {
             return new PlanningBudget(maxRecipesPerTarget.value, maxCandidatesPerTarget.value,
                     maxDynamicCandidatesForCost.value, maxRefinedCandidates.value,
                     maxNormalPatternsPerTarget.value, maxInputAlternatives.value, maxRouteDepth.value,
-                    maxRouteExpansionsPerTarget.value, maxRouteExpansionsPerCalculation.value,
+                    maxRouteExpansionsPerTarget.value, maxPlannerStatesPerTarget.value,
+                    maxRouteExpansionsPerCalculation.value,
                     maxRouteCalculationMillis.value, maxStandaloneRouteExpansionsPerCalculation.value,
                     maxStandaloneRouteCalculationMillis.value, maxSccNodes.value, maxSccEdges.value,
                     maxSccAnalysisMillis.value, exhaustionPolicy.value,

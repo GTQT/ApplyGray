@@ -85,7 +85,8 @@ final class RuleSetLoader {
         requireOnlyFields(budget, Set.of("priority", "maxRecipesPerTarget", "maxCandidatesPerTarget",
                 "maxDynamicCandidatesForCost", "maxRefinedCandidates", "maxNormalPatternsPerTarget",
                 "maxInputAlternatives", "maxRouteDepth", "maxRouteExpansionsPerTarget",
-                "maxRouteExpansionsPerCalculation", "maxRouteCalculationMillis", "maxSccNodes", "maxSccEdges",
+                "maxPlannerStatesPerTarget", "maxRouteExpansionsPerCalculation", "maxRouteCalculationMillis",
+                "maxSccNodes", "maxSccEdges",
                 "maxStandaloneRouteExpansionsPerCalculation", "maxStandaloneRouteCalculationMillis",
                 "maxSccAnalysisMillis", "onExhaustion",
                 "cycleSafetyOnExhaustion"),
@@ -122,6 +123,10 @@ final class RuleSetLoader {
         if (budget.has("maxRouteExpansionsPerTarget")) {
             target.maxRouteExpansionsPerTarget(positiveInt(budget.get("maxRouteExpansionsPerTarget"),
                     "maxRouteExpansionsPerTarget", file), priority, source);
+        }
+        if (budget.has("maxPlannerStatesPerTarget")) {
+            target.maxPlannerStatesPerTarget(positiveInt(budget.get("maxPlannerStatesPerTarget"),
+                    "maxPlannerStatesPerTarget", file), priority, source);
         }
         if (budget.has("maxRouteExpansionsPerCalculation")) {
             target.maxRouteExpansionsPerCalculation(positiveInt(budget.get("maxRouteExpansionsPerCalculation"),

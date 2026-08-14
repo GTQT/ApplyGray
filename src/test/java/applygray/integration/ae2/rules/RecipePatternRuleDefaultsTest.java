@@ -29,6 +29,7 @@ class RecipePatternRuleDefaultsTest {
         RuleSet rules = RuleSetLoader.load(rulesDirectory);
 
         assertEquals(8, rules.getPlanningBudget().getMaxDynamicCandidatesForCost());
+        assertEquals(8192, rules.getPlanningBudget().getMaxPlannerStatesPerTarget());
         assertEquals(4096, rules.getPlanningBudget().getMaxStandaloneRouteExpansionsPerCalculation());
         assertEquals(8000, rules.getPlanningBudget().getMaxStandaloneRouteCalculationMillis());
         assertEquals(CycleSafetyExhaustionPolicy.RUNTIME_RECOVERY,
@@ -58,6 +59,7 @@ class RecipePatternRuleDefaultsTest {
         String migrated = Files.readString(defaults);
         assertEquals(8, rules.getPlanningBudget().getMaxDynamicCandidatesForCost());
         assertEquals(8, rules.getPlanningBudget().getMaxRefinedCandidates());
+        assertEquals(8192, rules.getPlanningBudget().getMaxPlannerStatesPerTarget());
         assertEquals(512, rules.getPlanningBudget().getMaxSccNodes());
         assertEquals(2048, rules.getPlanningBudget().getMaxSccEdges());
         assertEquals(1000, rules.getPlanningBudget().getMaxSccAnalysisMillis());
@@ -69,6 +71,7 @@ class RecipePatternRuleDefaultsTest {
         assertTrue(migrated.contains("cycleSafetyOnExhaustion"));
         assertTrue(migrated.contains("maxStandaloneRouteExpansionsPerCalculation"));
         assertTrue(migrated.contains("maxStandaloneRouteCalculationMillis"));
+        assertTrue(migrated.contains("maxPlannerStatesPerTarget"));
         assertFalse(migrated.contains("maxPersistedPatternsPerProvider"));
         assertTrue(migrated.contains("core.polymer-dust-fallback"));
         assertTrue(migrated.contains("core.chemical-product-ingot-fallback"));

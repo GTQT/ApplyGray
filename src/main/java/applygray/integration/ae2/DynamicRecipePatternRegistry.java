@@ -1,6 +1,7 @@
 package applygray.integration.ae2;
 
 import applygray.ApplyGrayMod;
+import applygray.integration.ae2.planning.AndOrRoutePlanner;
 import applygray.integration.ae2.recipe.MachineCapabilityProfile;
 import applygray.integration.ae2.recipe.NonConsumableTokenLayout;
 import applygray.integration.ae2.recipe.NormalizedRecipe;
@@ -3547,7 +3548,15 @@ public final class DynamicRecipePatternRegistry {
             }
             List<PatternCandidate> candidates = new ArrayList<>(source);
             if (!candidates.isEmpty()) {
-                if (refineRoute) {
+                String plannedRecipe = session.findPlannedRecipe(target);
+                PatternCandidate plannedCandidate = plannedRecipe == null ? null :
+                        findCandidateByRecipeKey(candidates, plannedRecipe);
+                if (plannedCandidate != null) {
+                    candidates.remove(plannedCandidate);
+                    candidates.add(0, plannedCandidate);
+                } else if (plannedRecipe != null) {
+                    candidates.clear();
+                } else if (refineRoute) {
                     if (isStandalonePatternGeneration()) {
                         selectStandaloneTransientCandidate(target, candidates);
                     } else {
@@ -4505,7 +4514,11 @@ public final class DynamicRecipePatternRegistry {
                     newRouteCostBudget());
             if (!retainCycleSafeCandidates(target, candidates, estimator)) return;
             if (rejectIncompletePlanning(target, candidates, estimator)) return;
-            if (candidates.size() < 2) return;
+            if (candidates.size() < 2) {
+                estimator.commitSelectedPlan(candidates.get(0), target);
+                rejectIncompletePlanning(target, candidates, estimator);
+                return;
+            }
 
             PlanningMode planningMode = resolvePlanningMode(candidates);
             Map<PatternCandidate, DirectRouteCost> quickCosts = new IdentityHashMap<>();
@@ -4571,6 +4584,7 @@ public final class DynamicRecipePatternRegistry {
                 }
             }
 
+            estimator.commitSelectedPlan(candidates.get(0), target);
             if (rejectIncompletePlanning(target, candidates, estimator)) return;
 
             if (isStandalonePatternGeneration() && candidates.get(0) != staticSelection) {
@@ -5782,6 +5796,15 @@ public final class DynamicRecipePatternRegistry {
                     if (normal.size() >= normalLimit) break;
                 }
             }
+            CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
+            String plannedRecipe = session == null ? null : session.findPlannedRecipe(target);
+            if (plannedRecipe != null && normal.size() > 1) {
+                normal.sort((left, right) -> {
+                    boolean leftSelected = plannedRecipe.equals(RouteEdge.of(left).id);
+                    boolean rightSelected = plannedRecipe.equals(RouteEdge.of(right).id);
+                    return leftSelected == rightSelected ? 0 : (leftSelected ? -1 : 1);
+                });
+            }
             return normal;
         } finally {
             if (previous == null) {
@@ -6125,6 +6148,9 @@ public final class DynamicRecipePatternRegistry {
         private int normalPatternEdges;
         private int dynamicPatternEdges;
         private int boundedFallbacks;
+        private boolean selectedPlanIncomplete;
+        private String lastPlannerReason = "OK";
+        private final Map<String, AndOrRoutePlanner.Result<AEKey>> plansByRootEdge = new HashMap<>();
         private RouteCycleAnalysis cycleAnalysis;
         private boolean loggedCycleAnalysisBudget;
         private boolean loggedRouteCostBudget;
@@ -6142,7 +6168,8 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private boolean isIncomplete() {
-            return budget.isExhausted() || cycleAnalysis != null && !cycleAnalysis.isComplete();
+            return selectedPlanIncomplete || budget.isExhausted() ||
+                    cycleAnalysis != null && !cycleAnalysis.isComplete();
         }
 
         private boolean isCycleAnalysisComplete() {
@@ -6154,6 +6181,7 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private String getIncompleteReason() {
+            if (selectedPlanIncomplete) return lastPlannerReason;
             if (budget.isExhausted()) return budget.getExhaustionReason();
             return cycleAnalysis == null ? "UNKNOWN" : cycleAnalysis.getBudgetReason();
         }
@@ -6238,51 +6266,51 @@ public final class DynamicRecipePatternRegistry {
          */
         private EncodedRecipe freezeRootInputs(PatternCandidate candidate, AEKey target) {
             RouteEdge edge = RouteEdge.of(candidate);
-            beginRootScoringWithQuota(Math.min(budget.getRemainingExpansions(),
-                    getLimits().getMaxRouteExpansionsPerTarget()));
-            rejectedCycleEdges = 0;
-            InventoryLedger ledger = new InventoryLedger(inventory);
-            Set<AEKey> path = new HashSet<>();
-            path.add(target);
-            prepareCycleAnalysis(target);
-            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(target, edge);
+            int quota = Math.min(budget.getRemainingExpansions(), getLimits().getMaxRouteExpansionsPerTarget());
+            AndOrRoutePlanner.Result<AEKey> plan = planRoot(edge, target, Math.max(1, quota));
+            List<GenericStack> choices = resolveRootChoices(edge, plan.rootInputChoices());
+            if (choices.size() != edge.inputs.length) {
+                ApplyGrayMod.LOGGER.warn("Recipe-pattern planner could not freeze every root input target={} " +
+                                "recipe={} reasonCode={} selectedInputs={}/{}",
+                        target, edge.id, plan.reasonCode(), choices.size(), edge.inputs.length);
+                return candidate.encoded;
+            }
+            return candidate.encoded.withFrozenInputChoices(choices);
+        }
 
-            List<GenericStack> choices = new ArrayList<>(edge.inputs.length);
-            for (IPatternDetails.IInput input : edge.inputs) {
-                GenericStack[] options = input.possibleInputs();
-                int optionLimit = Math.min(options.length, getLimits().getMaxInputAlternatives());
-                RouteChoice best = null;
+        private List<GenericStack> resolveRootChoices(RouteEdge edge,
+                List<AndOrRoutePlanner.Amount<AEKey>> plannedChoices) {
+            List<GenericStack> resolved = new ArrayList<>(edge.inputs.length);
+            for (int inputIndex = 0; inputIndex < edge.inputs.length; inputIndex++) {
+                IPatternDetails.IInput input = edge.inputs[inputIndex];
+                AndOrRoutePlanner.Amount<AEKey> planned = inputIndex < plannedChoices.size() ?
+                        plannedChoices.get(inputIndex) : null;
                 GenericStack selected = null;
-                for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
-                    GenericStack option = options[optionIndex];
-                    if (option == null || option.amount() <= 0) continue;
-
-                    long required = multiplySaturated(option.amount(), input.getMultiplier());
-                    InventoryLedger branch = ledger.copy();
-                    RouteCost optionCost = estimateEdgeInput(target, canonicalDustToIngot, option.what(), required,
-                            branch, path, 1);
-                    RouteChoice choice = new RouteChoice(optionCost, branch);
-                    if (best == null || choice.cost.compareTo(best.cost) < 0) {
-                        best = choice;
-                        selected = option;
-                    }
-                }
-                if (best == null || selected == null) {
-                    // Keep the result deterministic even if a conservative budget ended before this input could be
-                    // scored. The pattern is still single-choice, so AE2 can never diverge from the generated tree.
-                    for (GenericStack option : options) {
-                        if (option != null && option.amount() > 0) {
+                if (planned != null) {
+                    for (GenericStack option : input.possibleInputs()) {
+                        if (option != null && option.what().equals(planned.key()) &&
+                                multiplySaturated(option.amount(), input.getMultiplier()) == planned.amount()) {
                             selected = option;
                             break;
                         }
                     }
-                    if (selected == null) return candidate.encoded;
-                } else {
-                    ledger.replaceWith(best.ledger);
                 }
-                choices.add(selected);
+                if (selected == null) {
+                    List<GenericStack> fallback = new ArrayList<>();
+                    for (GenericStack option : input.possibleInputs()) {
+                        if (option != null && option.amount() > 0) fallback.add(option);
+                    }
+                    fallback.sort((left, right) -> {
+                        int key = RecipeFingerprint.describeKey(left.what())
+                                .compareTo(RecipeFingerprint.describeKey(right.what()));
+                        return key != 0 ? key : Long.compare(left.amount(), right.amount());
+                    });
+                    if (fallback.isEmpty()) return Collections.emptyList();
+                    selected = fallback.get(0);
+                }
+                resolved.add(selected);
             }
-            return candidate.encoded.withFrozenInputChoices(choices);
+            return resolved;
         }
 
         /**
@@ -6333,13 +6361,8 @@ public final class DynamicRecipePatternRegistry {
         }
 
         private RouteCost estimateRootWithQuota(RouteEdge edge, AEKey target, int rootExpansionQuota) {
-            beginRootScoringWithQuota(rootExpansionQuota);
-            rejectedCycleEdges = 0;
-            InventoryLedger ledger = new InventoryLedger(inventory);
-            Set<AEKey> path = new HashSet<>();
-            path.add(target);
-            prepareCycleAnalysis(target);
-            RouteCost result = estimateEdge(edge, target, 1, ledger, path, 0);
+            AndOrRoutePlanner.Result<AEKey> plan = planRoot(edge, target, rootExpansionQuota);
+            RouteCost result = toRouteCost(plan.cost());
             lastRootScoringProgress = new RouteScoringProgress(currentRootExpansions, currentRootExpansionQuota,
                     currentRootQuotaLimited, budget.getRemainingExpansions(), budget.getMaxExpansions());
             if (rejectedCycleEdges > 0 && ApplyGrayMod.LOGGER.isDebugEnabled()) {
@@ -6354,6 +6377,134 @@ public final class DynamicRecipePatternRegistry {
                         target, budget.getExhaustionReason(), budget.getExpansions());
             }
             return result;
+        }
+
+        private AndOrRoutePlanner.Result<AEKey> planRoot(RouteEdge edge, AEKey target, int rootExpansionQuota) {
+            beginRootScoringWithQuota(rootExpansionQuota);
+            rejectedCycleEdges = 0;
+            prepareCycleAnalysis(target);
+            AndOrRoutePlanner<AEKey> planner = new AndOrRoutePlanner<>();
+            AndOrRoutePlanner.Graph<AEKey> graph = new AndOrRoutePlanner.Graph<>() {
+
+                @Override
+                public long getAvailable(AEKey key) {
+                    return inventory.get(key);
+                }
+
+                @Override
+                public boolean isLeaf(AEKey key) {
+                    return isRawMaterialLeaf(key);
+                }
+
+                @Override
+                public boolean isFree(AEKey key) {
+                    return isNonConsumableControlToken(key);
+                }
+
+                @Override
+                public long estimateMaterialCost(AEKey key, long amount) {
+                    return estimateKeyMaterialAmount(key, amount);
+                }
+
+                @Override
+                public List<AndOrRoutePlanner.Edge<AEKey>> getEdges(AEKey key, int depth) {
+                    List<AndOrRoutePlanner.Edge<AEKey>> planned = new ArrayList<>();
+                    for (RouteEdge candidate : RouteCostEstimator.this.getEdges(key)) {
+                        if (cycleAnalysis != null && cycleAnalysis.rejects(key, candidate, depth)) {
+                            rejectedCycleEdges++;
+                            continue;
+                        }
+                        planned.add(toPlannerEdge(candidate, key));
+                    }
+                    return planned;
+                }
+
+                @Override
+                public String stableKey(AEKey key) {
+                    return RecipeFingerprint.describeKey(key);
+                }
+
+                @Override
+                public boolean reserveExpansion() {
+                    if (currentRootExpansionQuota > 0 && currentRootExpansions >= currentRootExpansionQuota) {
+                        currentRootQuotaLimited = true;
+                        return false;
+                    }
+                    if (!budget.tryExpansion()) return false;
+                    currentRootExpansions++;
+                    totalExpansions++;
+                    return true;
+                }
+
+                @Override
+                public boolean shouldContinue() {
+                    return budget.hasRemainingTime() && GridState.cooperateWithCraftingCalculation();
+                }
+            };
+
+            AndOrRoutePlanner.Edge<AEKey> root = toPlannerEdge(edge, target);
+            AndOrRoutePlanner.Result<AEKey> result = planner.plan(root, target, graph,
+                    new AndOrRoutePlanner.Limits(getLimits().getMaxPlannerStatesPerTarget(),
+                            getLimits().getMaxRouteDepth(),
+                            getLimits().getMaxInputAlternatives()));
+            PLANNING_METRICS.recordPlannerResult(result.isComplete(), result.expansions());
+            plansByRootEdge.put(edge.id, result);
+            lastPlannerReason = result.reasonCode();
+            if (!result.isComplete()) {
+                boundedFallbacks++;
+            }
+            if (ApplyGrayMod.LOGGER.isDebugEnabled()) {
+                ApplyGrayMod.LOGGER.debug("Recipe-pattern AND/OR plan target={} root={} status={} reasonCode={} " +
+                                "expansions={} cost={} selectedEdges={}",
+                        target, edge.id, result.status(), result.reasonCode(), result.expansions(), result.cost(),
+                        result.selectedEdges());
+            }
+            return result;
+        }
+
+        private void commitSelectedPlan(PatternCandidate selected, AEKey target) {
+            RouteEdge edge = RouteEdge.of(selected);
+            AndOrRoutePlanner.Result<AEKey> plan = plansByRootEdge.get(edge.id);
+            if (plan == null) {
+                int quota = Math.min(budget.getRemainingExpansions(),
+                        getLimits().getMaxRouteExpansionsPerTarget());
+                plan = planRoot(edge, target, Math.max(1, quota));
+            }
+            selectedPlanIncomplete = !plan.isComplete();
+            lastPlannerReason = plan.reasonCode();
+            if (!plan.isComplete()) return;
+            CraftingRecoverySession session = CRAFTING_RECOVERY_SESSION.get();
+            if (session != null && session.matches(state)) {
+                session.rememberPlannerRoutes(plan.selectedRoutes());
+            }
+        }
+
+        private AndOrRoutePlanner.Edge<AEKey> toPlannerEdge(RouteEdge edge, AEKey output) {
+            List<AndOrRoutePlanner.Input<AEKey>> inputs = new ArrayList<>(edge.inputs.length);
+            for (IPatternDetails.IInput input : edge.inputs) {
+                List<AndOrRoutePlanner.Amount<AEKey>> alternatives = new ArrayList<>();
+                for (GenericStack option : input.possibleInputs()) {
+                    if (option == null || option.amount() <= 0) continue;
+                    alternatives.add(new AndOrRoutePlanner.Amount<>(option.what(),
+                            multiplySaturated(option.amount(), input.getMultiplier())));
+                }
+                inputs.add(new AndOrRoutePlanner.Input<>(alternatives));
+            }
+            List<AndOrRoutePlanner.Amount<AEKey>> outputs = new ArrayList<>(edge.outputs.size());
+            for (GenericStack result : edge.outputs) {
+                if (result != null && result.amount() > 0) {
+                    outputs.add(new AndOrRoutePlanner.Amount<>(result.what(), result.amount()));
+                }
+            }
+            long cyclePenalty = cycleAnalysis == null ? 0 : cycleAnalysis.getPenalty(output, edge);
+            return new AndOrRoutePlanner.Edge<>(edge.id, inputs, outputs, 1, cyclePenalty,
+                    getSolidMaterialInputFormCost(output, edge.inputs));
+        }
+
+        private static RouteCost toRouteCost(AndOrRoutePlanner.Cost cost) {
+            return new RouteCost(cost.missingMaterials(), cost.maxDepth(), cost.executions(),
+                    cost.consumedStockMaterials(), cost.boundedFallbacks(), cost.unresolvedIntermediates(),
+                    cost.cycleRisk(), cost.materialFormConversions());
         }
 
         private void prepareCycleAnalysis(AEKey target) {
@@ -6377,133 +6528,6 @@ public final class DynamicRecipePatternRegistry {
                             target, cycleAnalysis.getBudgetReason(), cycleAnalysis.getNodeCount(),
                             cycleAnalysis.getEdgeCount());
                 }
-            }
-        }
-
-        private RouteCost estimateEdge(RouteEdge edge, AEKey output, long crafts, InventoryLedger ledger,
-                                       Set<AEKey> path, int depth) {
-            if (cycleAnalysis != null && cycleAnalysis.rejects(output, edge, depth)) {
-                rejectedCycleEdges++;
-                return RouteCost.bounded(depth + 1);
-            }
-            RouteCost total = RouteCost.executions(crafts, depth + 1);
-            int sourceFormCost = getSolidMaterialInputFormCost(output, edge.inputs);
-            if (sourceFormCost > 0) {
-                total = total.plus(RouteCost.materialFormConversions(
-                        multiplySaturated(sourceFormCost, crafts), depth + 1));
-            }
-            if (cycleAnalysis != null) {
-                long cyclePenalty = cycleAnalysis.getPenalty(output, edge);
-                if (cyclePenalty > 0) {
-                    total = total.plus(RouteCost.cycleRisk(cyclePenalty, depth + 1));
-                }
-            }
-            boolean canonicalDustToIngot = isCanonicalSameMaterialDustToIngotTransition(output, edge);
-            for (IPatternDetails.IInput input : edge.inputs) {
-                GenericStack[] options = input.possibleInputs();
-                RouteChoice best = null;
-                int optionLimit = Math.min(options.length, getLimits().getMaxInputAlternatives());
-                for (int optionIndex = 0; optionIndex < optionLimit; optionIndex++) {
-                    GenericStack option = options[optionIndex];
-                    if (option == null || option.amount() <= 0) continue;
-
-                    long perCraft = multiplySaturated(option.amount(), input.getMultiplier());
-                    long required = multiplySaturated(perCraft, crafts);
-                    InventoryLedger branch = ledger.copy();
-                    RouteCost optionCost = estimateEdgeInput(output, canonicalDustToIngot, option.what(), required,
-                            branch, path, depth + 1);
-                    RouteChoice choice = new RouteChoice(optionCost, branch);
-                    if (best == null || choice.cost.compareTo(best.cost) < 0) {
-                        best = choice;
-                    }
-                }
-                if (best == null) {
-                    boundedFallbacks++;
-                    total = total.plus(RouteCost.bounded(depth + 1));
-                    continue;
-                }
-                ledger.replaceWith(best.ledger);
-                total = total.plus(best.cost);
-            }
-            return total;
-        }
-
-        private RouteCost estimateEdgeInput(AEKey output, boolean canonicalDustToIngot, AEKey input, long amount,
-                                            InventoryLedger ledger, Set<AEKey> path, int depth) {
-            if (canonicalDustToIngot && isCanonicalSameMaterialDustInput(output, input)) {
-                long fromStock = ledger.consume(input, amount);
-                long remaining = amount - fromStock;
-                RouteCost stockCost = RouteCost.stock(estimateKeyMaterialAmount(input, fromStock));
-                return remaining <= 0 ? stockCost : stockCost.plus(RouteCost.missing(input, remaining, depth));
-            }
-            return estimateKey(input, amount, ledger, path, depth);
-        }
-
-        private RouteCost estimateKey(AEKey key, long amount, InventoryLedger ledger,
-                                      Set<AEKey> path, int depth) {
-            if (isNonConsumableControlToken(key)) return RouteCost.stock(0);
-            long fromStock = ledger.consume(key, amount);
-            RouteCost stockCost = RouteCost.stock(estimateKeyMaterialAmount(key, fromStock));
-            long remaining = amount - fromStock;
-            if (remaining <= 0) return stockCost;
-            if (isRawMaterialLeaf(key)) {
-                return stockCost.plus(RouteCost.missing(key, remaining, depth));
-            }
-
-            // An exact dependency already on this route is a real cycle. Detect it before consuming a fair-search
-            // credit so a loop cannot manufacture apparent forward progress by repeatedly spending the quota.
-            if (path.contains(key)) {
-                budget.recordPathCycleRejection();
-                return stockCost.plus(RouteCost.unresolved(key, remaining, depth));
-            }
-
-            boolean rootQuotaReached = currentRootExpansionQuota > 0 &&
-                    currentRootExpansions >= currentRootExpansionQuota;
-            if (depth >= getLimits().getMaxRouteDepth() || rootQuotaReached || !budget.tryExpansion()) {
-                if (rootQuotaReached) {
-                    currentRootQuotaLimited = true;
-                }
-                boundedFallbacks++;
-                return stockCost.plus(RouteCost.unresolvedLowerBound(key, remaining, depth));
-            }
-            currentRootExpansions++;
-            totalExpansions++;
-            if (!GridState.cooperateWithCraftingCalculation()) {
-                boundedFallbacks++;
-                return stockCost.plus(RouteCost.bounded(depth));
-            }
-            path.add(key);
-
-            try {
-                List<RouteEdge> edges = getEdges(key);
-                RouteChoice best = null;
-                for (RouteEdge edge : edges) {
-                    long netOutput = edge.getNetOutput(key);
-                    if (netOutput <= 0) continue;
-
-                    long crafts = divideRoundUp(remaining, netOutput);
-                    InventoryLedger branch = ledger.copy();
-                    RouteCost patternCost = estimateEdge(edge, key, crafts, branch, path, depth);
-                    for (GenericStack output : edge.outputs) {
-                        branch.add(output.what(), multiplySaturated(output.amount(), crafts));
-                    }
-                    if (branch.consume(key, remaining) < remaining) {
-                        continue;
-                    }
-
-                    RouteChoice choice = new RouteChoice(patternCost, branch);
-                    if (best == null || choice.cost.compareTo(best.cost) < 0) {
-                        best = choice;
-                    }
-                }
-
-                if (best == null) {
-                    return stockCost.plus(RouteCost.unresolved(key, remaining, depth));
-                }
-                ledger.replaceWith(best.ledger);
-                return stockCost.plus(best.cost);
-            } finally {
-                path.remove(key);
             }
         }
 
@@ -6617,6 +6641,7 @@ public final class DynamicRecipePatternRegistry {
     /** Input/output metadata used by route scoring before a dynamic pattern is encoded or registered. */
     private static final class RouteEdge {
 
+        private final String id;
         private final IPatternDetails.IInput[] inputs;
         private final List<GenericStack> outputs;
         @Nullable private final CandidateRoutePriority routePriority;
@@ -6624,9 +6649,10 @@ public final class DynamicRecipePatternRegistry {
         private final long cycleRiskPenalty;
         private final boolean normalPattern;
 
-        private RouteEdge(IPatternDetails.IInput[] inputs, List<GenericStack> outputs,
+        private RouteEdge(String id, IPatternDetails.IInput[] inputs, List<GenericStack> outputs,
                           @Nullable CandidateRoutePriority routePriority, CyclePolicy cyclePolicy,
                           long cycleRiskPenalty, boolean normalPattern) {
+            this.id = id;
             this.inputs = inputs;
             this.outputs = outputs;
             this.routePriority = routePriority;
@@ -6637,14 +6663,16 @@ public final class DynamicRecipePatternRegistry {
 
         private static RouteEdge of(IPatternDetails pattern) {
             DynamicRecipePatternDetails dynamic = getDynamicPattern(pattern);
-            return new RouteEdge(pattern.getInputs(), pattern.getOutputs(),
+            return new RouteEdge(dynamic == null ? stableNormalPatternId(pattern) : dynamic.getRecipeKey(),
+                    pattern.getInputs(), pattern.getOutputs(),
                     dynamic == null ? null : dynamic.getRoutePriority(),
                     dynamic == null ? CyclePolicy.EXTERNAL_SEED : dynamic.getCyclePolicy(),
                     dynamic == null ? 0 : dynamic.getCycleRiskPenalty(), dynamic == null);
         }
 
         private static RouteEdge of(PatternCandidate candidate) {
-            return new RouteEdge(DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
+            return new RouteEdge(candidate.recipeKey,
+                    DynamicRecipePatternDetails.createScoringInputs(candidate.encoded.inputs,
                     candidate.encoded.alternatives), candidate.encoded.outputs, candidate.cost.routePriority,
                     candidate.decision.getCyclePolicy(), candidate.cost.cycleRiskPenalty, false);
         }
@@ -6666,6 +6694,28 @@ public final class DynamicRecipePatternRegistry {
                 }
             }
             return output;
+        }
+
+        private static String stableNormalPatternId(IPatternDetails pattern) {
+            List<String> parts = new ArrayList<>();
+            for (GenericStack output : pattern.getOutputs()) {
+                if (output != null) {
+                    parts.add("o:" + RecipeFingerprint.describeKey(output.what()) + ':' + output.amount());
+                }
+            }
+            for (IPatternDetails.IInput input : pattern.getInputs()) {
+                List<String> alternatives = new ArrayList<>();
+                for (GenericStack option : input.possibleInputs()) {
+                    if (option != null) {
+                        alternatives.add(RecipeFingerprint.describeKey(option.what()) + ':' + option.amount() +
+                                'x' + input.getMultiplier());
+                    }
+                }
+                Collections.sort(alternatives);
+                parts.add("i:" + alternatives);
+            }
+            Collections.sort(parts);
+            return "ae2:" + RecipeFingerprint.sha256(parts.toString());
         }
     }
 
@@ -7301,26 +7351,9 @@ public final class DynamicRecipePatternRegistry {
             return consumed;
         }
 
-        private void add(AEKey key, long amount) {
-            if (key != null && amount > 0) {
-                availableOverrides.put(key, addSaturated(getAvailable(key), amount));
-            }
-        }
-
         private long getAvailable(AEKey key) {
             Long overridden = availableOverrides.get(key);
             return overridden == null ? inventory.get(key) : overridden;
-        }
-    }
-
-    private static final class RouteChoice {
-
-        private final RouteCost cost;
-        private final InventoryLedger ledger;
-
-        private RouteChoice(RouteCost cost, InventoryLedger ledger) {
-            this.cost = cost;
-            this.ledger = ledger;
         }
     }
 
@@ -7421,49 +7454,6 @@ public final class DynamicRecipePatternRegistry {
             this.unresolvedIntermediates = unresolvedIntermediates;
             this.cycleRisk = cycleRisk;
             this.materialFormConversions = materialFormConversions;
-        }
-
-        private static RouteCost executions(long executions, int depth) {
-            return new RouteCost(0, depth, executions, 0, 0, 0, 0, 0);
-        }
-
-        private static RouteCost stock(long materials) {
-            return new RouteCost(0, 0, 0, materials, 0, 0, 0, 0);
-        }
-
-        private static RouteCost missing(AEKey key, long amount, int depth) {
-            return new RouteCost(estimateKeyMaterialAmount(key, amount), depth, 0, 0, 0, 0, 0, 0);
-        }
-
-        private static RouteCost unresolved(AEKey key, long amount, int depth) {
-            return new RouteCost(estimateKeyMaterialAmount(key, amount), depth, 0, 0, 0, 1, 0, 0);
-        }
-
-        private static RouteCost bounded(int depth) {
-            return new RouteCost(BOUNDED_ROUTE_COST_PENALTY, depth, 0, 0, 1, 0, 0, 0);
-        }
-
-        /** Conservative lower bound for an intermediate that could not be expanded within this target's budget. */
-        private static RouteCost unresolvedLowerBound(AEKey key, long amount, int depth) {
-            return new RouteCost(estimateKeyMaterialAmount(key, amount), depth, 0, 0, 1, 0, 0, 0);
-        }
-
-        private static RouteCost cycleRisk(long risk, int depth) {
-            return new RouteCost(0, depth, 0, 0, 0, 0, Math.max(0, risk), 0);
-        }
-
-        private static RouteCost materialFormConversions(long conversions, int depth) {
-            return new RouteCost(0, depth, 0, 0, 0, 0, 0, Math.max(0, conversions));
-        }
-
-        private RouteCost plus(RouteCost other) {
-            return new RouteCost(addSaturated(missingMaterials, other.missingMaterials),
-                    Math.max(maxDepth, other.maxDepth), addSaturated(executions, other.executions),
-                    addSaturated(consumedStockMaterials, other.consumedStockMaterials),
-                    boundedFallbacks + other.boundedFallbacks,
-                    unresolvedIntermediates + other.unresolvedIntermediates,
-                    addSaturated(cycleRisk, other.cycleRisk),
-                    addSaturated(materialFormConversions, other.materialFormConversions));
         }
 
         private boolean hasBoundedFallback() {
@@ -7615,6 +7605,7 @@ public final class DynamicRecipePatternRegistry {
         private final Set<AEKey> rejectedProcessedMaterialBackConversions = new HashSet<>();
         private final Set<String> matchedRememberedBindings = new HashSet<>();
         private final Map<AEKey, List<PatternCandidate>> routeCandidatesByTarget = new HashMap<>();
+        private final Map<AEKey, String> plannerRecipeByTarget = new HashMap<>();
         private final List<String> standaloneRecursiveRouteOverrideSamples = new ArrayList<>();
         /** Candidate details visible only to this calculation, populated before CraftingCalculation.run(). */
         private final Map<AEKey, List<DynamicRecipePatternDetails>> transientPatternsByTarget = new HashMap<>();
@@ -7750,6 +7741,7 @@ public final class DynamicRecipePatternRegistry {
             if (progress > 0) {
                 reusableCycleAnalysis = null;
                 routeCandidatesByTarget.clear();
+                plannerRecipeByTarget.clear();
             }
             return progress;
         }
@@ -7761,6 +7753,15 @@ public final class DynamicRecipePatternRegistry {
 
         private void rememberRouteCandidates(AEKey target, List<PatternCandidate> candidates) {
             if (target != null && candidates != null) routeCandidatesByTarget.put(target, candidates);
+        }
+
+        private void rememberPlannerRoutes(Map<AEKey, String> routes) {
+            if (routes != null) routes.forEach(plannerRecipeByTarget::putIfAbsent);
+        }
+
+        @Nullable
+        private String findPlannedRecipe(AEKey target) {
+            return target == null ? null : plannerRecipeByTarget.get(target);
         }
 
         private Set<AEKey> getTransientCandidateTargets() {
@@ -7818,6 +7819,7 @@ public final class DynamicRecipePatternRegistry {
         /** Starts another standalone generation pass without forgetting the cycle edges rejected by this session. */
         private void resetStandaloneSelectionAfterCycleRecovery() {
             routeCandidatesByTarget.clear();
+            plannerRecipeByTarget.clear();
             standaloneRecursiveRouteOverrideSamples.clear();
             transientPatternsByTarget.clear();
             transientProviders.clear();

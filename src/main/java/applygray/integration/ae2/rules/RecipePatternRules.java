@@ -207,6 +207,7 @@ public final class RecipePatternRules {
         List<String> upgradedBudgetFields = new ArrayList<>();
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxDynamicCandidatesForCost", upgradedBudgetFields, "2");
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxRefinedCandidates", upgradedBudgetFields, "2");
+        upgradeLegacyBudgetValue(budget, bundledBudget, "maxPlannerStatesPerTarget", upgradedBudgetFields);
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccNodes", upgradedBudgetFields, "128", "1024");
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccEdges", upgradedBudgetFields, "512", "4096");
         upgradeLegacyBudgetValue(budget, bundledBudget, "maxSccAnalysisMillis", upgradedBudgetFields, "250", "5000");

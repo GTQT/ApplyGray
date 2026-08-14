@@ -110,6 +110,7 @@ class RuleSetLoaderTest {
                   "planningBudget": {
                     "priority": 10,
                     "maxRecipesPerTarget": 64,
+                    "maxPlannerStatesPerTarget": 2048,
                     "onExhaustion": "REJECT",
                     "cycleSafetyOnExhaustion": "FALLBACK_NORMAL"
                   },
@@ -127,6 +128,7 @@ class RuleSetLoaderTest {
         PlanningBudget budget = RuleSetLoader.load(rulesDirectory).getPlanningBudget();
 
         assertEquals(128, budget.getMaxRecipesPerTarget());
+        assertEquals(2048, budget.getMaxPlannerStatesPerTarget());
         assertEquals(BudgetExhaustionPolicy.REJECT, budget.getExhaustionPolicy());
         assertEquals(CycleSafetyExhaustionPolicy.FALLBACK_NORMAL, budget.getCycleSafetyExhaustionPolicy());
     }

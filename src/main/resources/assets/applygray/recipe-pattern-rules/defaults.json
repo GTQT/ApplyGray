@@ -10,6 +10,7 @@
     "maxInputAlternatives": 16,
     "maxRouteDepth": 16,
     "maxRouteExpansionsPerTarget": 64,
+    "maxPlannerStatesPerTarget": 8192,
     "maxRouteExpansionsPerCalculation": 512,
     "maxRouteCalculationMillis": 2000,
     "maxStandaloneRouteExpansionsPerCalculation": 4096,
