@@ -8,14 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DynamicRecipePatternRegistryRawMaterialLeafTest {
 
     @Test
-    void treatsElementalFluidsAsLeaves() {
-        assertTrue(DynamicRecipePatternRegistry.isElementalFluidLeaf(true, true, false, false));
+    void treatsElementalGasesAsLeaves() {
+        assertTrue(DynamicRecipePatternRegistry.isElementalGasLeaf(true, true, true));
         assertTrue(DynamicRecipePatternRegistry.isRawMaterialLeaf(false, false, true, false));
     }
 
     @Test
     void keepsCompoundFluidsExpandable() {
-        assertFalse(DynamicRecipePatternRegistry.isElementalFluidLeaf(true, false, false, false));
+        assertFalse(DynamicRecipePatternRegistry.isElementalGasLeaf(true, false, true));
         assertFalse(DynamicRecipePatternRegistry.isRawMaterialLeaf(false, false, false, false));
     }
 
@@ -40,13 +40,12 @@ class DynamicRecipePatternRegistryRawMaterialLeafTest {
 
     @Test
     void doesNotClassifyElementalItemsAsElementalFluids() {
-        assertFalse(DynamicRecipePatternRegistry.isElementalFluidLeaf(false, true, false, false));
+        assertFalse(DynamicRecipePatternRegistry.isElementalGasLeaf(false, true, true));
     }
 
     @Test
-    void keepsElementalSolidAndMoltenFormsExpandable() {
-        assertFalse(DynamicRecipePatternRegistry.isElementalFluidLeaf(true, true, true, false));
-        assertFalse(DynamicRecipePatternRegistry.isElementalFluidLeaf(true, true, false, true));
+    void keepsElementalLiquidAndMoltenFormsExpandable() {
+        assertFalse(DynamicRecipePatternRegistry.isElementalGasLeaf(true, true, false));
     }
 
     @Test

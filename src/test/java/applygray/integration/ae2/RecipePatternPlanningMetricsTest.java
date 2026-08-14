@@ -17,14 +17,11 @@ class RecipePatternPlanningMetricsTest {
         metrics.recordGeneratedPattern();
         metrics.recordReusedPattern();
         metrics.recordBudgetExhaustion();
-        metrics.recordPlannerResult(true, 8);
-        metrics.recordPlannerResult(false, 13);
         metrics.recordIndex(42, 3_000_000L);
         metrics.recordPlanningDuration(1_000_000L);
         metrics.recordPlanningDuration(7_000_000L);
 
-        assertEquals("目标缓存 1/1 路线缓存 1/1 p95 7ms\n索引 1/42 3ms 样板 1/1 预算 1 " +
-                        "规划 1/1 状态 21",
+        assertEquals("目标缓存 1/1 路线缓存 1/1 p95 7ms\n索引 1/42 3ms 样板 1/1 预算 1",
                 metrics.snapshot().summarize());
     }
 }

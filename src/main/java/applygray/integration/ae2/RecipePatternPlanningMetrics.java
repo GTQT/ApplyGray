@@ -20,9 +20,6 @@ final class RecipePatternPlanningMetrics {
     private final LongAdder generatedPatterns = new LongAdder();
     private final LongAdder reusedPatterns = new LongAdder();
     private final LongAdder budgetExhaustions = new LongAdder();
-    private final LongAdder plannerRuns = new LongAdder();
-    private final LongAdder degradedPlannerRuns = new LongAdder();
-    private final LongAdder plannerStates = new LongAdder();
     private final LongAdder indexBuilds = new LongAdder();
     private final LongAdder indexedRecipes = new LongAdder();
     private final LongAdder indexNanos = new LongAdder();
@@ -58,12 +55,6 @@ final class RecipePatternPlanningMetrics {
         budgetExhaustions.increment();
     }
 
-    void recordPlannerResult(boolean complete, int states) {
-        plannerRuns.increment();
-        if (!complete) degradedPlannerRuns.increment();
-        plannerStates.add(Math.max(0, states));
-    }
-
     void recordIndex(int recipes, long elapsedNanos) {
         indexBuilds.increment();
         indexedRecipes.add(Math.max(0, recipes));
@@ -85,8 +76,7 @@ final class RecipePatternPlanningMetrics {
         long p95Nanos = samples.length == 0 ? 0 : samples[(samples.length * 95 + 99) / 100 - 1];
         return new Snapshot(targetCacheHits.sum(), targetCacheMisses.sum(), routeCandidateCacheHits.sum(),
                 routeCandidateCacheMisses.sum(), generatedPatterns.sum(), reusedPatterns.sum(),
-                budgetExhaustions.sum(), plannerRuns.sum(), degradedPlannerRuns.sum(), plannerStates.sum(),
-                indexBuilds.sum(), indexedRecipes.sum(), indexNanos.sum(), p95Nanos);
+                budgetExhaustions.sum(), indexBuilds.sum(), indexedRecipes.sum(), indexNanos.sum(), p95Nanos);
     }
 
     static final class Snapshot {
@@ -98,9 +88,6 @@ final class RecipePatternPlanningMetrics {
         private final long generatedPatterns;
         private final long reusedPatterns;
         private final long budgetExhaustions;
-        private final long plannerRuns;
-        private final long degradedPlannerRuns;
-        private final long plannerStates;
         private final long indexBuilds;
         private final long indexedRecipes;
         private final long indexNanos;
@@ -108,8 +95,7 @@ final class RecipePatternPlanningMetrics {
 
         private Snapshot(long targetCacheHits, long targetCacheMisses, long routeCandidateCacheHits,
                          long routeCandidateCacheMisses, long generatedPatterns, long reusedPatterns,
-                         long budgetExhaustions, long plannerRuns, long degradedPlannerRuns, long plannerStates,
-                         long indexBuilds, long indexedRecipes, long indexNanos,
+                         long budgetExhaustions, long indexBuilds, long indexedRecipes, long indexNanos,
                          long p95PlanningNanos) {
             this.targetCacheHits = targetCacheHits;
             this.targetCacheMisses = targetCacheMisses;
@@ -118,9 +104,6 @@ final class RecipePatternPlanningMetrics {
             this.generatedPatterns = generatedPatterns;
             this.reusedPatterns = reusedPatterns;
             this.budgetExhaustions = budgetExhaustions;
-            this.plannerRuns = plannerRuns;
-            this.degradedPlannerRuns = degradedPlannerRuns;
-            this.plannerStates = plannerStates;
             this.indexBuilds = indexBuilds;
             this.indexedRecipes = indexedRecipes;
             this.indexNanos = indexNanos;
@@ -132,8 +115,7 @@ final class RecipePatternPlanningMetrics {
                     routeCandidateCacheHits + '/' + routeCandidateCacheMisses + " p95 " +
                     p95PlanningNanos / 1_000_000L + "ms\n索引 " + indexBuilds + '/' + indexedRecipes + " " +
                     indexNanos / 1_000_000L + "ms 样板 " + generatedPatterns + '/' + reusedPatterns + " 预算 " +
-                    budgetExhaustions + " 规划 " + (plannerRuns - degradedPlannerRuns) + '/' + degradedPlannerRuns +
-                    " 状态 " + plannerStates;
+                    budgetExhaustions;
         }
     }
 }

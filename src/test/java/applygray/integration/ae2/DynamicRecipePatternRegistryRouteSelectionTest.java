@@ -87,10 +87,34 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
                 "plate"));
         assertEquals(0, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false, true, false,
                 "dust"));
-        assertEquals(1, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false, true, true,
+        assertEquals(2, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false, true, true,
                 null));
         assertEquals(3, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, false, false, false, false,
                 "ingot"));
+    }
+
+    @Test
+    void fluidRecoveryFormCostUsesCanonicalShapesAndDefersProcessedStock() {
+        assertEquals(0, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, true, true, "ingot"));
+        assertEquals(1, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, true, true, "dust"));
+        assertEquals(8, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, true, true, "screw"));
+        assertEquals(8, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, true, true, "bolt"));
+        assertEquals(8, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, true, true, "round"));
+        assertEquals(0, DynamicRecipePatternRegistry.fluidMaterialRecoveryInputFormCost(
+                true, false, true, "ingot"));
+    }
+
+    @Test
+    void routeComparisonAmountUsesLargestPositiveRootBatch() {
+        assertEquals(144, DynamicRecipePatternRegistry.routeComparisonAmount(
+                List.of(16L, 144L, 0L), Long::longValue));
+        assertEquals(1, DynamicRecipePatternRegistry.routeComparisonAmount(
+                List.of(0L, -1L), Long::longValue));
     }
 
     @Test
@@ -223,6 +247,13 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
     }
 
     @Test
+    void standaloneDeadlineStillAllowsBoundedCandidateEnumeration() {
+        assertFalse(DynamicRecipePatternRegistry.shouldStopCandidateEnumeration(true, true));
+        assertTrue(DynamicRecipePatternRegistry.shouldStopCandidateEnumeration(true, false));
+        assertFalse(DynamicRecipePatternRegistry.shouldStopCandidateEnumeration(false, false));
+    }
+
+    @Test
     void standalonePreviewUsesItsOwnConfiguredCapacityUntilTheProtocolLimit() {
         assertEquals(4096, DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(PlanningBudget.DEFAULT));
 
@@ -239,6 +270,10 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
                 true, false, "dust"));
         assertEquals(1, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false,
                 true, false, "ingotHot"));
+        assertEquals(2, DynamicRecipePatternRegistry.solidMaterialInputFormCost(true, true, false,
+                true, true, null));
+        assertEquals(-1, DynamicRecipePatternRegistry.compareStandaloneSourcePreference(
+                true, 1, 2, false, false, false));
     }
 
     @Test
@@ -306,6 +341,13 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
         assertEquals(32, DynamicRecipePatternRegistry.routeInitialExpansionQuota(512, 64, 8));
         assertEquals(64, DynamicRecipePatternRegistry.routeInitialExpansionQuota(4096, 64, 8));
         assertEquals(64, DynamicRecipePatternRegistry.routeInitialExpansionQuota(512, 64, 1));
+    }
+
+    @Test
+    void standaloneFairAllowanceIsNotPartitionedTwice() {
+        assertEquals(64, DynamicRecipePatternRegistry.routeInitialStandaloneExpansionQuota(64, 64));
+        assertEquals(32, DynamicRecipePatternRegistry.routeInitialStandaloneExpansionQuota(32, 64));
+        assertEquals(0, DynamicRecipePatternRegistry.routeInitialStandaloneExpansionQuota(0, 64));
     }
 
     @Test
