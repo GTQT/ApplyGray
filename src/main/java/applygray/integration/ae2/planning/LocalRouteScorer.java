@@ -91,7 +91,6 @@ public final class LocalRouteScorer<K> {
         private int edgeIndex;
         private Node<K> best;
         private EdgeProgress<K> activeEdge;
-        private boolean skippedForCycle;
     }
 
     /** Cursor within one edge, including the current input alternative. */
@@ -115,12 +114,12 @@ public final class LocalRouteScorer<K> {
         private boolean contextIndependent = true;
 
         private EdgeProgress(K target, RouteModel.Edge<K> edge, long crafts, int depth, Set<K> ancestors,
-                             RouteModel.Cost cost) {
+                             RouteModel.Cost cost, boolean retainFrontier) {
             this.target = target;
             this.edge = edge;
             this.crafts = crafts;
             this.depth = depth;
-            this.ancestors = Set.copyOf(ancestors);
+            this.ancestors = retainFrontier ? Set.copyOf(ancestors) : ancestors;
             this.cost = cost;
         }
     }
@@ -147,6 +146,9 @@ public final class LocalRouteScorer<K> {
     private final Limits limits;
     private final Map<MemoKey<K>, Node<K>> memo = new HashMap<>();
     private final Map<ProgressKey<K>, DemandProgress<K>> demandProgress = new HashMap<>();
+    private final Map<K, List<RouteModel.Edge<K>>> producingEdges = new HashMap<>();
+    private final Map<RouteModel.Input<K>, List<RouteModel.Amount<K>>> orderedAlternatives =
+            new java.util.IdentityHashMap<>();
 
     public LocalRouteScorer(RecipeGraphIndex<K, RouteModel.Edge<K>> graph,
                             RouteModel.RuntimeContext<K> context, RoutePolicy routePolicy, Limits limits) {
@@ -366,71 +368,70 @@ public final class LocalRouteScorer<K> {
             }
             budget.expansions++;
             progress = new DemandProgress<>();
-            List<RouteModel.Edge<K>> edges = new ArrayList<>(graph.edgesFrom(key).stream()
-                    .map(RecipeGraphIndex.HyperEdge::value)
-                    .filter(edge -> edge.netOutput(key) > 0)
-                    .toList());
-            edges.sort((left, right) -> {
-                long leftCrafts = divideRoundUp(remaining, left.netOutput(key));
-                long rightCrafts = divideRoundUp(remaining, right.netOutput(key));
-                int cost = routePolicy.compare(edgeCost(left, leftCrafts, depth + 1),
-                        edgeCost(right, rightCrafts, depth + 1));
-                return cost != 0 ? cost : left.id().compareTo(right.id());
-            });
-            progress.edges = List.copyOf(edges);
+            if (budget.retainsFrontier()) {
+                List<RouteModel.Edge<K>> edges = new ArrayList<>(producingEdges(key));
+                edges.sort((left, right) -> {
+                    long leftCrafts = divideRoundUp(remaining, left.netOutput(key));
+                    long rightCrafts = divideRoundUp(remaining, right.netOutput(key));
+                    int cost = routePolicy.compare(edgeCost(left, leftCrafts, depth + 1),
+                            edgeCost(right, rightCrafts, depth + 1));
+                    return cost != 0 ? cost : left.id().compareTo(right.id());
+                });
+                progress.edges = List.copyOf(edges);
+            } else {
+                progress.edges = producingEdges(key);
+            }
             if (progressKey != null) demandProgress.put(progressKey, progress);
         }
 
-        Set<K> childAncestors = new HashSet<>(ancestors);
-        childAncestors.add(key);
-        while (progress.edgeIndex < progress.edges.size()) {
-            RouteModel.Edge<K> edge = progress.edges.get(progress.edgeIndex);
-            if (edge.inputs().stream().anyMatch(input -> input.alternatives().stream()
-                    .anyMatch(option -> key.equals(option.key()))) && ancestors.contains(key)) {
-                progress.skippedForCycle = true;
-                progress.edgeIndex++;
-                continue;
-            }
-            if (progress.activeEdge == null) {
-                long crafts = divideRoundUp(remaining, edge.netOutput(key));
-                progress.activeEdge = new EdgeProgress<>(key, edge, crafts, depth + 1, childAncestors,
-                        edgeCost(edge, crafts, depth + 1));
-            }
-            Node<K> candidate = resumeEdge(progress.activeEdge, budget, progress.best);
-            if (candidate == null) {
-                if (progress.activeEdge.dominated) {
-                    progress.activeEdge = null;
-                    progress.edgeIndex++;
-                    budget.boundPrunedEdges++;
-                    continue;
+        boolean mutablePath = !budget.retainsFrontier();
+        Set<K> childAncestors = mutablePath ? ancestors : new HashSet<>(ancestors);
+        boolean addedToPath = childAncestors.add(key);
+        try {
+            while (progress.edgeIndex < progress.edges.size()) {
+                RouteModel.Edge<K> edge = progress.edges.get(progress.edgeIndex);
+                if (progress.activeEdge == null) {
+                    long crafts = divideRoundUp(remaining, edge.netOutput(key));
+                    progress.activeEdge = new EdgeProgress<>(key, edge, crafts, depth + 1, childAncestors,
+                            edgeCost(edge, crafts, depth + 1), budget.retainsFrontier());
                 }
-                return terminal(key, stockCost.plus(unresolved(key, remaining, depth, true)), false, false);
+                Node<K> candidate = resumeEdge(progress.activeEdge, budget, progress.best);
+                if (candidate == null) {
+                    if (progress.activeEdge.dominated) {
+                        progress.activeEdge = null;
+                        progress.edgeIndex++;
+                        budget.boundPrunedEdges++;
+                        continue;
+                    }
+                    return terminal(key, stockCost.plus(unresolved(key, remaining, depth, true)), false, false);
+                }
+                if (progress.best == null || routePolicy.compare(candidate.cost, progress.best.cost) < 0 ||
+                        routePolicy.compare(candidate.cost, progress.best.cost) == 0 &&
+                                candidate.edge.id().compareTo(progress.best.edge.id()) < 0) {
+                    progress.best = candidate;
+                }
+                progress.activeEdge = null;
+                progress.edgeIndex++;
             }
-            if (progress.best == null || routePolicy.compare(candidate.cost, progress.best.cost) < 0 ||
-                    routePolicy.compare(candidate.cost, progress.best.cost) == 0 &&
-                            candidate.edge.id().compareTo(progress.best.edge.id()) < 0) {
-                progress.best = candidate;
+            Node<K> selected = progress.best;
+            if (selected == null) {
+                selected = terminal(key, unresolved(key, remaining, depth, false), false, true);
             }
-            progress.activeEdge = null;
-            progress.edgeIndex++;
+            if (progressKey != null) demandProgress.remove(progressKey);
+            Node<K> result = withAddedCost(selected, stockCost);
+            if (result.contextIndependent) {
+                memo.put(memoKey, withoutStockCost(result, stockCost.consumedStockMaterials()));
+            }
+            return result;
+        } finally {
+            if (mutablePath && addedToPath) childAncestors.remove(key);
         }
-        Node<K> selected = progress.best;
-        if (selected == null) {
-            selected = terminal(key, unresolved(key, remaining, depth, false), false,
-                    !progress.skippedForCycle);
-        }
-        if (progressKey != null) demandProgress.remove(progressKey);
-        Node<K> result = withAddedCost(selected, stockCost);
-        if (result.contextIndependent) {
-            memo.put(memoKey, withoutStockCost(result, stockCost.consumedStockMaterials()));
-        }
-        return result;
     }
 
     private Node<K> scoreEdge(K target, RouteModel.Edge<K> edge, long crafts, int depth,
                               Set<K> ancestors, CallBudget budget) {
         EdgeProgress<K> progress = new EdgeProgress<>(target, edge, crafts, depth, ancestors,
-                edgeCost(edge, crafts, depth));
+                edgeCost(edge, crafts, depth), budget.retainsFrontier());
         Node<K> result = resumeEdge(progress, budget, null);
         if (result != null) return result;
         RouteModel.Cost pausedCost = progress.cost.plus(new RouteModel.Cost(
@@ -448,10 +449,7 @@ public final class LocalRouteScorer<K> {
         while (progress.inputIndex < progress.edge.inputs().size()) {
             RouteModel.Input<K> input = progress.edge.inputs().get(progress.inputIndex);
             if (progress.alternatives == null) {
-                List<RouteModel.Amount<K>> alternatives = new ArrayList<>(input.alternatives());
-                alternatives.sort(Comparator.comparing(option -> graph.stableKey(option.key())));
-                int alternativeLimit = Math.min(alternatives.size(), limits.maxInputAlternatives());
-                progress.alternatives = List.copyOf(alternatives.subList(0, alternativeLimit));
+                progress.alternatives = orderedAlternatives(input);
             }
             while (progress.alternativeIndex < progress.alternatives.size()) {
                 RouteModel.Amount<K> option = progress.alternatives.get(progress.alternativeIndex);
@@ -498,6 +496,31 @@ public final class LocalRouteScorer<K> {
     private boolean isDominatedBy(Node<K> incumbent, RouteModel.Cost lowerBound) {
         return incumbent != null && incumbent.complete &&
                 routePolicy.incumbentStrictlyDominates(incumbent.cost, lowerBound);
+    }
+
+    /** Immutable per-output edge order reused by the selected winner's non-resumable scoring pass. */
+    private List<RouteModel.Edge<K>> producingEdges(K key) {
+        return producingEdges.computeIfAbsent(key, ignored -> {
+            List<RouteModel.Edge<K>> edges = new ArrayList<>();
+            for (RecipeGraphIndex.HyperEdge<K, RouteModel.Edge<K>> hyperEdge : graph.edgesFrom(key)) {
+                RouteModel.Edge<K> edge = hyperEdge.value();
+                if (edge.netOutput(key) > 0) edges.add(edge);
+            }
+            edges.sort((left, right) -> {
+                int cost = routePolicy.compare(edgeCost(left, 1, 1), edgeCost(right, 1, 1));
+                return cost != 0 ? cost : left.id().compareTo(right.id());
+            });
+            return List.copyOf(edges);
+        });
+    }
+
+    private List<RouteModel.Amount<K>> orderedAlternatives(RouteModel.Input<K> input) {
+        return orderedAlternatives.computeIfAbsent(input, ignored -> {
+            List<RouteModel.Amount<K>> alternatives = new ArrayList<>(input.alternatives());
+            alternatives.sort(Comparator.comparing(option -> graph.stableKey(option.key())));
+            int alternativeLimit = Math.min(alternatives.size(), limits.maxInputAlternatives());
+            return List.copyOf(alternatives.subList(0, alternativeLimit));
+        });
     }
 
     private Node<K> terminal(K key, RouteModel.Cost cost, boolean complete, boolean contextIndependent) {
