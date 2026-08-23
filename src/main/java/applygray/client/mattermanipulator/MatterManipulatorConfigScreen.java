@@ -141,6 +141,7 @@ public final class MatterManipulatorConfigScreen extends GuiScreen {
     private void addCopying(List<MenuEntry> root, ItemMatterManipulator manipulator, ItemStack stack) {
         root.add(action("applygray.matter_manipulator.radial.mark_copy", ConfigureManipulatorMessage.Action.MARK_COPY));
         root.add(branch("applygray.matter_manipulator.radial.edit_stack", List.of(
+                action("applygray.matter_manipulator.radial.mark_array", ConfigureManipulatorMessage.Action.MARK_ARRAY),
                 action("applygray.matter_manipulator.radial.reset", ConfigureManipulatorMessage.Action.RESET_COPY_REPEATS))));
         root.add(entry("applygray.matter_manipulator.radial.edit_transform", this::openTransform));
         root.add(action("applygray.matter_manipulator.radial.mark_paste", ConfigureManipulatorMessage.Action.MARK_PASTE));

@@ -2,6 +2,8 @@ package applygray.mattermanipulator.state;
 
 import java.util.Objects;
 
+import applygray.mattermanipulator.config.MatterManipulatorConfig;
+
 import net.minecraft.util.math.BlockPos;
 
 /** Target-only state transitions shared by the cut, copy, paste, and reset input actions. */
@@ -24,7 +26,7 @@ public final class ManipulatorSelectionActions {
         if (state.placeMode() != ManipulatorPlaceMode.COPYING && state.placeMode() != ManipulatorPlaceMode.MOVING) {
             state.setPlaceMode(ManipulatorPlaceMode.COPYING);
         }
-        state.setSelectionC(null);
+        if (MatterManipulatorConfig.autoClearPaste) state.setSelectionC(null);
         state.setPendingAction(ManipulatorPendingAction.MARK_PASTE);
     }
 
@@ -56,5 +58,6 @@ public final class ManipulatorSelectionActions {
         Objects.requireNonNull(state, "state");
         state.setPlaceMode(mode);
         state.clearSelections();
+        if (MatterManipulatorConfig.clearTransformWithSelections) resetTransform(state);
     }
 }

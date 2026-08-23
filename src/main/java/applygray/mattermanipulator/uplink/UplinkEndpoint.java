@@ -1,6 +1,7 @@
 package applygray.mattermanipulator.uplink;
 
 import applygray.mattermanipulator.building.BlockSpec;
+import net.minecraftforge.fluids.FluidStack;
 
 /**
  * Server-side endpoint for a formed Quantum Uplink.
@@ -17,6 +18,10 @@ public interface UplinkEndpoint {
     long extract(BlockSpec specification, long amount, boolean simulate);
 
     long insert(BlockSpec specification, long amount, boolean simulate);
+
+    default long extract(FluidStack specification, long amount, boolean simulate) { return 0L; }
+
+    default long insert(FluidStack specification, long amount, boolean simulate) { return 0L; }
 
     /** Returns whether this controller is formed and drawing its normal running power. */
     default boolean isActive() {

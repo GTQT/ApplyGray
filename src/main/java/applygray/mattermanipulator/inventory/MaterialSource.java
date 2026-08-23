@@ -1,6 +1,7 @@
 package applygray.mattermanipulator.inventory;
 
 import applygray.mattermanipulator.building.BlockSpec;
+import net.minecraftforge.fluids.FluidStack;
 
 /**
  * A source or destination of exact block materials.
@@ -16,4 +17,14 @@ public interface MaterialSource {
     long extract(BlockSpec specification, long amount, boolean simulate);
 
     long insert(BlockSpec specification, long amount, boolean simulate);
+
+    /** Fluid half of the same exact-material contract; legacy item-only sources safely return zero. */
+    default long extract(FluidStack specification, long amount, boolean simulate) {
+        return 0L;
+    }
+
+    /** Fluid half of the same exact-material contract; legacy item-only sources safely return zero. */
+    default long insert(FluidStack specification, long amount, boolean simulate) {
+        return 0L;
+    }
 }

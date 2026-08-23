@@ -3,7 +3,7 @@ package applygray.mattermanipulator.planning;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Random;
+import applygray.mattermanipulator.util.SourceCompatibleRandom;
 
 import applygray.mattermanipulator.building.GeometryConfiguration;
 
@@ -22,7 +22,7 @@ public final class GeometryPlanBinder {
     public static BoundGeometryPlan bind(GeometryPlan plan, GeometryConfiguration configuration, long seed) {
         Objects.requireNonNull(plan, "plan");
         Objects.requireNonNull(configuration, "configuration");
-        Random random = new Random(seed);
+        SourceCompatibleRandom random = new SourceCompatibleRandom(seed);
         List<BoundGeometryOperation> operations = new ArrayList<>(plan.operationCount());
         for (ManipulatorOperation operation : plan.operations()) {
             operations.add(new BoundGeometryOperation(operation, configuration.select(operation.role(), random)));

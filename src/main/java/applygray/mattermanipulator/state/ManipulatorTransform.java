@@ -58,6 +58,14 @@ public final class ManipulatorTransform {
                 component(2, vector.getX(), vector.getY(), vector.getZ()));
     }
 
+    /** Applies the inverse orthogonal transform (the transpose of this matrix). */
+    public BlockPos inverseApply(BlockPos vector) {
+        Objects.requireNonNull(vector, "vector");
+        return new BlockPos(inverseComponent(0, vector.getX(), vector.getY(), vector.getZ()),
+                inverseComponent(1, vector.getX(), vector.getY(), vector.getZ()),
+                inverseComponent(2, vector.getX(), vector.getY(), vector.getZ()));
+    }
+
     public EnumFacing apply(EnumFacing facing) {
         Objects.requireNonNull(facing, "facing");
         BlockPos transformed = apply(new BlockPos(facing.getXOffset(), facing.getYOffset(), facing.getZOffset()));
@@ -116,6 +124,10 @@ public final class ManipulatorTransform {
 
     private int component(int row, int x, int y, int z) {
         return matrix[row * 3] * x + matrix[row * 3 + 1] * y + matrix[row * 3 + 2] * z;
+    }
+
+    private int inverseComponent(int column, int x, int y, int z) {
+        return matrix[column] * x + matrix[3 + column] * y + matrix[6 + column] * z;
     }
 
     private void validate() {

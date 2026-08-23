@@ -8,6 +8,7 @@ import applygray.integration.ApplyGrayIntegrationBootstrap;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.integration.theoneprobe.TheOneProbeIntegration;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
+import applygray.mattermanipulator.config.MatterManipulatorConfig;
 
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;
@@ -40,6 +41,7 @@ public class ApplyGrayMod {
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         LOGGER.info("Loading Applied Energistics 2 Supergiant integration for GregTech");
+        MatterManipulatorConfig.load(event.getModConfigurationDirectory());
         RecipePatternRules.initialize(event.getModConfigurationDirectory());
         MatterManipulatorNetwork.initialize();
         proxy.preInit(event);

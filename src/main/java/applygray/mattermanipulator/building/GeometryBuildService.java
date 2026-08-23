@@ -40,9 +40,7 @@ public final class GeometryBuildService {
         Objects.requireNonNull(request, "request");
         validateRequest(request);
         GeometryPlan geometry = GeometryPlanner.plan(request.state().geometrySelection());
-        BoundGeometryPlan plan = GeometryPlanBinder.bind(geometry, request.state().geometryConfiguration());
-        validateRange(request, plan);
-        return plan;
+        return GeometryPlanBinder.bind(geometry, request.state().geometryConfiguration());
     }
 
     /** Executes one tier-bounded batch from a previously validated immutable plan. */
@@ -87,18 +85,4 @@ public final class GeometryBuildService {
         }
     }
 
-    private static void validateRange(GeometryBuildRequest request, BoundGeometryPlan plan) {
-        int maximumRange = request.tier().maximumRange();
-        if (maximumRange < 0) return;
-
-        long maximumDistanceSquared = (long) maximumRange * maximumRange;
-        for (BoundGeometryOperation operation : plan.operations()) {
-            BlockPos position = operation.operation().location().position();
-            double distanceSquared = position.distanceSq(request.player().posX, request.player().posY,
-                    request.player().posZ);
-            if (distanceSquared > maximumDistanceSquared) {
-                throw new IllegalArgumentException("A geometry operation is outside the manipulator's range");
-            }
-        }
-    }
 }

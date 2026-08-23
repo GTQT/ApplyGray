@@ -36,7 +36,8 @@ public final class CopyPlanner {
         int maxY = Math.max(anchor.getY(), other.getY());
         int maxZ = Math.max(anchor.getZ(), other.getZ());
         long baseCount = checkedCount(maximumOperations, span(minX, maxX), span(minY, maxY), span(minZ, maxZ));
-        checkedCount(maximumOperations, baseCount, transform.repeatX(), transform.repeatY(), transform.repeatZ());
+        checkedCount(maximumOperations, baseCount, Math.abs((long) transform.repeatX()),
+                Math.abs((long) transform.repeatY()), Math.abs((long) transform.repeatZ()));
 
         List<BlockPos> transformedOffsets = new ArrayList<>(Math.toIntExact(baseCount));
         int transformedMinX = Integer.MAX_VALUE;
@@ -67,17 +68,23 @@ public final class CopyPlanner {
         List<CopyPositionOperation> operations = new ArrayList<>();
         Set<BlockPos> targets = new HashSet<>();
         int sourceIndex;
-        for (int repeatY = 0; repeatY < transform.repeatY(); repeatY++) {
-            for (int repeatX = 0; repeatX < transform.repeatX(); repeatX++) {
-                for (int repeatZ = 0; repeatZ < transform.repeatZ(); repeatZ++) {
+        int repeatCountY = Math.abs(transform.repeatY());
+        int repeatCountX = Math.abs(transform.repeatX());
+        int repeatCountZ = Math.abs(transform.repeatZ());
+        for (int repeatY = 0; repeatY < repeatCountY; repeatY++) {
+            for (int repeatX = 0; repeatX < repeatCountX; repeatX++) {
+                for (int repeatZ = 0; repeatZ < repeatCountZ; repeatZ++) {
                     sourceIndex = 0;
                     for (int y = minY; y <= maxY; y++) {
                         for (int x = minX; x <= maxX; x++) {
                             for (int z = minZ; z <= maxZ; z++) {
                                 BlockPos transformed = transformedOffsets.get(sourceIndex++);
-                                BlockPos target = destination.position().add(transformed.getX() + repeatX * strideX,
-                                        transformed.getY() + repeatY * strideY,
-                                        transformed.getZ() + repeatZ * strideZ);
+                                int signedX = transform.repeatX() < 0 ? -repeatX : repeatX;
+                                int signedY = transform.repeatY() < 0 ? -repeatY : repeatY;
+                                int signedZ = transform.repeatZ() < 0 ? -repeatZ : repeatZ;
+                                BlockPos target = destination.position().add(transformed.getX() + signedX * strideX,
+                                        transformed.getY() + signedY * strideY,
+                                        transformed.getZ() + signedZ * strideZ);
                                 if (!targets.add(target)) {
                                     throw new GeometryPlanException(GeometryPlanException.Reason.INVALID_COPY_TRANSFORM,
                                             "The copy transform writes one target position more than once");

@@ -8,6 +8,7 @@ import java.util.Map;
 
 import applygray.mattermanipulator.state.ManipulatorTier;
 import applygray.mattermanipulator.state.ManipulatorUpgrade;
+import applygray.mattermanipulator.integration.ae2.Ae2ManipulatorLinkHandler;
 
 import net.minecraft.item.Item;
 import net.minecraftforge.registries.IForgeRegistry;
@@ -41,6 +42,10 @@ public final class MatterManipulatorItems {
 
     public static void register(IForgeRegistry<Item> registry) {
         ALL_ITEMS.forEach(registry::register);
+        Ae2ManipulatorLinkHandler.register(MK0);
+        Ae2ManipulatorLinkHandler.register(MK1);
+        Ae2ManipulatorLinkHandler.register(MK2);
+        Ae2ManipulatorLinkHandler.register(MK3);
     }
 
     private static Map<ManipulatorComponent, ItemManipulatorComponent> createComponents() {

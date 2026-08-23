@@ -30,8 +30,6 @@ public final class CableBuildService {
         GeometryPlan plan = GeometryPlanner.plan(new GeometrySelection(
                 applygray.mattermanipulator.state.ManipulatorShape.LINE, a,
                 new ManipulatorLocation(a.dimension(), pinnedTarget), null));
-        validateRange(request, plan);
-
         GeometryConfiguration configuration = new GeometryConfiguration();
         configuration.edges().setSingle(request.state().cableMaterial());
         return GeometryPlanBinder.bind(plan, configuration);
@@ -63,16 +61,4 @@ public final class CableBuildService {
         }
     }
 
-    private static void validateRange(CableBuildRequest request, GeometryPlan plan) {
-        int maximumRange = request.tier().maximumRange();
-        if (maximumRange < 0) return;
-        long maximumDistanceSquared = (long) maximumRange * maximumRange;
-        BlockPos player = new BlockPos(request.player());
-        boolean outside = plan.operations().stream()
-                .anyMatch(operation -> player.distanceSq(operation.location().position()) > maximumDistanceSquared);
-        if (outside) {
-            throw new GeometryPlanException(GeometryPlanException.Reason.OPERATION_LIMIT_EXCEEDED,
-                    "The cable operation exceeds the manipulator range");
-        }
-    }
 }

@@ -33,6 +33,7 @@ public final class MatterManipulatorClientInput {
     private static final KeyBinding RESET = new KeyBinding("key.applygray.matter_manipulator.reset", Keyboard.KEY_Z,
             "key.categories.applygray");
     private static boolean initialized;
+    private static boolean middleButtonDown;
 
     private MatterManipulatorClientInput() {}
 
@@ -62,7 +63,19 @@ public final class MatterManipulatorClientInput {
 
     @SubscribeEvent
     public static void onMouseInput(MouseEvent event) {
-        if (event.getButton() != 2 || !event.isButtonstate()) return;
+        if (event.getButton() != 2) return;
+        // LWJGL can leave a synthetic middle-button press queued after a GUI closes. Track both edges and consume
+        // the event so one physical click produces exactly one server request.
+        if (!event.isButtonstate()) {
+            middleButtonDown = false;
+            event.setCanceled(true);
+            return;
+        }
+        if (middleButtonDown) {
+            event.setCanceled(true);
+            return;
+        }
+        middleButtonDown = true;
         Minecraft minecraft = Minecraft.getMinecraft();
         EnumHand hand = heldManipulator(minecraft.player);
         if (hand == null || minecraft.currentScreen != null) return;

@@ -4,6 +4,7 @@ import java.util.Objects;
 
 import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.inventory.MaterialSource;
+import net.minecraftforge.fluids.FluidStack;
 
 /** Exact item source backed by the active Quantum Uplink bound to one manipulator. */
 public final class UplinkMaterialSource implements MaterialSource {
@@ -32,6 +33,24 @@ public final class UplinkMaterialSource implements MaterialSource {
 
     @Override
     public long insert(BlockSpec specification, long amount, boolean simulate) {
+        UplinkEndpoint endpoint = endpoint();
+        if (endpoint == null) return 0L;
+        long inserted = endpoint.insert(specification, amount, simulate);
+        lastStatus = Objects.requireNonNull(endpoint.status(), "Uplink endpoints must provide a status");
+        return inserted;
+    }
+
+    @Override
+    public long extract(FluidStack specification, long amount, boolean simulate) {
+        UplinkEndpoint endpoint = endpoint();
+        if (endpoint == null) return 0L;
+        long extracted = endpoint.extract(specification, amount, simulate);
+        lastStatus = Objects.requireNonNull(endpoint.status(), "Uplink endpoints must provide a status");
+        return extracted;
+    }
+
+    @Override
+    public long insert(FluidStack specification, long amount, boolean simulate) {
         UplinkEndpoint endpoint = endpoint();
         if (endpoint == null) return 0L;
         long inserted = endpoint.insert(specification, amount, simulate);

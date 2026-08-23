@@ -2,6 +2,7 @@ package applygray.mattermanipulator.server;
 
 import java.util.Iterator;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +39,7 @@ import applygray.mattermanipulator.inventory.ItemHandlerMaterialSource;
 import applygray.mattermanipulator.inventory.MaterialSource;
 import applygray.mattermanipulator.inventory.ResourceRequirement;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
+import applygray.mattermanipulator.inventory.FluidRequirement;
 import applygray.mattermanipulator.integration.ae2.Ae2WirelessMaterialSource;
 import applygray.mattermanipulator.integration.ae2.Ae2BuildingAdapter;
 import applygray.mattermanipulator.integration.gregtech.GregTechBuildingAdapter;
@@ -57,6 +59,7 @@ import applygray.mattermanipulator.planning.CopyPlan;
 import applygray.mattermanipulator.planning.GeometryPlanException;
 import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorCapability;
+import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorState;
 import applygray.mattermanipulator.state.ManipulatorUpgrade;
 
@@ -64,6 +67,9 @@ import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.EnumHand;
+import net.minecraft.util.SoundCategory;
+import net.minecraft.init.SoundEvents;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
@@ -327,57 +333,141 @@ public final class MatterManipulatorBuildManager {
     /** Returns true once the current operation is complete; transaction failures are reported and terminate it. */
     private static boolean runNextStep(EntityPlayerMP player, ItemStack stack, PendingBuild pending) {
         ResourceAccess access = resources(player, stack, pending.manipulator);
+        if (pending.kind == BuildKind.MOVE) {
+            if (!moveInRange(player, (CopyPlan) pending.plan, pending.manipulator.tier())) return false;
+            MoveBuildRequest request = new MoveBuildRequest(player, stack, pending.hand, pending.manipulator.tier(),
+                    pending.state, access.materialSources, access.powerSource);
+            MoveBuildResult result = MOVE_SERVICE.execute(request, (CopyPlan) pending.plan);
+            logBatchResult(player, pending, result.transaction());
+            if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
+            pending.completed.set(0, pending.operationCount);
+            playBatchSound(player, pending, null);
+            return true;
+        }
+
+        EligibleBatch batch = switch (pending.kind) {
+            case GEOMETRY -> geometryBatch(player, pending, access);
+            case COPY -> copyBatch(player, pending, access);
+            case EXCHANGE -> exchangeBatch(player, pending, access);
+            case CABLE -> cableBatch(player, pending, access);
+            case MOVE -> throw new AssertionError("Move batches are handled above");
+        };
+        if (batch.transaction() == null) return pending.completed.cardinality() == pending.operationCount;
+        logBatchResult(player, pending, batch.transaction());
+        if (!batch.transaction().committed()) throw new TransactionFailedException(batch.transaction());
+        batch.completedIndices().forEach(pending.completed::set);
+        playBatchSound(player, pending, batch.completedIndices());
+        return pending.completed.cardinality() == pending.operationCount;
+    }
+
+    /** Plays one merged operation sound per committed batch, never one sound per block. */
+    private static void playBatchSound(EntityPlayerMP player, PendingBuild pending, List<Integer> indices) {
+        BlockPos center = operationCenter(pending, indices);
+        if (center == null) return;
+        net.minecraft.util.SoundEvent sound = switch (pending.kind) {
+            case MOVE -> SoundEvents.ENTITY_ENDERMEN_TELEPORT;
+            case EXCHANGE -> SoundEvents.BLOCK_STONE_BREAK;
+            case GEOMETRY, CABLE, COPY -> SoundEvents.BLOCK_STONE_PLACE;
+        };
+        player.world.playSound(null, center.getX() + 0.5D, center.getY() + 0.5D, center.getZ() + 0.5D,
+                sound, SoundCategory.BLOCKS, 0.45F, 1.0F);
+    }
+
+    private static BlockPos operationCenter(PendingBuild pending, List<Integer> indices) {
+        if (pending.kind == BuildKind.MOVE) {
+            ManipulatorLocation destination = pending.state.selectionC();
+            return destination == null ? null : destination.position();
+        }
+        if (indices == null || indices.isEmpty()) return null;
         return switch (pending.kind) {
-            case GEOMETRY -> {
-                GeometryBuildRequest request = new GeometryBuildRequest(player, stack, pending.hand,
-                        pending.manipulator.tier(), pending.state, access.materialSources, access.powerSource);
-                GeometryBuildResult result = GEOMETRY_SERVICE.executeNextBatch(request,
-                        (BoundGeometryPlan) pending.plan, pending.nextOperationIndex);
-                logBatchResult(player, pending, result.transaction());
-                if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
-                pending.nextOperationIndex = result.nextOperationIndex();
-                yield result.complete();
-            }
-            case COPY -> {
-                CopyBuildRequest request = new CopyBuildRequest(player, stack, pending.hand, pending.manipulator.tier(),
-                        pending.state, access.materialSources, access.powerSource);
-                CopyBuildResult result = COPY_SERVICE.executeNextBatch(request, (BoundCopyPlan) pending.plan,
-                        pending.nextOperationIndex);
-                logBatchResult(player, pending, result.transaction());
-                if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
-                pending.nextOperationIndex = result.nextOperationIndex();
-                yield result.complete();
-            }
-            case MOVE -> {
-                MoveBuildRequest request = new MoveBuildRequest(player, stack, pending.hand, pending.manipulator.tier(),
-                        pending.state, access.materialSources, access.powerSource);
-                MoveBuildResult result = MOVE_SERVICE.execute(request, (CopyPlan) pending.plan);
-                logBatchResult(player, pending, result.transaction());
-                if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
-                yield true;
-            }
-            case EXCHANGE -> {
-                ExchangeBuildRequest request = new ExchangeBuildRequest(player, stack, pending.hand,
-                        pending.manipulator.tier(), pending.state, access.materialSources, access.powerSource);
-                ExchangeBuildResult result = EXCHANGE_SERVICE.executeNextBatch(request, (BoundExchangePlan) pending.plan,
-                        pending.nextOperationIndex);
-                logBatchResult(player, pending, result.transaction());
-                if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
-                pending.nextOperationIndex = result.nextOperationIndex();
-                yield result.complete();
-            }
-            case CABLE -> {
-                CableBuildRequest request = new CableBuildRequest(player, stack, pending.hand, pending.manipulator.tier(),
-                        pending.state, access.materialSources, access.powerSource);
-                GeometryBuildResult result = CABLE_SERVICE.executeNextBatch(request, (BoundGeometryPlan) pending.plan,
-                        pending.nextOperationIndex);
-                logBatchResult(player, pending, result.transaction());
-                if (!result.transaction().committed()) throw new TransactionFailedException(result.transaction());
-                pending.nextOperationIndex = result.nextOperationIndex();
-                yield result.complete();
-            }
+            case GEOMETRY, CABLE -> ((BoundGeometryPlan) pending.plan).operations().get(indices.getFirst())
+                    .operation().location().position();
+            case COPY -> ((BoundCopyPlan) pending.plan).operations().get(indices.getFirst()).target();
+            case EXCHANGE -> ((BoundExchangePlan) pending.plan).operations().get(indices.getFirst()).position();
+            case MOVE -> null;
         };
     }
+
+    private static EligibleBatch geometryBatch(EntityPlayerMP player, PendingBuild pending, ResourceAccess access) {
+        BoundGeometryPlan plan = (BoundGeometryPlan) pending.plan;
+        BuildingContext context = buildingContext(player, pending.hand, player.getHeldItem(pending.hand),
+                pending.manipulator, pending.state);
+        List<Integer> indices = new ArrayList<>();
+        List<PreparedBlockChange> changes = new ArrayList<>();
+        for (int index = 0; index < plan.operations().size() && indices.size() < pending.manipulator.tier().blocksPerBatch();
+             index++) {
+            if (pending.completed.get(index)) continue;
+            BoundGeometryOperation operation = plan.operations().get(index);
+            BlockPos position = operation.operation().location().position();
+            if (!inRange(player, position, pending.manipulator.tier())) continue;
+            indices.add(index);
+            changes.add(ADAPTERS.prepareApply(context, position, operation.block()));
+        }
+        return executeEligible(indices, changes, access);
+    }
+
+    private static EligibleBatch cableBatch(EntityPlayerMP player, PendingBuild pending, ResourceAccess access) {
+        return geometryBatch(player, pending, access);
+    }
+
+    private static EligibleBatch copyBatch(EntityPlayerMP player, PendingBuild pending, ResourceAccess access) {
+        BoundCopyPlan plan = (BoundCopyPlan) pending.plan;
+        BuildingContext context = buildingContext(player, pending.hand, player.getHeldItem(pending.hand),
+                pending.manipulator, pending.state);
+        List<Integer> indices = new ArrayList<>();
+        List<PreparedBlockChange> changes = new ArrayList<>();
+        for (int index = 0; index < plan.operations().size() && indices.size() < pending.manipulator.tier().blocksPerBatch();
+             index++) {
+            if (pending.completed.get(index)) continue;
+            BoundCopyOperation operation = plan.operations().get(index);
+            if (!inRange(player, operation.source(), pending.manipulator.tier()) ||
+                    !inRange(player, operation.target(), pending.manipulator.tier())) continue;
+            indices.add(index);
+            changes.add(ADAPTERS.prepareApply(context, operation.target(), operation.captured()));
+        }
+        return executeEligible(indices, changes, access);
+    }
+
+    private static EligibleBatch exchangeBatch(EntityPlayerMP player, PendingBuild pending, ResourceAccess access) {
+        BoundExchangePlan plan = (BoundExchangePlan) pending.plan;
+        BuildingContext context = buildingContext(player, pending.hand, player.getHeldItem(pending.hand),
+                pending.manipulator, pending.state);
+        List<Integer> indices = new ArrayList<>();
+        List<PreparedBlockChange> changes = new ArrayList<>();
+        for (int index = 0; index < plan.operations().size() && indices.size() < pending.manipulator.tier().blocksPerBatch();
+             index++) {
+            if (pending.completed.get(index)) continue;
+            BoundExchangeOperation operation = plan.operations().get(index);
+            if (!inRange(player, operation.position(), pending.manipulator.tier())) continue;
+            indices.add(index);
+            changes.add(ADAPTERS.prepareApply(context, operation.position(), operation.replacement()));
+        }
+        return executeEligible(indices, changes, access);
+    }
+
+    private static EligibleBatch executeEligible(List<Integer> indices, List<PreparedBlockChange> changes,
+                                                 ResourceAccess access) {
+        if (changes.isEmpty()) return new EligibleBatch(List.of(), null);
+        BuildTransaction.PreparedBatch batch = BuildTransaction.prepareLargestPrefix(changes, access.materialSources,
+                access.powerSource);
+        BuildTransaction.Result transaction = batch.transaction().execute();
+        return new EligibleBatch(List.copyOf(indices.subList(0, batch.changeCount())), transaction);
+    }
+
+    private static boolean moveInRange(EntityPlayerMP player, CopyPlan plan,
+                                       applygray.mattermanipulator.state.ManipulatorTier tier) {
+        return plan.operations().stream().allMatch(operation ->
+                inRange(player, operation.source(), tier) && inRange(player, operation.target(), tier));
+    }
+
+    private static boolean inRange(EntityPlayerMP player, BlockPos position,
+                                   applygray.mattermanipulator.state.ManipulatorTier tier) {
+        int maximumRange = tier.maximumRange();
+        return maximumRange < 0 || position.distanceSq(player.posX, player.posY, player.posZ) <=
+                (long) maximumRange * maximumRange;
+    }
+
+    private record EligibleBatch(List<Integer> completedIndices, BuildTransaction.Result transaction) {}
 
     private static void logBatchResult(EntityPlayerMP player, PendingBuild pending, BuildTransaction.Result result) {
         pending.lastWorldChanges = result.worldChanges();
@@ -485,7 +575,21 @@ public final class MatterManipulatorBuildManager {
             }
             if (remaining > 0L) missing.add(new ResourceRequirement(requirement.specification(), remaining));
         }
-        return ResourceRequirements.of(missing.toArray(ResourceRequirement[]::new));
+        List<FluidRequirement> missingFluids = new ArrayList<>();
+        for (FluidRequirement requirement : requirements.fluidEntries()) {
+            long remaining = requirement.amount();
+            for (MaterialSource source : sources) {
+                if (remaining == 0L) break;
+                long supplied = source.extract(requirement.stack((int) Math.min(remaining, Integer.MAX_VALUE)), remaining, true);
+                if (supplied < 0L || supplied > remaining) {
+                    throw new IllegalStateException("Material source " + source.id() + " returned an invalid simulated fluid extraction");
+                }
+                remaining -= supplied;
+            }
+            if (remaining > 0L) missingFluids.add(new FluidRequirement(requirement.fluidName(), requirement.tag(), remaining));
+        }
+        return ResourceRequirements.combine(ResourceRequirements.of(missing.toArray(ResourceRequirement[]::new)),
+                ResourceRequirements.fluids(missingFluids.toArray(FluidRequirement[]::new)));
     }
 
     private static ResourceAccess resources(EntityPlayerMP player, ItemStack stack, ItemMatterManipulator manipulator) {
@@ -493,7 +597,7 @@ public final class MatterManipulatorBuildManager {
                 new PlayerOffhandInvWrapper(player.inventory));
         List<MaterialSource> sources = new ArrayList<>();
         if (manipulator.hasCapability(stack, ManipulatorCapability.AE_NETWORK)) {
-            sources.add(new Ae2WirelessMaterialSource(player));
+            sources.add(new Ae2WirelessMaterialSource(player, stack));
         }
         sources.add(new ItemHandlerMaterialSource("player", inventory));
         ManipulatorState state = manipulator.state(stack);
@@ -594,6 +698,7 @@ public final class MatterManipulatorBuildManager {
         private final BuildKind kind;
         private final Object plan;
         private final int operationCount;
+        private final BitSet completed = new BitSet();
         private int nextOperationIndex;
         private int ticksUntilNextBatch;
         private int lastWorldChanges;

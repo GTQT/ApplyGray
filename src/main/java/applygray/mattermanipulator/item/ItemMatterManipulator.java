@@ -10,6 +10,7 @@ import applygray.mattermanipulator.network.ExecuteManipulatorOperationMessage;
 import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorState;
+import applygray.mattermanipulator.planning.CopyArraySpan;
 import applygray.mattermanipulator.state.ManipulatorPendingAction;
 import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
@@ -166,6 +167,26 @@ public final class ItemMatterManipulator extends Item {
         }
         BlockPos selectedPosition = player.isSneaking() ? position : position.offset(facing);
         ManipulatorLocation location = ManipulatorLocation.fromWorld(world, selectedPosition);
+        if (state.pendingAction() == ManipulatorPendingAction.MARK_ARRAY) {
+            if (state.selectionA() == null || state.selectionB() == null || state.selectionC() == null) {
+                state.setPendingAction(ManipulatorPendingAction.NONE);
+                saveState(stack, state);
+                player.sendStatusMessage(new TextComponentTranslation(
+                        "applygray.matter_manipulator.selection.incomplete"), true);
+                return EnumActionResult.FAIL;
+            }
+            BlockPos span = CopyArraySpan.calculate(state.selectionA(), state.selectionB(), state.selectionC(),
+                    selectedPosition, state.copyTransform());
+            state.setCopyRepeats(span.getX(), span.getY(), span.getZ());
+            state.setPendingAction(ManipulatorPendingAction.NONE);
+            saveState(stack, state);
+            if (player instanceof EntityPlayerMP serverPlayer) {
+                MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
+            }
+            player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.array.marked",
+                    span.getX(), span.getY(), span.getZ()), true);
+            return EnumActionResult.SUCCESS;
+        }
         SelectionSlot slot = applyPendingSelection(state, location);
         if (slot == null && state.pendingAction() == ManipulatorPendingAction.NONE) {
             slot = markNextSelection(state, location);

@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
 
+import applygray.mattermanipulator.config.MatterManipulatorConfig;
 /** Target-native tier data for the four Matter Manipulator tools. */
 public enum ManipulatorTier {
 
@@ -63,7 +64,7 @@ public enum ManipulatorTier {
     }
 
     public int blocksPerBatch() {
-        return blocksPerBatch;
+        return this == MK3 ? MatterManipulatorConfig.mk3BlocksPerPlace : blocksPerBatch;
     }
 
     public int batchIntervalTicks() {

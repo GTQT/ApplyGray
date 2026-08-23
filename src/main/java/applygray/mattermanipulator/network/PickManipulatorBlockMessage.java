@@ -56,8 +56,9 @@ public final class PickManipulatorBlockMessage implements IMessage {
             if (!(stack.getItem() instanceof ItemMatterManipulator manipulator)) return;
 
             Vec3d start = player.getPositionEyes(1.0F);
+            // Include liquid collision shapes, matching GT5's middle-click material pick path.
             RayTraceResult hit = player.world.rayTraceBlocks(start, start.add(player.getLook(1.0F).scale(6.0D)),
-                    false, true, false);
+                    true, true, false);
             if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) return;
             ManipulatorState state = manipulator.state(stack);
             BlockSpec specification = BlockSpec.fromState(player.world.getBlockState(hit.getBlockPos()));

@@ -39,8 +39,6 @@ public final class MoveBuildService {
         CopyPlan plan = CopyPlanner.plan(request.state().selectionA(), request.state().selectionB(),
                 request.state().selectionC(), CopyTransform.identity(), MAX_ATOMIC_MOVE_OPERATIONS);
         validateNonOverlapping(plan);
-        validateRange(request, plan);
-
         BuildingContext context = context(request);
         for (CopyPositionOperation operation : plan.operations()) {
             adapters.prepareMove(context, operation.source(), operation.target());
@@ -97,18 +95,4 @@ public final class MoveBuildService {
         }
     }
 
-    private static void validateRange(MoveBuildRequest request, CopyPlan plan) {
-        int maximumRange = request.tier().maximumRange();
-        if (maximumRange < 0) return;
-
-        long maximumDistanceSquared = (long) maximumRange * maximumRange;
-        BlockPos player = new BlockPos(request.player());
-        for (CopyPositionOperation operation : plan.operations()) {
-            if (player.distanceSq(operation.source()) > maximumDistanceSquared ||
-                    player.distanceSq(operation.target()) > maximumDistanceSquared) {
-                throw new GeometryPlanException(GeometryPlanException.Reason.OPERATION_LIMIT_EXCEEDED,
-                        "The move operation exceeds the manipulator range");
-            }
-        }
-    }
 }

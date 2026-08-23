@@ -83,6 +83,7 @@ public final class ConfigureManipulatorMessage implements IMessage {
         MARK_COPY,
         MARK_CUT,
         MARK_PASTE,
+        MARK_ARRAY,
         RESET_SELECTIONS,
         CLEAR_SELECTION_A,
         CLEAR_SELECTION_B,
@@ -205,6 +206,10 @@ public final class ConfigureManipulatorMessage implements IMessage {
                         ManipulatorSelectionActions.beginMove(state);
                     }
                     case MARK_PASTE -> preparePaste(manipulator, stack, state);
+                    case MARK_ARRAY -> {
+                        requireCapability(manipulator, stack, ManipulatorCapability.COPYING);
+                        state.setPendingAction(ManipulatorPendingAction.MARK_ARRAY);
+                    }
                     case RESET_SELECTIONS -> ManipulatorSelectionActions.reset(state);
                     case CLEAR_SELECTION_A -> state.setSelectionA(null);
                     case CLEAR_SELECTION_B -> state.setSelectionB(null);
@@ -268,6 +273,9 @@ public final class ConfigureManipulatorMessage implements IMessage {
                 case COPYING, MOVING -> state.pickTarget();
             });
             state.clearSelections();
+            if (applygray.mattermanipulator.config.MatterManipulatorConfig.clearTransformWithSelections) {
+                ManipulatorSelectionActions.resetTransform(state);
+            }
         }
 
         private static void setPick(ManipulatorState state, ManipulatorPickTarget target,

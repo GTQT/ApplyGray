@@ -33,8 +33,6 @@ public final class CopyBuildService {
                 request.state().copyRepeatX(), request.state().copyRepeatY(), request.state().copyRepeatZ());
         CopyPlan positions = CopyPlanner.plan(request.state().selectionA(), request.state().selectionB(),
                 request.state().selectionC(), transform, GeometryPlanner.DEFAULT_MAX_OPERATION_COUNT);
-        validateRange(request, positions);
-
         BuildingContext context = context(request);
         List<BoundCopyOperation> operations = new ArrayList<>(positions.operations().size());
         for (CopyPositionOperation operation : positions.operations()) {
@@ -89,18 +87,4 @@ public final class CopyBuildService {
         }
     }
 
-    private static void validateRange(CopyBuildRequest request, CopyPlan plan) {
-        int maximumRange = request.tier().maximumRange();
-        if (maximumRange < 0) return;
-
-        long maximumDistanceSquared = (long) maximumRange * maximumRange;
-        BlockPos player = new BlockPos(request.player());
-        for (CopyPositionOperation operation : plan.operations()) {
-            if (player.distanceSq(operation.source()) > maximumDistanceSquared ||
-                    player.distanceSq(operation.target()) > maximumDistanceSquared) {
-                throw new GeometryPlanException(GeometryPlanException.Reason.OPERATION_LIMIT_EXCEEDED,
-                        "The copy operation exceeds the manipulator range");
-            }
-        }
-    }
 }

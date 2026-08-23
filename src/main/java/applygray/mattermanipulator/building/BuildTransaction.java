@@ -9,6 +9,8 @@ import applygray.mattermanipulator.inventory.InsufficientResourcesException;
 import applygray.mattermanipulator.inventory.InsufficientOutputCapacityException;
 import applygray.mattermanipulator.inventory.InsufficientPowerException;
 import applygray.mattermanipulator.inventory.EnergyTransaction;
+import applygray.mattermanipulator.inventory.FluidRequirement;
+import applygray.mattermanipulator.config.MatterManipulatorConfig;
 import applygray.mattermanipulator.inventory.OutputTransaction;
 import applygray.mattermanipulator.inventory.PowerSource;
 import applygray.mattermanipulator.inventory.ResourceRequirement;
@@ -44,19 +46,32 @@ public final class BuildTransaction {
 
         List<ResourceRequirement> requirements = new ArrayList<>();
         List<ResourceRequirement> outputRequirements = new ArrayList<>();
+        ResourceRequirements requiredFluids = ResourceRequirements.empty();
+        ResourceRequirements producedFluids = ResourceRequirements.empty();
         for (PreparedBlockChange change : changes) {
             Objects.requireNonNull(change, "changes must not contain null");
             if (!change.changesWorld()) continue;
-            requirements.addAll(change.requiredResources().entries());
+            ResourceRequirements changeRequirements = change.requiredResources();
+            requirements.addAll(changeRequirements.entries());
+            requiredFluids = ResourceRequirements.combine(requiredFluids,
+                    ResourceRequirements.fluids(changeRequirements.fluidEntries().toArray(FluidRequirement[]::new)));
         }
         for (PreparedBlockChange change : changes) {
             if (!change.changesWorld()) continue;
-            outputRequirements.addAll(change.producedResources().entries());
+            ResourceRequirements changeOutputs = change.producedResources();
+            outputRequirements.addAll(changeOutputs.entries());
+            producedFluids = ResourceRequirements.combine(producedFluids,
+                    ResourceRequirements.fluids(changeOutputs.fluidEntries().toArray(FluidRequirement[]::new)));
         }
-        ResourceTransaction resources = ResourceTransaction.prepare(sources,
-                ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new)));
-        OutputTransaction outputs = OutputTransaction.prepare(sources,
-                ResourceRequirements.of(outputRequirements.toArray(ResourceRequirement[]::new)));
+        ResourceRequirements required = ResourceRequirements.combine(
+                ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new)), requiredFluids);
+        ResourceRequirements produced = ResourceRequirements.combine(
+                ResourceRequirements.of(outputRequirements.toArray(ResourceRequirement[]::new)), producedFluids);
+        ResourceTransaction resources = ResourceTransaction.prepare(sources, required);
+        List<? extends MaterialSource> outputSources = MatterManipulatorConfig.meEmptying ? sources : sources.stream()
+                .filter(source -> !source.id().startsWith("ae2-") && !source.id().startsWith("uplink:"))
+                .toList();
+        OutputTransaction outputs = OutputTransaction.prepare(outputSources, produced);
         return new BuildTransaction(new ArrayList<>(changes), resources, outputs, EnergyTransaction.none());
     }
 

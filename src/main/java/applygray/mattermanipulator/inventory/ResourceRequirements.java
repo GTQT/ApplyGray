@@ -8,18 +8,21 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.planning.BoundGeometryPlan;
 
 import net.minecraft.item.ItemStack;
+import net.minecraftforge.fluids.FluidStack;
 
 /** Aggregates a material-bound plan into exact inventory reservations. */
 public final class ResourceRequirements {
 
     private final List<ResourceRequirement> entries;
+    private final List<FluidRequirement> fluidEntries;
 
-    private ResourceRequirements(List<ResourceRequirement> entries) {
+    private ResourceRequirements(List<ResourceRequirement> entries, List<FluidRequirement> fluidEntries) {
         this.entries = List.copyOf(entries);
+        this.fluidEntries = List.copyOf(fluidEntries);
     }
 
     public static ResourceRequirements empty() {
-        return new ResourceRequirements(List.of());
+        return new ResourceRequirements(List.of(), List.of());
     }
 
     public static ResourceRequirements from(BoundGeometryPlan plan) {
@@ -31,7 +34,7 @@ public final class ResourceRequirements {
         });
         return new ResourceRequirements(amounts.entrySet().stream()
                 .map(entry -> new ResourceRequirement(entry.getKey(), entry.getValue()))
-                .toList());
+                .toList(), List.of());
     }
 
     public static ResourceRequirements of(ResourceRequirement... requirements) {
@@ -41,7 +44,7 @@ public final class ResourceRequirements {
         }
         return new ResourceRequirements(amounts.entrySet().stream()
                 .map(entry -> new ResourceRequirement(entry.getKey(), entry.getValue()))
-                .toList());
+                .toList(), List.of());
     }
 
     /** Aggregates ordinary item outputs while retaining exact metadata and NBT. */
@@ -53,7 +56,39 @@ public final class ResourceRequirements {
         }
         return new ResourceRequirements(amounts.entrySet().stream()
                 .map(entry -> new ResourceRequirement(entry.getKey(), entry.getValue()))
-                .toList());
+                .toList(), List.of());
+    }
+
+    public static ResourceRequirements fluids(FluidRequirement... requirements) {
+        Map<String, FluidRequirement> amounts = new LinkedHashMap<>();
+        for (FluidRequirement requirement : requirements) {
+            amounts.merge(requirement.fluidName(), requirement, (first, second) ->
+                    new FluidRequirement(first.fluidName(), first.tag(), Math.addExact(first.amount(), second.amount())));
+        }
+        return new ResourceRequirements(List.of(), amounts.values().stream().toList());
+    }
+
+    public static ResourceRequirements fromFluids(Iterable<FluidStack> stacks) {
+        Map<String, FluidRequirement> amounts = new LinkedHashMap<>();
+        for (FluidStack stack : stacks) {
+            if (stack == null || stack.amount <= 0) continue;
+            FluidRequirement requirement = new FluidRequirement(stack, stack.amount);
+            amounts.merge(requirement.fluidName(), requirement, (first, second) ->
+                    new FluidRequirement(first.fluidName(), first.tag(), Math.addExact(first.amount(), second.amount())));
+        }
+        return new ResourceRequirements(List.of(), amounts.values().stream().toList());
+    }
+
+    public static ResourceRequirements combine(ResourceRequirements first, ResourceRequirements second) {
+        Map<BlockSpec, Long> items = new LinkedHashMap<>();
+        first.entries.forEach(entry -> items.merge(entry.specification(), entry.amount(), Math::addExact));
+        second.entries.forEach(entry -> items.merge(entry.specification(), entry.amount(), Math::addExact));
+        Map<String, FluidRequirement> fluids = new LinkedHashMap<>();
+        java.util.stream.Stream.concat(first.fluidEntries.stream(), second.fluidEntries.stream()).forEach(entry ->
+                fluids.merge(entry.fluidName(), entry, (a, b) -> new FluidRequirement(a.fluidName(), a.tag(),
+                        Math.addExact(a.amount(), b.amount()))));
+        return new ResourceRequirements(items.entrySet().stream().map(e -> new ResourceRequirement(e.getKey(), e.getValue())).toList(),
+                fluids.values().stream().toList());
     }
 
     public List<ResourceRequirement> entries() {
@@ -61,6 +96,10 @@ public final class ResourceRequirements {
     }
 
     public boolean isEmpty() {
-        return entries.isEmpty();
+        return entries.isEmpty() && fluidEntries.isEmpty();
+    }
+
+    public List<FluidRequirement> fluidEntries() {
+        return fluidEntries;
     }
 }

@@ -3,7 +3,7 @@ package applygray.mattermanipulator.building;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Random;
+import applygray.mattermanipulator.util.SourceCompatibleRandom;
 
 import applygray.mattermanipulator.planning.BoundExchangeOperation;
 import applygray.mattermanipulator.planning.BoundExchangePlan;
@@ -30,10 +30,8 @@ public final class ExchangeBuildService {
         ManipulatorLocation a = request.state().selectionA();
         ManipulatorLocation b = request.state().selectionB();
         validateRegionLimit(a.position(), b.position());
-        validateRange(request, a.position(), b.position());
-
         BuildingContext context = context(request);
-        Random random = new Random(31L * request.state().hashCode() + a.hashCode() + b.hashCode());
+        SourceCompatibleRandom random = new SourceCompatibleRandom(31L * request.state().hashCode() + a.hashCode() + b.hashCode());
         List<BoundExchangeOperation> operations = new ArrayList<>();
         forEachPosition(a.position(), b.position(), position -> {
             CapturedBlock captured = adapters.capture(context, position);
@@ -101,19 +99,6 @@ public final class ExchangeBuildService {
             throw new GeometryPlanException(GeometryPlanException.Reason.OPERATION_LIMIT_EXCEEDED,
                     "The exchange operation exceeds its maximum block count");
         }
-    }
-
-    private static void validateRange(ExchangeBuildRequest request, BlockPos a, BlockPos b) {
-        int maximumRange = request.tier().maximumRange();
-        if (maximumRange < 0) return;
-        long maximumDistanceSquared = (long) maximumRange * maximumRange;
-        BlockPos player = new BlockPos(request.player());
-        forEachPosition(a, b, position -> {
-            if (player.distanceSq(position) > maximumDistanceSquared) {
-                throw new GeometryPlanException(GeometryPlanException.Reason.OPERATION_LIMIT_EXCEEDED,
-                        "The exchange operation exceeds the manipulator range");
-            }
-        });
     }
 
     private static long span(int first, int second) {

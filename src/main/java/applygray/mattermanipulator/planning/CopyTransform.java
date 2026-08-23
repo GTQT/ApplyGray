@@ -28,6 +28,6 @@ public record CopyTransform(ManipulatorTransform transform, int repeatX, int rep
     }
 
     private static void validateRepeat(int repeat) {
-        if (repeat < 1 || repeat > 64) throw new IllegalArgumentException("copy repeats must be between 1 and 64");
+        if (repeat == 0 || repeat < -64 || repeat > 64) throw new IllegalArgumentException("copy spans must be between -64 and 64, excluding zero");
     }
 }

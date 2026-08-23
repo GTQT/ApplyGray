@@ -57,6 +57,7 @@ import net.minecraftforge.fml.relauncher.SideOnly;
 import ae2.api.config.Actionable;
 import ae2.api.networking.security.IActionSource;
 import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEFluidKey;
 import ae2.api.storage.MEStorage;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
@@ -241,6 +242,16 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
     }
 
     @Override
+    public long extract(FluidStack specification, long amount, boolean simulate) {
+        return transferFluid(specification, amount, simulate, false);
+    }
+
+    @Override
+    public long insert(FluidStack specification, long amount, boolean simulate) {
+        return transferFluid(specification, amount, simulate, true);
+    }
+
+    @Override
     public boolean isActive() {
         return active;
     }
@@ -420,6 +431,32 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
                 : storage.insert(key, transferred, Actionable.MODULATE, actionSource);
         if (restored != transferred) {
             ApplyGrayMod.LOGGER.warn("Matter Manipulator uplink {} could not fully compensate a failed plasma charge",
+                    Long.toUnsignedString(address, 16));
+        }
+        return 0L;
+    }
+
+    private long transferFluid(FluidStack specification, long amount, boolean simulate, boolean insert) {
+        if (amount <= 0L || specification == null || specification.amount <= 0) return 0L;
+        MetaTileEntityQuantumUplinkHatch connector = connector();
+        if (connector == null || status() != UplinkStatus.OK) return 0L;
+        MEStorage storage = connector.getNetworkStorage();
+        AEFluidKey key = AEFluidKey.of(specification);
+        if (storage == null || key == null) return 0L;
+        IActionSource actionSource = connector.getActionSource();
+        long accepted = insert ? storage.insert(key, amount, Actionable.SIMULATE, actionSource)
+                : storage.extract(key, amount, Actionable.SIMULATE, actionSource);
+        long transferable = Math.min(accepted, availablePlasmaEnergy() / PLASMA_EU_PER_ITEM);
+        if (transferable <= 0L) return 0L;
+        if (simulate) return transferable;
+        long transferred = insert ? storage.insert(key, transferable, Actionable.MODULATE, actionSource)
+                : storage.extract(key, transferable, Actionable.MODULATE, actionSource);
+        if (transferred <= 0L) return 0L;
+        if (consumePlasmaEnergy(saturatingMultiply(transferred, PLASMA_EU_PER_ITEM))) return transferred;
+        long restored = insert ? storage.extract(key, transferred, Actionable.MODULATE, actionSource)
+                : storage.insert(key, transferred, Actionable.MODULATE, actionSource);
+        if (restored != transferred) {
+            ApplyGrayMod.LOGGER.warn("Matter Manipulator uplink {} could not fully compensate a failed fluid plasma charge",
                     Long.toUnsignedString(address, 16));
         }
         return 0L;

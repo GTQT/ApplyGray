@@ -37,6 +37,7 @@ public final class ManipulatorState {
     private static final String KEY_EXCHANGE_WHITELIST = "ExchangeWhitelist";
     private static final String KEY_EXCHANGE_REPLACEMENT = "ExchangeReplacement";
     private static final String KEY_CABLE_MATERIAL = "CableMaterial";
+    private static final String KEY_AE2_NETWORK = "Ae2Network";
     private static final String KEY_UPLINK_ADDRESS = "UplinkAddress";
     private static final String KEY_PICK_TARGET = "PickTarget";
     private static final String KEY_PENDING_ACTION = "PendingAction";
@@ -57,6 +58,7 @@ public final class ManipulatorState {
     private WeightedBlockList exchangeWhitelist = new WeightedBlockList();
     private WeightedBlockList exchangeReplacement = new WeightedBlockList(BlockSpec.air());
     private BlockSpec cableMaterial = BlockSpec.air();
+    private ManipulatorLocation ae2NetworkLocation;
     private Long uplinkAddress;
     private ManipulatorPickTarget pickTarget = ManipulatorPickTarget.ALL;
     private ManipulatorPendingAction pendingAction = ManipulatorPendingAction.NONE;
@@ -165,6 +167,15 @@ public final class ManipulatorState {
         this.cableMaterial = Objects.requireNonNull(cableMaterial, "cableMaterial");
     }
 
+    /** Location of the AE2 wireless access point selected through the security terminal linking slot. */
+    public ManipulatorLocation ae2NetworkLocation() {
+        return ae2NetworkLocation;
+    }
+
+    public void setAe2NetworkLocation(ManipulatorLocation location) {
+        this.ae2NetworkLocation = location;
+    }
+
     public Long uplinkAddress() {
         return uplinkAddress;
     }
@@ -238,6 +249,7 @@ public final class ManipulatorState {
         data.setTag(KEY_EXCHANGE_WHITELIST, exchangeWhitelist.writeToNbt());
         data.setTag(KEY_EXCHANGE_REPLACEMENT, exchangeReplacement.writeToNbt());
         data.setTag(KEY_CABLE_MATERIAL, cableMaterial.writeToNbt());
+        writeLocation(data, KEY_AE2_NETWORK, ae2NetworkLocation);
         if (uplinkAddress != null) data.setLong(KEY_UPLINK_ADDRESS, uplinkAddress);
         data.setString(KEY_PICK_TARGET, pickTarget.name());
         data.setString(KEY_PENDING_ACTION, pendingAction.name());
@@ -282,6 +294,7 @@ public final class ManipulatorState {
         if (data.hasKey(KEY_CABLE_MATERIAL, Constants.NBT.TAG_COMPOUND)) {
             state.cableMaterial = BlockSpec.readFromNbt(data.getCompoundTag(KEY_CABLE_MATERIAL));
         }
+        state.ae2NetworkLocation = ManipulatorLocation.readFrom(data, KEY_AE2_NETWORK);
         if (data.hasKey(KEY_UPLINK_ADDRESS, Constants.NBT.TAG_LONG)) {
             long address = data.getLong(KEY_UPLINK_ADDRESS);
             state.uplinkAddress = address == 0L ? null : address;
@@ -307,11 +320,11 @@ public final class ManipulatorState {
     private static int readRepeat(NBTTagCompound data, String key) {
         if (!data.hasKey(key, Constants.NBT.TAG_INT)) return 1;
         int repeat = data.getInteger(key);
-        return repeat >= 1 && repeat <= 64 ? repeat : 1;
+        return repeat != 0 && repeat >= -64 && repeat <= 64 ? repeat : 1;
     }
 
     private static int validateRepeat(int repeat) {
-        if (repeat < 1 || repeat > 64) throw new IllegalArgumentException("copy repeats must be between 1 and 64");
+        if (repeat == 0 || repeat < -64 || repeat > 64) throw new IllegalArgumentException("copy spans must be between -64 and 64, excluding zero");
         return repeat;
     }
 
@@ -323,7 +336,8 @@ public final class ManipulatorState {
                 copyTransform.equals(state.copyTransform) && smartCopy == state.smartCopy &&
                 copyRepeatX == state.copyRepeatX && copyRepeatY == state.copyRepeatY && copyRepeatZ == state.copyRepeatZ &&
                 exchangeWhitelist.equals(state.exchangeWhitelist) && exchangeReplacement.equals(state.exchangeReplacement) &&
-                cableMaterial.equals(state.cableMaterial) && Objects.equals(uplinkAddress, state.uplinkAddress) &&
+                 cableMaterial.equals(state.cableMaterial) && Objects.equals(ae2NetworkLocation, state.ae2NetworkLocation) &&
+                 Objects.equals(uplinkAddress, state.uplinkAddress) &&
                 pickTarget == state.pickTarget && pendingAction == state.pendingAction &&
                 installedUpgrades.equals(state.installedUpgrades) &&
                 geometryConfiguration.equals(state.geometryConfiguration) &&
@@ -335,6 +349,7 @@ public final class ManipulatorState {
     public int hashCode() {
         return Objects.hash(shape, placeMode, removalMode, installedUpgrades, geometryConfiguration, selectionA,
                 selectionB, selectionC, copyTransform, copyRepeatX, copyRepeatY, copyRepeatZ, smartCopy,
-                exchangeWhitelist, exchangeReplacement, cableMaterial, uplinkAddress, pickTarget, pendingAction);
+                exchangeWhitelist, exchangeReplacement, cableMaterial, ae2NetworkLocation, uplinkAddress, pickTarget,
+                pendingAction);
     }
 }
