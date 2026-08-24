@@ -80,6 +80,11 @@ public final class CopyBuildService {
         if (!request.tier().hasCapability(ManipulatorCapability.COPYING)) {
             throw new IllegalArgumentException("The selected Matter Manipulator tier cannot copy blocks");
         }
+        if (request.state().linkExternalHubs()) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK,
+                    request.player().getPosition(),
+                    "External AE2 Wireless Hub links are not available in AE2 Supergiant; the copy was rejected");
+        }
         ManipulatorLocation a = request.state().selectionA();
         ManipulatorLocation b = request.state().selectionB();
         ManipulatorLocation c = request.state().selectionC();

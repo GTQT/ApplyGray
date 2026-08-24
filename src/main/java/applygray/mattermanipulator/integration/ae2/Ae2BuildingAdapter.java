@@ -24,6 +24,7 @@ import ae2.api.parts.IPartItem;
 import ae2.api.parts.PartHelper;
 import ae2.helpers.patternprovider.PatternProviderLogic;
 import ae2.parts.crafting.PatternProviderPart;
+import ae2.parts.misc.InterfacePart;
 import ae2.tile.networking.TileCableBus;
 import ae2.util.SettingsFrom;
 import net.minecraft.block.state.IBlockState;
@@ -207,6 +208,10 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     private static void capturePart(BuildingContext context, BlockPos position, IPart part, EnumFacing side,
                                     List<Ae2BusCaptureData.Part> parts, boolean smartCopySource) {
         if (part == null) return;
+        if (context.replaceInterfacesWithP2P() && part instanceof InterfacePart) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                    "AE2 Interface to P2P replacement is unavailable: Supergiant P2P tunnels have no Interface pattern inventory");
+        }
         if (part instanceof PatternProviderPart provider) {
             parts.add(capturePatternProviderPart(context, position, provider, side, smartCopySource));
             return;
