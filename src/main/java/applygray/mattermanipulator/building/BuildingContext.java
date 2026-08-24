@@ -12,16 +12,26 @@ import net.minecraft.world.World;
 /** Immutable server-side context shared by target building adapters. */
 public record BuildingContext(World world, EntityPlayer player, ItemStack manipulatorStack, EnumHand hand,
                               ManipulatorRemovalMode removalMode, boolean powerEfficiency, boolean removalAllowed,
-                              boolean smartCopyEnabled) {
+                              boolean smartCopyEnabled, boolean linkExternalHubs, boolean replaceCribsWithProxies,
+                              boolean replaceInterfacesWithP2P) {
 
     public BuildingContext(World world, EntityPlayer player, ItemStack manipulatorStack, EnumHand hand,
                            ManipulatorRemovalMode removalMode, boolean powerEfficiency) {
-        this(world, player, manipulatorStack, hand, removalMode, powerEfficiency, true, false);
+        this(world, player, manipulatorStack, hand, removalMode, powerEfficiency, true, false,
+                false, false, false);
     }
 
     public BuildingContext(World world, EntityPlayer player, ItemStack manipulatorStack, EnumHand hand,
                            ManipulatorRemovalMode removalMode, boolean powerEfficiency, boolean removalAllowed) {
-        this(world, player, manipulatorStack, hand, removalMode, powerEfficiency, removalAllowed, false);
+        this(world, player, manipulatorStack, hand, removalMode, powerEfficiency, removalAllowed, false,
+                false, false, false);
+    }
+
+    public BuildingContext(World world, EntityPlayer player, ItemStack manipulatorStack, EnumHand hand,
+                           ManipulatorRemovalMode removalMode, boolean powerEfficiency, boolean removalAllowed,
+                           boolean smartCopyEnabled) {
+        this(world, player, manipulatorStack, hand, removalMode, powerEfficiency, removalAllowed,
+                smartCopyEnabled, false, false, false);
     }
 
     public BuildingContext {

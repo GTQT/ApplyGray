@@ -138,6 +138,15 @@ public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblo
         return getResolvedMainForLink() != null;
     }
 
+    /** Sets the CRIB master location for explicit Matter Manipulator proxy placement. */
+    public void setMainPosition(BlockPos mainPos) {
+        this.mainPos = mainPos;
+        this.checkForMain = true;
+        unregisterFromMain();
+        tryToSetMain();
+        markDirty();
+    }
+
     @Override
     public void onDataStickLeftClick(EntityPlayer player, ItemStack dataStick) {}
 

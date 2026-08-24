@@ -15,6 +15,7 @@ import applygray.mattermanipulator.inventory.ResourceRequirement;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
 import applygray.mattermanipulator.state.ManipulatorTransform;
+import applygray.common.ApplyGrayMetaTileEntities;
 
 import gregtech.api.block.machines.BlockMachine;
 import gregtech.api.metatileentity.MetaTileEntity;
@@ -27,6 +28,8 @@ import gregtech.api.pipenet.tile.TileEntityPipeBase;
 import gregtech.api.unification.material.Material;
 import gregtech.common.blocks.MetaBlocks;
 import gregtech.common.pipelike.fluidpipe.tile.TileEntityFluidPipeTickable;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayer;
@@ -297,6 +300,13 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                         "The placed GregTech machine rejected the Smart Copy source");
             }
         }
+        if (data.proxyMaster() != null) {
+            if (!(mte instanceof MetaTileEntityMEPatternProviderProxy proxy)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The captured GregTech CRIB proxy did not create its proxy MetaTileEntity");
+            }
+            proxy.setMainPosition(data.proxyMaster());
+        }
         mte.markDirty();
     }
 
@@ -360,29 +370,42 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final EnumFacing frontFacing;
         private final int paintingColor;
         private final SmartCopyLink smartCopyLink;
+        private final BlockPos proxyMaster;
 
         private MteData(ItemStack placementStack, BlockSpec inputMaterial, EnumFacing frontFacing, int paintingColor,
-                        SmartCopyLink smartCopyLink) {
+                        SmartCopyLink smartCopyLink, BlockPos proxyMaster) {
             this.placementStack = checkedStack(placementStack);
             this.inputMaterial = Objects.requireNonNull(inputMaterial, "inputMaterial");
             this.frontFacing = frontFacing;
             this.paintingColor = paintingColor;
             this.smartCopyLink = smartCopyLink;
+            this.proxyMaster = proxyMaster;
         }
 
         private static MteData forMaterial(ItemStack material) {
-            return new MteData(material, BlockSpec.of(material), null, -1, null);
+            return new MteData(material, BlockSpec.of(material), null, -1, null, null);
         }
 
         private static MteData capture(BuildingContext context, BlockPos position, MetaTileEntityHolder holder,
                                        boolean smartCopySource) {
             MetaTileEntity mte = holder.getMetaTileEntity();
+            if (context.replaceCribsWithProxies() && mte instanceof MetaTileEntityMEPatternProvider &&
+                    !(mte instanceof MetaTileEntityMEPatternProviderProxy)) {
+                ItemStack proxyStack = ApplyGrayMetaTileEntities.ME_PATTERN_PROVIDER_PROXY == null
+                        ? ItemStack.EMPTY : ApplyGrayMetaTileEntities.ME_PATTERN_PROVIDER_PROXY.getStackForm();
+                if (proxyStack.isEmpty()) {
+                    throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                            "GregTech CRIB proxy is not registered");
+                }
+                return new MteData(proxyStack, bare(proxyStack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
+                        mte.getPaintingColor(), null, position.toImmutable());
+            }
             if (smartCopySource && mte instanceof ISmartCopyLinkable linkable) {
                 SmartCopyLink source = linkable.getSmartCopyLink().orElseGet(
                         () -> new SmartCopyLink(context.world().provider.getDimension(), position));
                 ItemStack stack = mte.getStackForm();
                 return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), source);
+                        mte.getPaintingColor(), source, null);
             }
             validateMtePortable(context, position, mte);
             ItemStack stack = mte.getStackForm();
@@ -391,7 +414,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             if (!itemData.isEmpty()) stack.setTagCompound(itemData);
             if (holder.hasCustomName()) stack.setStackDisplayName(holder.getName());
             return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                    mte.getPaintingColor(), null);
+                    mte.getPaintingColor(), null, null);
         }
 
         private static void validateMtePortable(BuildingContext context, BlockPos position, MetaTileEntity mte) {
@@ -438,7 +461,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public MteData transformed(ManipulatorTransform transform) {
             EnumFacing transformed = frontFacing == null ? null : transform.apply(frontFacing);
-            return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink);
+            return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink, proxyMaster);
         }
 
         private ItemStack placementStack() {
@@ -457,17 +480,22 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             return smartCopyLink;
         }
 
+        private BlockPos proxyMaster() {
+            return proxyMaster;
+        }
+
         @Override
         public boolean equals(Object other) {
             return other instanceof MteData data && frontFacing == data.frontFacing &&
                     paintingColor == data.paintingColor && Objects.equals(smartCopyLink, data.smartCopyLink) &&
+                    Objects.equals(proxyMaster, data.proxyMaster) &&
                     ItemStack.areItemStacksEqual(placementStack, data.placementStack);
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(frontFacing, paintingColor, placementStack.getItem().getRegistryName(),
-                    placementStack.getMetadata(), placementStack.getTagCompound(), smartCopyLink);
+                    placementStack.getMetadata(), placementStack.getTagCompound(), smartCopyLink, proxyMaster);
         }
     }
 

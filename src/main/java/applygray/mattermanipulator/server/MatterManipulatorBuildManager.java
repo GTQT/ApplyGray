@@ -15,6 +15,7 @@ import applygray.mattermanipulator.building.BuildingAdapterRegistry;
 import applygray.mattermanipulator.building.BuildingContext;
 import applygray.mattermanipulator.building.BuildingException;
 import applygray.mattermanipulator.building.VanillaBuildingAdapter;
+import applygray.mattermanipulator.building.FluidBuildingAdapter;
 import applygray.mattermanipulator.building.CableBuildRequest;
 import applygray.mattermanipulator.building.CableBuildService;
 import applygray.mattermanipulator.building.CopyBuildRequest;
@@ -85,7 +86,8 @@ import net.minecraftforge.items.wrapper.PlayerOffhandInvWrapper;
 public final class MatterManipulatorBuildManager {
 
     private static final BuildingAdapterRegistry ADAPTERS = new BuildingAdapterRegistry(List.of(
-            new GregTechBuildingAdapter(), new Ae2BuildingAdapter(), new VanillaBuildingAdapter()));
+            new GregTechBuildingAdapter(), new Ae2BuildingAdapter(), new FluidBuildingAdapter(),
+            new VanillaBuildingAdapter()));
     private static final GeometryBuildService GEOMETRY_SERVICE = new GeometryBuildService(ADAPTERS);
     private static final CopyBuildService COPY_SERVICE = new CopyBuildService(ADAPTERS);
     private static final ExchangeBuildService EXCHANGE_SERVICE = new ExchangeBuildService(ADAPTERS);
@@ -556,7 +558,9 @@ public final class MatterManipulatorBuildManager {
         return new BuildingContext(player.world, player, stack, hand, state.removalMode(),
                 state.hasUpgrade(ManipulatorUpgrade.POWER_EFFICIENCY),
                 manipulator.tier().hasCapability(ManipulatorCapability.REMOVAL) || state.hasUpgrade(
-                        ManipulatorUpgrade.MINING));
+                        ManipulatorUpgrade.MINING),
+                manipulator.tier().hasCapability(ManipulatorCapability.SMART_COPY) && state.smartCopy(),
+                state.linkExternalHubs(), state.replaceCribsWithProxies(), state.replaceInterfacesWithP2P());
     }
 
     private static ResourceRequirements missingRequirements(ResourceRequirements requirements,

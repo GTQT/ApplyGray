@@ -75,6 +75,9 @@ public final class ConfigureManipulatorMessage implements IMessage {
         SET_COPY_REPEAT_Y,
         SET_COPY_REPEAT_Z,
         TOGGLE_SMART_COPY,
+        TOGGLE_EXTERNAL_HUBS,
+        TOGGLE_CRIB_PROXIES,
+        TOGGLE_INTERFACE_P2P,
         CLEAR_ALL_GEOMETRY,
         CLEAR_EXCHANGE_WHITELIST,
         REQUEST_UPLINK_MISSING,
@@ -176,6 +179,18 @@ public final class ConfigureManipulatorMessage implements IMessage {
                     case TOGGLE_SMART_COPY -> {
                         requireCapability(manipulator, stack, ManipulatorCapability.SMART_COPY);
                         state.setSmartCopy(!state.smartCopy());
+                    }
+                    case TOGGLE_EXTERNAL_HUBS -> {
+                        requireCapability(manipulator, stack, ManipulatorCapability.SMART_COPY);
+                        state.setLinkExternalHubs(!state.linkExternalHubs());
+                    }
+                    case TOGGLE_CRIB_PROXIES -> {
+                        requireCapability(manipulator, stack, ManipulatorCapability.SMART_COPY);
+                        state.setReplaceCribsWithProxies(!state.replaceCribsWithProxies());
+                    }
+                    case TOGGLE_INTERFACE_P2P -> {
+                        requireCapability(manipulator, stack, ManipulatorCapability.SMART_COPY);
+                        state.setReplaceInterfacesWithP2P(!state.replaceInterfacesWithP2P());
                     }
                     case CLEAR_ALL_GEOMETRY -> {
                         requireConfiguration(manipulator, stack, state);

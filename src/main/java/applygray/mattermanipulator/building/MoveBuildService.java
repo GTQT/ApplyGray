@@ -64,7 +64,10 @@ public final class MoveBuildService {
         return new BuildingContext(request.player().world, request.player(), request.manipulatorStack(), request.hand(),
                 request.state().removalMode(), request.state().hasUpgrade(ManipulatorUpgrade.POWER_EFFICIENCY),
                 request.tier().hasCapability(ManipulatorCapability.REMOVAL) || request.state().hasUpgrade(
-                        ManipulatorUpgrade.MINING));
+                        ManipulatorUpgrade.MINING),
+                request.tier().hasCapability(ManipulatorCapability.SMART_COPY) && request.state().smartCopy(),
+                request.state().linkExternalHubs(), request.state().replaceCribsWithProxies(),
+                request.state().replaceInterfacesWithP2P());
     }
 
     private static void validateRequest(MoveBuildRequest request) {

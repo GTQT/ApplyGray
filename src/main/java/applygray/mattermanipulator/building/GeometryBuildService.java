@@ -59,7 +59,10 @@ public final class GeometryBuildService {
                 request.hand(), request.state().removalMode(),
                 request.state().hasUpgrade(ManipulatorUpgrade.POWER_EFFICIENCY),
                 request.tier().hasCapability(ManipulatorCapability.REMOVAL) ||
-                        request.state().hasUpgrade(ManipulatorUpgrade.MINING));
+                        request.state().hasUpgrade(ManipulatorUpgrade.MINING),
+                request.tier().hasCapability(ManipulatorCapability.SMART_COPY) && request.state().smartCopy(),
+                request.state().linkExternalHubs(), request.state().replaceCribsWithProxies(),
+                request.state().replaceInterfacesWithP2P());
         List<PreparedBlockChange> changes = new ArrayList<>(batchEnd - startIndex);
         for (int index = startIndex; index < batchEnd; index++) {
             BoundGeometryOperation operation = plan.operations().get(index);

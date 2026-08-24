@@ -70,7 +70,9 @@ public final class CopyBuildService {
                         applygray.mattermanipulator.state.ManipulatorUpgrade.POWER_EFFICIENCY),
                 request.tier().hasCapability(ManipulatorCapability.REMOVAL) || request.state().hasUpgrade(
                         applygray.mattermanipulator.state.ManipulatorUpgrade.MINING),
-                request.tier().hasCapability(ManipulatorCapability.SMART_COPY) && request.state().smartCopy());
+                request.tier().hasCapability(ManipulatorCapability.SMART_COPY) && request.state().smartCopy(),
+                request.state().linkExternalHubs(), request.state().replaceCribsWithProxies(),
+                request.state().replaceInterfacesWithP2P());
     }
 
     private static void validateRequest(CopyBuildRequest request) {

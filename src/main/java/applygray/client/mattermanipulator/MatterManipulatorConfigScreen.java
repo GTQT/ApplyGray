@@ -148,7 +148,13 @@ public final class MatterManipulatorConfigScreen extends GuiScreen {
         if (has(manipulator, stack, ManipulatorCapability.SMART_COPY)) {
             root.add(branch("applygray.matter_manipulator.radial.advanced_options", List.of(
                     action("applygray.matter_manipulator.radial.smart_copy",
-                            ConfigureManipulatorMessage.Action.TOGGLE_SMART_COPY))));
+                            ConfigureManipulatorMessage.Action.TOGGLE_SMART_COPY),
+                    action("applygray.matter_manipulator.radial.link_external_hubs",
+                            ConfigureManipulatorMessage.Action.TOGGLE_EXTERNAL_HUBS),
+                    action("applygray.matter_manipulator.radial.replace_cribs",
+                            ConfigureManipulatorMessage.Action.TOGGLE_CRIB_PROXIES),
+                    action("applygray.matter_manipulator.radial.replace_interfaces",
+                            ConfigureManipulatorMessage.Action.TOGGLE_INTERFACE_P2P))));
         }
     }
 

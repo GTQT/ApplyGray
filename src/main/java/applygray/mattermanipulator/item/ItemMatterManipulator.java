@@ -387,8 +387,9 @@ public final class ItemMatterManipulator extends Item {
     }
 
     private static String display(applygray.mattermanipulator.building.BlockSpec specification) {
-        return specification.isAir() ? translate("applygray.matter_manipulator.tooltip.none") :
-                specification.toStack().getDisplayName();
+        if (specification.isAir()) return translate("applygray.matter_manipulator.tooltip.none");
+        return specification.isFluid() ? specification.fluidStack().getLocalizedName()
+                : specification.toStack().getDisplayName();
     }
 
     private static String materials(applygray.mattermanipulator.building.WeightedBlockList list) {

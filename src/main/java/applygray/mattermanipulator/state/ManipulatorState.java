@@ -34,6 +34,9 @@ public final class ManipulatorState {
     private static final String KEY_COPY_REPEAT_Y = "CopyRepeatY";
     private static final String KEY_COPY_REPEAT_Z = "CopyRepeatZ";
     private static final String KEY_SMART_COPY = "SmartCopy";
+    private static final String KEY_LINK_EXTERNAL_HUBS = "LinkExternalHubs";
+    private static final String KEY_REPLACE_CRIBS = "ReplaceCribsWithProxies";
+    private static final String KEY_REPLACE_INTERFACES = "ReplaceInterfacesWithP2P";
     private static final String KEY_EXCHANGE_WHITELIST = "ExchangeWhitelist";
     private static final String KEY_EXCHANGE_REPLACEMENT = "ExchangeReplacement";
     private static final String KEY_CABLE_MATERIAL = "CableMaterial";
@@ -55,6 +58,9 @@ public final class ManipulatorState {
     private int copyRepeatY = 1;
     private int copyRepeatZ = 1;
     private boolean smartCopy;
+    private boolean linkExternalHubs;
+    private boolean replaceCribsWithProxies;
+    private boolean replaceInterfacesWithP2P;
     private WeightedBlockList exchangeWhitelist = new WeightedBlockList();
     private WeightedBlockList exchangeReplacement = new WeightedBlockList(BlockSpec.air());
     private BlockSpec cableMaterial = BlockSpec.air();
@@ -151,6 +157,13 @@ public final class ManipulatorState {
         this.smartCopy = smartCopy;
     }
 
+    public boolean linkExternalHubs() { return linkExternalHubs; }
+    public void setLinkExternalHubs(boolean value) { linkExternalHubs = value; }
+    public boolean replaceCribsWithProxies() { return replaceCribsWithProxies; }
+    public void setReplaceCribsWithProxies(boolean value) { replaceCribsWithProxies = value; }
+    public boolean replaceInterfacesWithP2P() { return replaceInterfacesWithP2P; }
+    public void setReplaceInterfacesWithP2P(boolean value) { replaceInterfacesWithP2P = value; }
+
     public WeightedBlockList exchangeWhitelist() {
         return exchangeWhitelist;
     }
@@ -246,6 +259,9 @@ public final class ManipulatorState {
         data.setInteger(KEY_COPY_REPEAT_Y, copyRepeatY);
         data.setInteger(KEY_COPY_REPEAT_Z, copyRepeatZ);
         data.setBoolean(KEY_SMART_COPY, smartCopy);
+        data.setBoolean(KEY_LINK_EXTERNAL_HUBS, linkExternalHubs);
+        data.setBoolean(KEY_REPLACE_CRIBS, replaceCribsWithProxies);
+        data.setBoolean(KEY_REPLACE_INTERFACES, replaceInterfacesWithP2P);
         data.setTag(KEY_EXCHANGE_WHITELIST, exchangeWhitelist.writeToNbt());
         data.setTag(KEY_EXCHANGE_REPLACEMENT, exchangeReplacement.writeToNbt());
         data.setTag(KEY_CABLE_MATERIAL, cableMaterial.writeToNbt());
@@ -284,6 +300,9 @@ public final class ManipulatorState {
         state.copyRepeatY = readRepeat(data, KEY_COPY_REPEAT_Y);
         state.copyRepeatZ = readRepeat(data, KEY_COPY_REPEAT_Z);
         state.smartCopy = data.getBoolean(KEY_SMART_COPY);
+        state.linkExternalHubs = data.getBoolean(KEY_LINK_EXTERNAL_HUBS);
+        state.replaceCribsWithProxies = data.getBoolean(KEY_REPLACE_CRIBS);
+        state.replaceInterfacesWithP2P = data.getBoolean(KEY_REPLACE_INTERFACES);
         if (data.hasKey(KEY_EXCHANGE_WHITELIST, Constants.NBT.TAG_COMPOUND)) {
             state.exchangeWhitelist = WeightedBlockList.readFromNbt(data.getCompoundTag(KEY_EXCHANGE_WHITELIST), null);
         }
@@ -334,6 +353,8 @@ public final class ManipulatorState {
         if (!(other instanceof ManipulatorState state)) return false;
         return shape == state.shape && placeMode == state.placeMode && removalMode == state.removalMode &&
                 copyTransform.equals(state.copyTransform) && smartCopy == state.smartCopy &&
+                linkExternalHubs == state.linkExternalHubs && replaceCribsWithProxies == state.replaceCribsWithProxies &&
+                replaceInterfacesWithP2P == state.replaceInterfacesWithP2P &&
                 copyRepeatX == state.copyRepeatX && copyRepeatY == state.copyRepeatY && copyRepeatZ == state.copyRepeatZ &&
                 exchangeWhitelist.equals(state.exchangeWhitelist) && exchangeReplacement.equals(state.exchangeReplacement) &&
                  cableMaterial.equals(state.cableMaterial) && Objects.equals(ae2NetworkLocation, state.ae2NetworkLocation) &&
@@ -350,6 +371,7 @@ public final class ManipulatorState {
         return Objects.hash(shape, placeMode, removalMode, installedUpgrades, geometryConfiguration, selectionA,
                 selectionB, selectionC, copyTransform, copyRepeatX, copyRepeatY, copyRepeatZ, smartCopy,
                 exchangeWhitelist, exchangeReplacement, cableMaterial, ae2NetworkLocation, uplinkAddress, pickTarget,
+                linkExternalHubs, replaceCribsWithProxies, replaceInterfacesWithP2P,
                 pendingAction);
     }
 }

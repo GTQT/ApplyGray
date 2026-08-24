@@ -86,9 +86,11 @@ public final class PickManipulatorBlockMessage implements IMessage {
             player.inventory.markDirty();
             player.inventoryContainer.detectAndSendChanges();
             MatterManipulatorNetwork.sendStateTo(player, hand, state);
+            String materialName = specification.isFluid() ? specification.fluidStack().getLocalizedName()
+                    : specification.toStack().getDisplayName();
             player.sendStatusMessage(new TextComponentTranslation(result == ManipulatorMaterialPicker.Result.ADDED
                     ? "applygray.matter_manipulator.pick.add" : "applygray.matter_manipulator.pick.set",
-                    specification.toStack().getDisplayName()), true);
+                    materialName), true);
         }
     }
 }
