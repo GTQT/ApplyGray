@@ -11,20 +11,29 @@ import applygray.mattermanipulator.building.BuildingException;
 import applygray.mattermanipulator.building.CapturedBlock;
 import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
+import applygray.mattermanipulator.inventory.ResourceRequirement;
+import applygray.mattermanipulator.inventory.FluidRequirement;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
 import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import ae2.api.implementations.items.IFacadeItem;
 import ae2.api.inventories.InternalInventory;
 import ae2.api.implementations.parts.ICablePart;
+import ae2.api.stacks.AEFluidKey;
+import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.GenericStack;
+import ae2.api.upgrades.IUpgradeableObject;
 import ae2.api.parts.IFacadePart;
 import ae2.api.parts.IPart;
 import ae2.api.parts.IPartHost;
 import ae2.api.parts.IPartItem;
 import ae2.api.parts.PartHelper;
 import ae2.helpers.patternprovider.PatternProviderLogic;
+import ae2.helpers.IConfigInvHost;
+import ae2.helpers.externalstorage.GenericStackInv;
 import ae2.parts.crafting.PatternProviderPart;
 import ae2.parts.misc.InterfacePart;
+import ae2.parts.p2p.P2PTunnelPart;
 import ae2.tile.networking.TileCableBus;
 import ae2.util.SettingsFrom;
 import net.minecraft.block.state.IBlockState;
@@ -40,6 +49,7 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
 import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.event.world.BlockEvent;
+import net.minecraftforge.fluids.FluidStack;
 
 /**
  * Safe, target-native adapter for AE2 Supergiant cable buses.
@@ -53,6 +63,14 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     private static final String ID = "ae2-cable-bus";
     private static final int WORLD_UPDATE_FLAGS = 3;
     private static final long BASE_EU_PER_COMPONENT = 750L;
+
+    private enum CapturePurpose {
+        COPY,
+        MOVE,
+        REMOVE,
+        TARGET,
+        VERIFY
+    }
 
     @Override
     public String id() {
@@ -81,7 +99,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     @Override
     public CapturedBlock capture(BuildingContext context, BlockPos position) {
         validateEditable(context, position);
-        Ae2BusCaptureData data = captureBus(context, position, context.smartCopyEnabled());
+        Ae2BusCaptureData data = captureBus(context, position, context.smartCopyEnabled(), CapturePurpose.COPY);
         return new CapturedBlock(position, data.primaryMaterial(), "", data);
     }
 
@@ -112,7 +130,8 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
                     "The target is not an AE2 cable bus");
         }
         requireRemoval(context, position, originalState);
-        return new Ae2RemovalChange(context, position, originalState, captureBus(context, position, false));
+        return new Ae2RemovalChange(context, position, originalState,
+                captureBus(context, position, false, CapturePurpose.REMOVE));
     }
 
     @Override
@@ -142,7 +161,8 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, target,
                     "An entity blocks the AE2 cable bus destination");
         }
-        return new Ae2MoveChange(context, source, target, sourceState, targetState, captureBus(context, source, false));
+        return new Ae2MoveChange(context, source, target, sourceState, targetState,
+                captureBus(context, source, false, CapturePurpose.MOVE));
     }
 
     private static PreparedBlockChange preparePlacement(BuildingContext context, BlockPos position,
@@ -162,7 +182,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         if (tile instanceof TileCableBus) {
             IPartHost host = (IPartHost) tile;
             if (host.getPart(null) == null) return TargetContents.empty();
-            Ae2BusCaptureData data = captureBus(context, position, false);
+            Ae2BusCaptureData data = captureBus(context, position, false, CapturePurpose.TARGET);
             return new TargetContents(data.producedResources(), data);
         }
         if (tile != null || state.getBlock().hasTileEntity(state)) {
@@ -176,7 +196,8 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         return new TargetContents(ResourceRequirements.fromStacks(drops), null);
     }
 
-    private static Ae2BusCaptureData captureBus(BuildingContext context, BlockPos position, boolean smartCopySource) {
+    private static Ae2BusCaptureData captureBus(BuildingContext context, BlockPos position, boolean smartCopySource,
+                                                CapturePurpose purpose) {
         TileEntity tile = context.world().getTileEntity(position);
         if (!(tile instanceof TileCableBus bus)) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
@@ -184,9 +205,9 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         }
 
         List<Ae2BusCaptureData.Part> parts = new ArrayList<>();
-        capturePart(context, position, bus.getPart(null), null, parts, smartCopySource);
+        capturePart(context, position, bus.getPart(null), null, parts, smartCopySource, purpose);
         for (EnumFacing side : EnumFacing.VALUES) {
-            capturePart(context, position, bus.getPart(side), side, parts, smartCopySource);
+            capturePart(context, position, bus.getPart(side), side, parts, smartCopySource, purpose);
         }
         if (parts.isEmpty()) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
@@ -206,58 +227,108 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     }
 
     private static void capturePart(BuildingContext context, BlockPos position, IPart part, EnumFacing side,
-                                    List<Ae2BusCaptureData.Part> parts, boolean smartCopySource) {
+                                    List<Ae2BusCaptureData.Part> parts, boolean smartCopySource,
+                                    CapturePurpose purpose) {
         if (part == null) return;
         if (context.replaceInterfacesWithP2P() && part instanceof InterfacePart) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                     "AE2 Interface to P2P replacement is unavailable: Supergiant P2P tunnels have no Interface pattern inventory");
         }
         if (part instanceof PatternProviderPart provider) {
-            parts.add(capturePatternProviderPart(context, position, provider, side, smartCopySource));
+            parts.add(capturePatternProviderPart(context, position, provider, side, smartCopySource, purpose));
             return;
         }
-        List<ItemStack> dismantleDrops = new ArrayList<>();
-        part.addPartDrop(dismantleDrops, false);
-        if (dismantleDrops.size() != 1 || dismantleDrops.getFirst().isEmpty()) {
-            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
-                    "The AE2 part does not have one portable dismantle item");
-        }
+        ItemStack dismantleStack = captureDismantleStack(position, part);
+        Ae2BusCaptureData.PortableSettings portableSettings = capturePortableSettings(position, part, false);
         List<ItemStack> additionalDrops = new ArrayList<>();
         part.addAdditionalDrops(additionalDrops, false);
-        if (!additionalDrops.isEmpty()) {
+        if (!sameStacks(additionalDrops, stacksFrom(portableSettings.upgrades()))) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
-                    "The AE2 part has inventory-backed drops and cannot be copied safely yet");
+                    "The AE2 part has inventory-backed drops beyond its explicit upgrade inventory");
         }
-        parts.add(new Ae2BusCaptureData.Part(side, dismantleDrops.getFirst()));
+        Ae2BusCaptureData.P2PState p2pState = null;
+        if (part instanceof P2PTunnelPart<?> && part instanceof PortableP2PStateAccess p2p) {
+            p2pState = new Ae2BusCaptureData.P2PState(p2p.applygray$getFrequency(), p2p.applygray$isOutput());
+            if (purpose == CapturePurpose.COPY && p2pState.frequency() != 0 && !p2pState.output()) {
+                throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                        "A configured AE2 P2P input cannot be duplicated; move it or copy an output tunnel");
+            }
+        }
+        parts.add(new Ae2BusCaptureData.Part(side, dismantleStack, portableSettings, null, p2pState));
     }
 
     private static Ae2BusCaptureData.Part capturePatternProviderPart(BuildingContext context, BlockPos position,
                                                                       PatternProviderPart provider, EnumFacing side,
-                                                                      boolean smartCopySource) {
+                                                                      boolean smartCopySource,
+                                                                      CapturePurpose purpose) {
         if (side == null) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                     "An AE2 Pattern Provider must occupy a cable-bus side");
         }
         ItemStack partStack = captureDismantleStack(position, provider);
         PatternProviderLogic logic = provider.getLogic();
+        Ae2BusCaptureData.PortableSettings portableSettings = capturePortableSettings(position, provider, true);
         if (smartCopySource) {
             SmartCopyPatternProviderLink source = provider instanceof SmartCopyPatternProviderLinkable linked
                     ? linked.applygray$getSmartCopyLink().orElseGet(
                     () -> SmartCopyPatternProviderLink.forSource(context.world(), position, side))
                     : SmartCopyPatternProviderLink.forSource(context.world(), position, side);
-            return new Ae2BusCaptureData.Part(side, partStack,
-                    Ae2BusCaptureData.PatternProviderContents.smartCopy(source));
+            portableSettings = new Ae2BusCaptureData.PortableSettings(portableSettings.settings(), List.of(),
+                    List.of(), List.of());
+            return new Ae2BusCaptureData.Part(side, partStack, portableSettings,
+                    Ae2BusCaptureData.PatternProviderContents.smartCopy(source), null);
         }
 
         List<Ae2BusCaptureData.InventoryStack> patterns = captureInventory(logic.getPatternInv());
+        List<Ae2BusCaptureData.InventoryStack> upgrades = captureInventory(logic.getUpgrades());
         List<ItemStack> additionalDrops = new ArrayList<>();
         provider.addAdditionalDrops(additionalDrops, false);
-        if (!sameStacks(additionalDrops, stacksFrom(patterns))) {
+        List<ItemStack> supportedDrops = new ArrayList<>(stacksFrom(patterns));
+        supportedDrops.addAll(stacksFrom(upgrades));
+        if (!sameStacks(additionalDrops, supportedDrops)) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                     "The AE2 Pattern Provider has queued inputs or return items that cannot be copied safely yet");
         }
-        return new Ae2BusCaptureData.Part(side, partStack,
-                new Ae2BusCaptureData.PatternProviderContents(patterns, captureInventory(logic.getUpgrades())));
+        return new Ae2BusCaptureData.Part(side, partStack, portableSettings,
+                new Ae2BusCaptureData.PatternProviderContents(patterns, upgrades), null);
+    }
+
+    private static Ae2BusCaptureData.PortableSettings capturePortableSettings(BlockPos position, IPart part,
+                                                                               boolean patternProvider) {
+        if (!(part instanceof PortableAe2PartSettings access)) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                    "The AE2 part does not expose portable Memory Card settings");
+        }
+        var settings = access.applygray$exportPortableSettings();
+        if (patternProvider) settings.removeTag("patterns");
+        List<Ae2BusCaptureData.InventoryStack> upgrades = part instanceof IUpgradeableObject upgradeable
+                ? captureInventory(upgradeable.getUpgrades()) : List.of();
+        if (patternProvider) upgrades = List.of();
+
+        List<ResourceRequirement> configuredItems = new ArrayList<>();
+        List<FluidRequirement> configuredFluids = new ArrayList<>();
+        if (part instanceof IConfigInvHost configHost) {
+            captureConfiguredResources(position, configHost.getConfig(), configuredItems, configuredFluids);
+        }
+        return new Ae2BusCaptureData.PortableSettings(settings, upgrades, configuredItems, configuredFluids);
+    }
+
+    private static void captureConfiguredResources(BlockPos position, GenericStackInv config,
+                                                   List<ResourceRequirement> items,
+                                                   List<FluidRequirement> fluids) {
+        for (int slot = 0; slot < config.size(); slot++) {
+            GenericStack stack = config.getStack(slot);
+            if (stack == null || stack.amount() <= 0) continue;
+            if (stack.what() instanceof AEItemKey itemKey) {
+                items.add(new ResourceRequirement(BlockSpec.of(itemKey.toStack()), stack.amount()));
+            } else if (stack.what() instanceof AEFluidKey fluidKey) {
+                FluidStack fluid = fluidKey.toStack(1);
+                fluids.add(new FluidRequirement(fluid, stack.amount()));
+            } else {
+                throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                        "The AE2 configuration contains a resource type the Matter Manipulator cannot transact");
+            }
+        }
     }
 
     private static ItemStack captureDismantleStack(BlockPos position, IPart part) {
@@ -374,8 +445,47 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         if (stack.hasTagCompound()) {
             placed.importSettings(SettingsFrom.DISMANTLE_ITEM, stack.getTagCompound().copy(), context.player());
         }
+        restorePortableSettings(position, placed, part.portableSettings(), part.patternProviderContents() != null);
         restorePatternProviderContents(position, placed, part.patternProviderContents());
+        restoreP2PState(position, placed, part.p2pState());
         return placed;
+    }
+
+    private static void restorePortableSettings(BlockPos position, IPart placed,
+                                                Ae2BusCaptureData.PortableSettings portable,
+                                                boolean patternProvider) {
+        if (portable == null) return;
+        if (!(placed instanceof PortableAe2PartSettings access)) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "AE2 did not create a part with portable settings support");
+        }
+        access.applygray$importPortableSettings(portable.settings());
+        if (!portable.upgrades().isEmpty()) {
+            if (!(placed instanceof IUpgradeableObject upgradeable)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed AE2 part cannot restore its upgrades");
+            }
+            restoreInventory(position, upgradeable.getUpgrades(), portable.upgrades());
+        }
+        var restored = access.applygray$exportPortableSettings();
+        if (patternProvider) restored.removeTag("patterns");
+        if (!portable.settings().equals(restored)) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "The placed AE2 part did not retain its portable settings");
+        }
+    }
+
+    private static void restoreP2PState(BlockPos position, IPart placed, Ae2BusCaptureData.P2PState state) {
+        if (state == null) return;
+        if (!(placed instanceof PortableP2PStateAccess p2p)) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "AE2 did not create a P2P tunnel with portable state support");
+        }
+        p2p.applygray$setP2PState(state.frequency(), state.output());
+        if (p2p.applygray$getFrequency() != state.frequency() || p2p.applygray$isOutput() != state.output()) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "The placed AE2 P2P tunnel did not retain its frequency and role");
+        }
     }
 
     private static void restorePatternProviderContents(BlockPos position, IPart placed,
@@ -547,7 +657,8 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         @Override
         public void apply() {
             verifyOriginalState();
-            if (target.busData != null && !target.busData.equals(captureBus(context, position, false))) {
+            if (target.busData != null &&
+                    !target.busData.equals(captureBus(context, position, false, CapturePurpose.VERIFY))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
                         "The destination AE2 cable bus changed after the build was prepared");
             }
@@ -591,7 +702,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         @Override
         public void apply() {
             verifyOriginalState();
-            if (!data.equals(captureBus(context, position, false))) {
+            if (!data.equals(captureBus(context, position, false, CapturePurpose.REMOVE))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
                         "The AE2 cable bus changed after the removal was prepared");
             }
@@ -651,7 +762,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         public void apply() {
             verifyState(source, sourceState);
             verifyState(target, targetState);
-            if (!data.equals(captureBus(context, source, false))) {
+            if (!data.equals(captureBus(context, source, false, CapturePurpose.MOVE))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
                         "The source AE2 cable bus changed after the move was prepared");
             }

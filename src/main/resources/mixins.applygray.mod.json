@@ -26,8 +26,10 @@
     "supergiant.MixinContainerPatternAccessTermRecipeMapClear",
     "supergiant.MixinContainerPEATermRecipeMapClear",
     "supergiant.MixinAEBasePartSmartCopyLifecycle",
+    "supergiant.MixinAEBasePartPortableSettings",
     "supergiant.MixinPatternProviderPartSmartCopy",
     "supergiant.MixinPatternProviderLogicSmartCopy",
+    "supergiant.MixinP2PTunnelPartPortableState",
     "supergiantfc.MixinUtil",
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],

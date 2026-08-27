@@ -19,6 +19,12 @@ import applygray.common.ApplyGrayMetaTileEntities;
 
 import gregtech.api.block.machines.BlockMachine;
 import gregtech.api.capability.IGhostSlotConfigurable;
+import gregtech.api.capability.IBatch;
+import gregtech.api.capability.IControllable;
+import gregtech.api.capability.IDistinctBusController;
+import gregtech.api.capability.IMultipleRecipeMaps;
+import gregtech.api.capability.IRecipeControl;
+import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.capability.impl.ItemHandlerList;
 import gregtech.api.cover.Cover;
@@ -27,17 +33,27 @@ import gregtech.api.cover.CoverHolder;
 import gregtech.api.cover.CoverableView;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;
+import gregtech.api.metatileentity.SimpleMachineMetaTileEntity;
 import gregtech.api.mattermanipulator.ISmartCopyLinkable;
 import gregtech.api.mattermanipulator.SmartCopyLink;
 import gregtech.api.pipenet.block.BlockPipe;
+import gregtech.api.pipenet.longdist.ILDEndpoint.IOType;
 import gregtech.api.pipenet.tile.IPipeTile;
 import gregtech.api.pipenet.tile.TileEntityPipeBase;
 import gregtech.api.unification.material.Material;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.common.blocks.MetaBlocks;
+import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityComplexDualHatch;
+import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityDualHatch;
+import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityFluidHatch;
+import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityHugeDualHatch;
+import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityItemBus;
 import gregtech.common.pipelike.fluidpipe.tile.TileEntityFluidPipeTickable;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
+import gregtech.common.metatileentities.storage.MetaTileEntityBuffer;
+import gregtech.common.metatileentities.storage.MetaTileEntityDrum;
+import gregtech.common.metatileentities.storage.MetaTileEntityLongDistanceEndpoint;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayer;
@@ -303,6 +319,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             mte.setFrontFacing(data.frontFacing());
         }
         if (data.paintingColor() != mte.getPaintingColor()) mte.setPaintingColor(data.paintingColor());
+        if (data.configuration() != null) data.configuration().apply(mte);
         installGhostCircuit(mte, data.ghostCircuit());
         installCovers(context, mte, data.covers());
         if (data.smartCopyLink() != null) {
@@ -317,6 +334,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                         "The captured GregTech CRIB proxy did not create its proxy MetaTileEntity");
             }
             proxy.setMainPosition(data.proxyMaster());
+        }
+        if (data.configuration() != null && !data.configuration().equals(MteConfiguration.capture(mte))) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "The placed GregTech machine did not retain its portable configuration");
         }
         mte.markDirty();
     }
@@ -358,15 +379,21 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         for (EnumFacing side : EnumFacing.VALUES) {
             Cover cover = coverable.getCoverAtSide(side);
             if (cover == null) continue;
-            List<ItemStack> drops = cover.getDrops();
-            ItemStack item = drops.isEmpty() ? cover.getPickItem() : drops.getFirst();
+            List<ItemStack> drops = cover.getDrops().stream().filter(stack -> !stack.isEmpty())
+                    .map(ItemStack::copy).toList();
+            ItemStack item = cover.getPickItem();
             if (item == null || item.isEmpty()) {
                 throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, coverable.getPos(),
                         "The GregTech cover has no portable item representation");
             }
+            if (drops.isEmpty()) drops = List.of(item.copy());
             NBTTagCompound coverData = new NBTTagCompound();
             cover.writeToNBT(coverData);
-            covers.add(new CoverState(side, item, cover.getDefinition().getResourceLocation(), coverData));
+            if (drops.stream().noneMatch(drop -> ItemStack.areItemsEqual(drop, item))) {
+                throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, coverable.getPos(),
+                        "The GregTech cover dismantle outputs do not contain its placement item");
+            }
+            covers.add(new CoverState(side, item, cover.getDefinition().getResourceLocation(), coverData, drops));
         }
         return List.copyOf(covers);
     }
@@ -465,10 +492,11 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final BlockPos proxyMaster;
         private final List<CoverState> covers;
         private final ItemStack ghostCircuit;
+        private final MteConfiguration configuration;
 
         private MteData(ItemStack placementStack, BlockSpec inputMaterial, EnumFacing frontFacing, int paintingColor,
                         SmartCopyLink smartCopyLink, BlockPos proxyMaster, List<CoverState> covers,
-                        ItemStack ghostCircuit) {
+                        ItemStack ghostCircuit, MteConfiguration configuration) {
             this.placementStack = checkedStack(placementStack);
             this.inputMaterial = Objects.requireNonNull(inputMaterial, "inputMaterial");
             this.frontFacing = frontFacing;
@@ -477,10 +505,12 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             this.proxyMaster = proxyMaster;
             this.covers = List.copyOf(covers);
             this.ghostCircuit = ghostCircuit == null || ghostCircuit.isEmpty() ? ItemStack.EMPTY : checkedStack(ghostCircuit);
+            this.configuration = configuration;
         }
 
         private static MteData forMaterial(ItemStack material) {
-            return new MteData(material, BlockSpec.of(material), null, -1, null, null, List.of(), ItemStack.EMPTY);
+            return new MteData(material, BlockSpec.of(material), null, -1, null, null, List.of(), ItemStack.EMPTY,
+                    null);
         }
 
         private static MteData capture(BuildingContext context, BlockPos position, MetaTileEntityHolder holder,
@@ -497,14 +527,15 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                             "GregTech CRIB proxy is not registered");
                 }
                 return new MteData(proxyStack, bare(proxyStack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), null, position.toImmutable(), covers, ghostCircuit);
+                        mte.getPaintingColor(), null, position.toImmutable(), covers, ghostCircuit,
+                        MteConfiguration.capture(mte));
             }
             if (smartCopySource && mte instanceof ISmartCopyLinkable linkable) {
                 SmartCopyLink source = linkable.getSmartCopyLink().orElseGet(
                         () -> new SmartCopyLink(context.world().provider.getDimension(), position));
                 ItemStack stack = mte.getStackForm();
                 return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), source, null, covers, ghostCircuit);
+                        mte.getPaintingColor(), source, null, covers, ghostCircuit, MteConfiguration.capture(mte));
             }
             validateMtePortable(context, position, mte);
             ItemStack stack = mte.getStackForm();
@@ -513,7 +544,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             if (!itemData.isEmpty()) stack.setTagCompound(itemData);
             if (holder.hasCustomName()) stack.setStackDisplayName(holder.getName());
             return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                    mte.getPaintingColor(), null, null, covers, ghostCircuit);
+                    mte.getPaintingColor(), null, null, covers, ghostCircuit, MteConfiguration.capture(mte));
         }
 
         private static void validateMtePortable(BuildingContext context, BlockPos position, MetaTileEntity mte) {
@@ -525,10 +556,31 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             }
             List<ItemStack> extraDrops = new ArrayList<>();
             mte.getDrops(extraDrops, context.player());
-            if (!extraDrops.isEmpty()) {
+            List<ItemStack> supportedDrops = mte instanceof MetaTileEntityItemBus bus &&
+                    !bus.getOutputFilterStack().isEmpty() ? List.of(bus.getOutputFilterStack()) : List.of();
+            if (!extraDrops.isEmpty() && !sameUnorderedStacks(extraDrops, supportedDrops)) {
                 throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                         "The GregTech machine has extra drops that cannot be restored safely yet");
             }
+        }
+
+        private static boolean sameUnorderedStacks(List<ItemStack> left, List<ItemStack> right) {
+            if (left.size() != right.size()) return false;
+            boolean[] matched = new boolean[right.size()];
+            for (ItemStack expected : left) {
+                boolean found = false;
+                for (int index = 0; index < right.size(); index++) {
+                    ItemStack actual = right.get(index);
+                    if (!matched[index] && expected.getCount() == actual.getCount() &&
+                            ItemStack.areItemStacksEqual(expected, actual)) {
+                        matched[index] = true;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return false;
+            }
+            return true;
         }
 
         @Override
@@ -540,7 +592,16 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         public ResourceRequirements requiredResources() {
             List<ResourceRequirement> requirements = new ArrayList<>();
             requirements.add(new ResourceRequirement(inputMaterial, 1L));
-            for (CoverState cover : covers) requirements.add(new ResourceRequirement(BlockSpec.of(cover.itemStack()), 1L));
+            for (CoverState cover : covers) {
+                for (ItemStack drop : cover.drops()) {
+                    requirements.add(new ResourceRequirement(BlockSpec.of(drop), drop.getCount()));
+                }
+            }
+            if (configuration != null) {
+                for (ItemStack stored : configuration.storedStacks()) {
+                    requirements.add(new ResourceRequirement(BlockSpec.of(stored), stored.getCount()));
+                }
+            }
             return ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new));
         }
 
@@ -548,13 +609,14 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         public ResourceRequirements producedResources() {
             List<ItemStack> outputs = new ArrayList<>();
             outputs.add(placementStack);
-            covers.forEach(cover -> outputs.add(cover.itemStack()));
+            covers.forEach(cover -> outputs.addAll(cover.drops()));
+            if (configuration != null) outputs.addAll(configuration.storedStacks());
             return ResourceRequirements.fromStacks(outputs);
         }
 
         @Override
         public int componentCount() {
-            return 4 + covers.size();
+            return 5 + covers.size() + (configuration == null ? 0 : configuration.storedStacks().size());
         }
 
         @Override
@@ -562,7 +624,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             EnumFacing transformed = frontFacing == null ? null : transform.apply(frontFacing);
             List<CoverState> transformedCovers = covers.stream().map(cover -> cover.transformed(transform)).toList();
             return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink, proxyMaster,
-                    transformedCovers, ghostCircuit);
+                    transformedCovers, ghostCircuit,
+                    configuration == null ? null : configuration.transformed(transform));
         }
 
         private ItemStack placementStack() {
@@ -593,12 +656,17 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             return ghostCircuit.copy();
         }
 
+        private MteConfiguration configuration() {
+            return configuration;
+        }
+
         @Override
         public boolean equals(Object other) {
             return other instanceof MteData data && frontFacing == data.frontFacing &&
                     paintingColor == data.paintingColor && Objects.equals(smartCopyLink, data.smartCopyLink) &&
                     Objects.equals(proxyMaster, data.proxyMaster) &&
                     Objects.equals(covers, data.covers) &&
+                    Objects.equals(configuration, data.configuration) &&
                     ItemStack.areItemStacksEqual(ghostCircuit, data.ghostCircuit) &&
                     ItemStack.areItemStacksEqual(placementStack, data.placementStack);
         }
@@ -607,7 +675,357 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         public int hashCode() {
             return Objects.hash(frontFacing, paintingColor, placementStack.getItem().getRegistryName(),
                     placementStack.getMetadata(), placementStack.getTagCompound(), smartCopyLink, proxyMaster, covers,
-                    ghostCircuit.getItem().getRegistryName(), ghostCircuit.getMetadata(), ghostCircuit.getTagCompound());
+                    ghostCircuit.getItem().getRegistryName(), ghostCircuit.getMetadata(), ghostCircuit.getTagCompound(),
+                    configuration);
+        }
+    }
+
+    /** Portable machine settings that have public, side-effect-bounded restore APIs in the target GregTech build. */
+    private static final class MteConfiguration {
+
+        private final boolean muffled;
+        private final Boolean workingEnabled;
+        private final SimpleMachineConfiguration simpleMachine;
+        private final ItemHandlingConfiguration itemHandling;
+        private final ItemBusFilterConfiguration itemBusFilter;
+        private final FluidHatchConfiguration fluidHatch;
+        private final BufferConfiguration buffer;
+        private final Boolean drumAutoOutput;
+        private final Boolean batchEnabled;
+        private final Boolean distinct;
+        private final Boolean energyLackWarning;
+        private final Integer recipeMapIndex;
+        private final IOType longDistanceIoType;
+
+        private MteConfiguration(boolean muffled, Boolean workingEnabled,
+                                 SimpleMachineConfiguration simpleMachine,
+                                 ItemHandlingConfiguration itemHandling,
+                                 ItemBusFilterConfiguration itemBusFilter,
+                                 FluidHatchConfiguration fluidHatch, BufferConfiguration buffer,
+                                 Boolean drumAutoOutput, Boolean batchEnabled, Boolean distinct,
+                                 Boolean energyLackWarning, Integer recipeMapIndex, IOType longDistanceIoType) {
+            this.muffled = muffled;
+            this.workingEnabled = workingEnabled;
+            this.simpleMachine = simpleMachine;
+            this.itemHandling = itemHandling;
+            this.itemBusFilter = itemBusFilter;
+            this.fluidHatch = fluidHatch;
+            this.buffer = buffer;
+            this.drumAutoOutput = drumAutoOutput;
+            this.batchEnabled = batchEnabled;
+            this.distinct = distinct;
+            this.energyLackWarning = energyLackWarning;
+            this.recipeMapIndex = recipeMapIndex;
+            this.longDistanceIoType = longDistanceIoType;
+        }
+
+        private static MteConfiguration capture(MetaTileEntity mte) {
+            IControllable controllable = controllable(mte);
+            Boolean workingEnabled = controllable == null ? null : controllable.isWorkingEnabled();
+            SimpleMachineConfiguration simpleMachine = mte instanceof SimpleMachineMetaTileEntity machine
+                    ? SimpleMachineConfiguration.capture(machine) : null;
+            ItemHandlingConfiguration itemHandling = ItemHandlingConfiguration.capture(mte);
+            ItemBusFilterConfiguration itemBusFilter = mte instanceof MetaTileEntityItemBus bus
+                    ? ItemBusFilterConfiguration.capture(bus) : null;
+            FluidHatchConfiguration fluidHatch = mte instanceof MetaTileEntityFluidHatch hatch
+                    ? FluidHatchConfiguration.capture(hatch) : null;
+            BufferConfiguration buffer = mte instanceof MetaTileEntityBuffer machineBuffer
+                    ? BufferConfiguration.capture(machineBuffer) : null;
+            Boolean drumAutoOutput = mte instanceof MetaTileEntityDrum drum ? drum.isAutoOutput() : null;
+            Boolean batchEnabled = mte instanceof IBatch batch && batch.isBatchAllowed()
+                    ? batch.isBatchEnable() : null;
+            Boolean distinct = mte instanceof IDistinctBusController controller && controller.canBeDistinct()
+                    ? controller.isDistinct() : null;
+            Boolean energyLackWarning = null;
+            if (mte instanceof IRecipeControl control && control.enableExtendControl()) {
+                if (control.isRecipeLocked()) {
+                    throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, mte.getPos(),
+                            "A locked GregTech recipe cannot be copied without its recipe identity");
+                }
+                energyLackWarning = control.isEnergyLackWarningEnabled();
+            }
+            Integer recipeMapIndex = mte instanceof IMultipleRecipeMaps maps ? maps.getRecipeMapIndex() : null;
+            IOType ioType = mte instanceof MetaTileEntityLongDistanceEndpoint endpoint ? endpoint.getIoType() : null;
+            return new MteConfiguration(mte.isMuffled(), workingEnabled, simpleMachine, itemHandling, itemBusFilter,
+                    fluidHatch, buffer, drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex,
+                    ioType);
+        }
+
+        private void apply(MetaTileEntity mte) {
+            mte.setMuffled(muffled);
+            IControllable controllable = controllable(mte);
+            if (workingEnabled != null) {
+                if (controllable == null) incompatible(mte, "working-enabled state");
+                controllable.setWorkingEnabled(workingEnabled);
+            }
+            if (simpleMachine != null) {
+                if (mte instanceof SimpleMachineMetaTileEntity machine) {
+                    simpleMachine.apply(machine);
+                } else {
+                    incompatible(mte, "single-machine I/O state");
+                }
+            }
+            if (itemHandling != null) itemHandling.apply(mte);
+            if (itemBusFilter != null) {
+                if (mte instanceof MetaTileEntityItemBus bus) {
+                    itemBusFilter.apply(bus);
+                } else {
+                    incompatible(mte, "item-bus output filter");
+                }
+            }
+            if (fluidHatch != null) {
+                if (mte instanceof MetaTileEntityFluidHatch hatch) {
+                    fluidHatch.apply(hatch);
+                } else {
+                    incompatible(mte, "fluid-hatch lock");
+                }
+            }
+            if (buffer != null) {
+                if (mte instanceof MetaTileEntityBuffer machineBuffer) {
+                    buffer.apply(machineBuffer);
+                } else {
+                    incompatible(mte, "buffer I/O state");
+                }
+            }
+            if (drumAutoOutput != null) {
+                if (mte instanceof MetaTileEntityDrum drum) {
+                    drum.setAutoOutput(drumAutoOutput);
+                } else {
+                    incompatible(mte, "drum auto-output state");
+                }
+            }
+            if (batchEnabled != null) {
+                if (mte instanceof IBatch batch && batch.isBatchAllowed()) {
+                    batch.setBatchEnable(batchEnabled);
+                } else {
+                    incompatible(mte, "batch state");
+                }
+            }
+            if (distinct != null) {
+                if (mte instanceof IDistinctBusController controller && controller.canBeDistinct()) {
+                    controller.setDistinct(distinct);
+                } else {
+                    incompatible(mte, "input-separation state");
+                }
+            }
+            if (energyLackWarning != null) {
+                if (mte instanceof IRecipeControl control && control.enableExtendControl()) {
+                    control.setEnergyLackWarningEnabled(energyLackWarning);
+                } else {
+                    incompatible(mte, "energy-warning state");
+                }
+            }
+            if (recipeMapIndex != null) {
+                if (mte instanceof IMultipleRecipeMaps maps) {
+                    maps.setRecipeMapIndex(recipeMapIndex);
+                } else {
+                    incompatible(mte, "recipe-map selection");
+                }
+            }
+            if (longDistanceIoType != null) {
+                if (mte instanceof MetaTileEntityLongDistanceEndpoint endpoint) {
+                    endpoint.setIoType(longDistanceIoType);
+                } else {
+                    incompatible(mte, "long-distance endpoint mode");
+                }
+            }
+        }
+
+        private MteConfiguration transformed(ManipulatorTransform transform) {
+            return new MteConfiguration(muffled, workingEnabled,
+                    simpleMachine == null ? null : simpleMachine.transformed(transform), itemHandling, itemBusFilter,
+                    fluidHatch, buffer == null ? null : buffer.transformed(transform), drumAutoOutput, batchEnabled,
+                    distinct, energyLackWarning, recipeMapIndex, longDistanceIoType);
+        }
+
+        private List<ItemStack> storedStacks() {
+            return itemBusFilter == null ? List.of() : itemBusFilter.storedStacks();
+        }
+
+        private static IControllable controllable(MetaTileEntity mte) {
+            if (mte instanceof IControllable direct) return direct;
+            return mte.getCapability(GregtechTileCapabilities.CAPABILITY_CONTROLLABLE, null);
+        }
+
+        private static void incompatible(MetaTileEntity mte, String state) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, mte.getPos(),
+                    "The placed GregTech machine cannot restore its " + state);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof MteConfiguration config)) return false;
+            return muffled == config.muffled && Objects.equals(workingEnabled, config.workingEnabled) &&
+                    Objects.equals(simpleMachine, config.simpleMachine) &&
+                    Objects.equals(itemHandling, config.itemHandling) &&
+                    Objects.equals(itemBusFilter, config.itemBusFilter) &&
+                    Objects.equals(fluidHatch, config.fluidHatch) && Objects.equals(buffer, config.buffer) &&
+                    Objects.equals(drumAutoOutput, config.drumAutoOutput) &&
+                    Objects.equals(batchEnabled, config.batchEnabled) && Objects.equals(distinct, config.distinct) &&
+                    Objects.equals(energyLackWarning, config.energyLackWarning) &&
+                    Objects.equals(recipeMapIndex, config.recipeMapIndex) &&
+                    longDistanceIoType == config.longDistanceIoType;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(muffled, workingEnabled, simpleMachine, itemHandling, itemBusFilter, fluidHatch, buffer,
+                    drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex, longDistanceIoType);
+        }
+    }
+
+    private record SimpleMachineConfiguration(EnumFacing itemOutput, EnumFacing fluidOutput, boolean autoOutputItems,
+                                              boolean autoOutputFluids, boolean allowItemInput,
+                                              boolean allowFluidInput, boolean disallowSameItemInsert) {
+
+        private static SimpleMachineConfiguration capture(SimpleMachineMetaTileEntity machine) {
+            return new SimpleMachineConfiguration(machine.getOutputFacingItems(), machine.getOutputFacingFluids(),
+                    machine.isAutoOutputItems(), machine.isAutoOutputFluids(),
+                    machine.isAllowInputFromOutputSideItems(), machine.isAllowInputFromOutputSideFluids(),
+                    machine.isDisallowSameItemInsert());
+        }
+
+        private void apply(SimpleMachineMetaTileEntity machine) {
+            machine.setOutputFacingItems(itemOutput);
+            machine.setOutputFacingFluids(fluidOutput);
+            machine.setAutoOutputItems(autoOutputItems);
+            machine.setAutoOutputFluids(autoOutputFluids);
+            machine.setAllowInputFromOutputSideItems(allowItemInput);
+            machine.setAllowInputFromOutputSideFluids(allowFluidInput);
+            machine.setDisallowSameItemInsert(disallowSameItemInsert);
+        }
+
+        private SimpleMachineConfiguration transformed(ManipulatorTransform transform) {
+            return new SimpleMachineConfiguration(transform.apply(itemOutput), transform.apply(fluidOutput),
+                    autoOutputItems, autoOutputFluids, allowItemInput, allowFluidInput, disallowSameItemInsert);
+        }
+    }
+
+    private record ItemHandlingConfiguration(boolean autoCollapse, Boolean disallowSameItemInsert) {
+
+        private static ItemHandlingConfiguration capture(MetaTileEntity mte) {
+            if (mte instanceof MetaTileEntityItemBus bus) {
+                return new ItemHandlingConfiguration(bus.isAutoCollapse(), bus.isDisallowSameItemInsert());
+            }
+            if (mte instanceof MetaTileEntityDualHatch hatch) {
+                return new ItemHandlingConfiguration(hatch.isAutoCollapse(), hatch.isDisallowSameItemInsert());
+            }
+            if (mte instanceof MetaTileEntityHugeDualHatch hatch) {
+                return new ItemHandlingConfiguration(hatch.isAutoCollapse(), null);
+            }
+            if (mte instanceof MetaTileEntityComplexDualHatch hatch) {
+                return new ItemHandlingConfiguration(hatch.isAutoCollapse(), null);
+            }
+            return null;
+        }
+
+        private void apply(MetaTileEntity mte) {
+            if (mte instanceof MetaTileEntityItemBus bus) {
+                bus.setAutoCollapse(autoCollapse);
+                if (disallowSameItemInsert != null) bus.setDisallowSameItemInsert(disallowSameItemInsert);
+            } else if (mte instanceof MetaTileEntityDualHatch hatch) {
+                hatch.setAutoCollapse(autoCollapse);
+                if (disallowSameItemInsert != null) hatch.setDisallowSameItemInsert(disallowSameItemInsert);
+            } else if (mte instanceof MetaTileEntityHugeDualHatch hatch) {
+                hatch.setAutoCollapse(autoCollapse);
+                if (disallowSameItemInsert != null) MteConfiguration.incompatible(mte, "item-insertion mode");
+            } else if (mte instanceof MetaTileEntityComplexDualHatch hatch) {
+                hatch.setAutoCollapse(autoCollapse);
+                if (disallowSameItemInsert != null) MteConfiguration.incompatible(mte, "item-insertion mode");
+            } else {
+                MteConfiguration.incompatible(mte, "item handling state");
+            }
+        }
+    }
+
+    private static final class ItemBusFilterConfiguration {
+
+        private final NBTTagCompound data;
+        private final ItemStack filterStack;
+
+        private ItemBusFilterConfiguration(NBTTagCompound data, ItemStack filterStack) {
+            this.data = data.copy();
+            this.filterStack = filterStack.isEmpty() ? ItemStack.EMPTY : filterStack.copy();
+        }
+
+        private static ItemBusFilterConfiguration capture(MetaTileEntityItemBus bus) {
+            NBTTagCompound data = bus.getOutputFilterData();
+            return data == null ? null : new ItemBusFilterConfiguration(data, bus.getOutputFilterStack());
+        }
+
+        private void apply(MetaTileEntityItemBus bus) {
+            bus.setOutputFilterData(data.copy());
+        }
+
+        private List<ItemStack> storedStacks() {
+            return filterStack.isEmpty() ? List.of() : List.of(filterStack.copy());
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof ItemBusFilterConfiguration config && Objects.equals(data, config.data) &&
+                    ItemStack.areItemStacksEqual(filterStack, config.filterStack);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(data, filterStack.getItem().getRegistryName(), filterStack.getMetadata(),
+                    filterStack.getTagCompound());
+        }
+    }
+
+    private static final class FluidHatchConfiguration {
+
+        private final boolean locked;
+        private final FluidStack lockedFluid;
+
+        private FluidHatchConfiguration(boolean locked, FluidStack lockedFluid) {
+            this.locked = locked;
+            this.lockedFluid = lockedFluid == null ? null : lockedFluid.copy();
+            if (this.lockedFluid != null) this.lockedFluid.amount = 1;
+        }
+
+        private static FluidHatchConfiguration capture(MetaTileEntityFluidHatch hatch) {
+            return new FluidHatchConfiguration(hatch.isLocked(), hatch.getLockedFluid());
+        }
+
+        private void apply(MetaTileEntityFluidHatch hatch) {
+            hatch.setLocked(locked);
+            if (lockedFluid != null) hatch.setLockedFluid(lockedFluid.copy());
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof FluidHatchConfiguration config) || locked != config.locked) return false;
+            if (lockedFluid == null || config.lockedFluid == null) return lockedFluid == config.lockedFluid;
+            return lockedFluid.isFluidStackIdentical(config.lockedFluid);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(locked, lockedFluid == null ? null : lockedFluid.getFluid().getName(),
+                    lockedFluid == null ? null : lockedFluid.tag);
+        }
+    }
+
+    private record BufferConfiguration(EnumFacing itemOutput, EnumFacing fluidOutput, boolean autoOutputItems,
+                                       boolean autoOutputFluids) {
+
+        private static BufferConfiguration capture(MetaTileEntityBuffer buffer) {
+            return new BufferConfiguration(buffer.getOutputFacingItems(), buffer.getOutputFacingFluids(),
+                    buffer.isAutoOutputItems(), buffer.isAutoOutputFluids());
+        }
+
+        private void apply(MetaTileEntityBuffer buffer) {
+            buffer.setOutputFacingItems(itemOutput);
+            buffer.setOutputFacingFluids(fluidOutput);
+            buffer.setAutoOutputItems(autoOutputItems);
+            buffer.setAutoOutputFluids(autoOutputFluids);
+        }
+
+        private BufferConfiguration transformed(ManipulatorTransform transform) {
+            return new BufferConfiguration(transform.apply(itemOutput), transform.apply(fluidOutput), autoOutputItems,
+                    autoOutputFluids);
         }
     }
 
@@ -617,12 +1035,15 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final ItemStack itemStack;
         private final ResourceLocation definitionId;
         private final NBTTagCompound data;
+        private final List<ItemStack> drops;
 
-        private CoverState(EnumFacing side, ItemStack itemStack, ResourceLocation definitionId, NBTTagCompound data) {
+        private CoverState(EnumFacing side, ItemStack itemStack, ResourceLocation definitionId, NBTTagCompound data,
+                           List<ItemStack> drops) {
             this.side = Objects.requireNonNull(side, "side");
             this.itemStack = checkedStack(itemStack);
             this.definitionId = Objects.requireNonNull(definitionId, "definitionId");
             this.data = data.copy();
+            this.drops = drops.stream().map(ItemStack::copy).toList();
         }
 
         private EnumFacing side() {
@@ -641,21 +1062,41 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             return data.copy();
         }
 
+        private List<ItemStack> drops() {
+            return drops.stream().map(ItemStack::copy).toList();
+        }
+
         private CoverState transformed(ManipulatorTransform transform) {
-            return new CoverState(transform.apply(side), itemStack, definitionId, data);
+            return new CoverState(transform.apply(side), itemStack, definitionId, data, drops);
         }
 
         @Override
         public boolean equals(Object other) {
             return other instanceof CoverState state && side == state.side &&
                     Objects.equals(definitionId, state.definitionId) &&
-                    Objects.equals(data, state.data) && ItemStack.areItemStacksEqual(itemStack, state.itemStack);
+                    Objects.equals(data, state.data) && ItemStack.areItemStacksEqual(itemStack, state.itemStack) &&
+                    sameOrderedStacks(drops, state.drops);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(side, definitionId, data, itemStack.getItem().getRegistryName(), itemStack.getMetadata(),
-                    itemStack.getTagCompound());
+            int result = Objects.hash(side, definitionId, data, itemStack.getItem().getRegistryName(),
+                    itemStack.getMetadata(), itemStack.getTagCompound());
+            for (ItemStack drop : drops) {
+                result = 31 * result + Objects.hash(drop.getItem().getRegistryName(), drop.getMetadata(),
+                        drop.getCount(), drop.getTagCompound());
+            }
+            return result;
+        }
+
+        private static boolean sameOrderedStacks(List<ItemStack> left, List<ItemStack> right) {
+            if (left.size() != right.size()) return false;
+            for (int index = 0; index < left.size(); index++) {
+                ItemStack first = left.get(index);
+                ItemStack second = right.get(index);
+                if (first.getCount() != second.getCount() || !ItemStack.areItemStacksEqual(first, second)) return false;
+            }
+            return true;
         }
     }
 
@@ -716,8 +1157,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         public ResourceRequirements requiredResources() {
             ResourceRequirements requirements = pipeRequirements(inputMaterial.toStack(), frameMaterial);
             for (CoverState cover : covers) {
-                requirements = ResourceRequirements.combine(requirements,
-                        ResourceRequirements.of(new ResourceRequirement(BlockSpec.of(cover.itemStack()), 1L)));
+                requirements = ResourceRequirements.combine(requirements, ResourceRequirements.fromStacks(cover.drops()));
             }
             return requirements;
         }
@@ -725,8 +1165,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public ResourceRequirements producedResources() {
             ResourceRequirements requirements = pipeRequirements(pipeStack, frameMaterial);
-            return ResourceRequirements.combine(requirements,
-                    ResourceRequirements.fromStacks(covers.stream().map(CoverState::itemStack).toList()));
+            List<ItemStack> coverDrops = new ArrayList<>();
+            covers.forEach(cover -> coverDrops.addAll(cover.drops()));
+            return ResourceRequirements.combine(requirements, ResourceRequirements.fromStacks(coverDrops));
         }
 
         @Override

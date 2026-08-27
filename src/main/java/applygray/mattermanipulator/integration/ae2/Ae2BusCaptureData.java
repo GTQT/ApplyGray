@@ -10,10 +10,13 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.CapturedBlockData;
 import applygray.mattermanipulator.inventory.ResourceRequirement;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
+import applygray.mattermanipulator.inventory.FluidRequirement;
 import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.EnumFacing;
+import net.minecraftforge.fluids.FluidStack;
 import org.jetbrains.annotations.Nullable;
 
 /** Explicit AE2 cable-bus state represented solely by public dismantle-item stacks and facade stacks. */
@@ -43,16 +46,16 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
     /** Uses bare part items as copy inputs; exported dismantle settings are applied after the item is consumed. */
     public ResourceRequirements requiredResources() {
         List<ResourceRequirement> requirements = new ArrayList<>();
+        ResourceRequirements result = ResourceRequirements.empty();
         for (Part part : parts) {
             requirements.add(new ResourceRequirement(withoutSettings(part.stack), 1L));
-            for (ItemStack content : part.requiredContents()) {
-                requirements.add(new ResourceRequirement(BlockSpec.of(content), content.getCount()));
-            }
+            result = ResourceRequirements.combine(result, part.requiredResources());
         }
         for (Facade facade : facades) {
             requirements.add(new ResourceRequirement(BlockSpec.of(facade.stack), 1L));
         }
-        return ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new));
+        return ResourceRequirements.combine(ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new)),
+                result);
     }
 
     /** Dismantle-item and facade stacks are the exact recoverable outputs of a removed cable bus. */
@@ -60,7 +63,7 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         List<ItemStack> drops = new ArrayList<>(parts.size() + facades.size());
         for (Part part : parts) {
             drops.add(part.stack.copy());
-            drops.addAll(part.producedContents());
+            drops.addAll(part.producedStacks());
         }
         for (Facade facade : facades) {
             drops.add(facade.stack.copy());
@@ -75,7 +78,7 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         List<Facade> transformedFacades = new ArrayList<>(facades.size());
         for (Part part : parts) {
             transformedParts.add(new Part(transformFacing(part.side, transform), part.stack,
-                    part.patternProviderContents));
+                    part.portableSettings, part.patternProviderContents, part.p2pState));
         }
         for (Facade facade : facades) {
             transformedFacades.add(new Facade(transformFacing(facade.side, transform), facade.stack));
@@ -153,16 +156,27 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         private final EnumFacing side;
         private final ItemStack stack;
         @Nullable
+        private final PortableSettings portableSettings;
+        @Nullable
         private final PatternProviderContents patternProviderContents;
+        @Nullable
+        private final P2PState p2pState;
 
         public Part(EnumFacing side, ItemStack stack) {
-            this(side, stack, null);
+            this(side, stack, null, null, null);
         }
 
         public Part(EnumFacing side, ItemStack stack, @Nullable PatternProviderContents patternProviderContents) {
+            this(side, stack, null, patternProviderContents, null);
+        }
+
+        public Part(EnumFacing side, ItemStack stack, @Nullable PortableSettings portableSettings,
+                    @Nullable PatternProviderContents patternProviderContents, @Nullable P2PState p2pState) {
             this.side = side;
             this.stack = checkedStack(stack);
+            this.portableSettings = portableSettings == null ? null : portableSettings.copy();
             this.patternProviderContents = patternProviderContents == null ? null : patternProviderContents.copy();
+            this.p2pState = p2pState;
         }
 
         public EnumFacing side() {
@@ -178,30 +192,110 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
             return patternProviderContents == null ? null : patternProviderContents.copy();
         }
 
-        private List<ItemStack> requiredContents() {
-            return patternProviderContents == null ? List.of() : patternProviderContents.requiredStacks();
+        @Nullable
+        public PortableSettings portableSettings() {
+            return portableSettings == null ? null : portableSettings.copy();
         }
 
-        private List<ItemStack> producedContents() {
-            return patternProviderContents == null ? List.of() : patternProviderContents.producedStacks();
+        @Nullable
+        public P2PState p2pState() {
+            return p2pState;
+        }
+
+        private ResourceRequirements requiredResources() {
+            ResourceRequirements result = portableSettings == null ? ResourceRequirements.empty()
+                    : portableSettings.requiredResources();
+            if (patternProviderContents != null) {
+                result = ResourceRequirements.combine(result,
+                        ResourceRequirements.fromStacks(patternProviderContents.requiredStacks()));
+            }
+            return result;
+        }
+
+        private List<ItemStack> producedStacks() {
+            List<ItemStack> result = new ArrayList<>();
+            if (portableSettings != null) result.addAll(portableSettings.producedStacks());
+            if (patternProviderContents != null) result.addAll(patternProviderContents.producedStacks());
+            return result;
         }
 
         private Part copy() {
-            return new Part(side, stack, patternProviderContents);
+            return new Part(side, stack, portableSettings, patternProviderContents, p2pState);
         }
 
         @Override
         public boolean equals(Object other) {
             return other instanceof Part part && side == part.side && ItemStack.areItemStacksEqual(stack, part.stack) &&
-                    Objects.equals(patternProviderContents, part.patternProviderContents);
+                    Objects.equals(portableSettings, part.portableSettings) &&
+                    Objects.equals(patternProviderContents, part.patternProviderContents) &&
+                    Objects.equals(p2pState, part.p2pState);
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(side, stack.getItem().getRegistryName(), stack.getMetadata(), stack.getTagCompound(),
-                    patternProviderContents);
+                    portableSettings, patternProviderContents, p2pState);
         }
     }
+
+    /** Memory Card settings plus resource inventories kept separate from the part's placement item. */
+    public static final class PortableSettings {
+
+        private final NBTTagCompound settings;
+        private final List<InventoryStack> upgrades;
+        private final List<ResourceRequirement> configuredItems;
+        private final List<FluidRequirement> configuredFluids;
+
+        public PortableSettings(NBTTagCompound settings, List<InventoryStack> upgrades,
+                                List<ResourceRequirement> configuredItems,
+                                List<FluidRequirement> configuredFluids) {
+            this.settings = Objects.requireNonNull(settings, "settings").copy();
+            this.upgrades = copyInventoryStacks(upgrades);
+            this.configuredItems = List.copyOf(configuredItems);
+            this.configuredFluids = List.copyOf(configuredFluids);
+        }
+
+        public NBTTagCompound settings() {
+            return settings.copy();
+        }
+
+        public List<InventoryStack> upgrades() {
+            return copyInventoryStacks(upgrades);
+        }
+
+        private ResourceRequirements requiredResources() {
+            List<ResourceRequirement> itemRequirements = new ArrayList<>(configuredItems);
+            for (InventoryStack upgrade : upgrades) {
+                ItemStack stack = upgrade.stack();
+                itemRequirements.add(new ResourceRequirement(BlockSpec.of(stack), stack.getCount()));
+            }
+            ResourceRequirements items = ResourceRequirements.of(itemRequirements.toArray(ResourceRequirement[]::new));
+            ResourceRequirements fluids = ResourceRequirements.fluids(configuredFluids.toArray(FluidRequirement[]::new));
+            return ResourceRequirements.combine(items, fluids);
+        }
+
+        private List<ItemStack> producedStacks() {
+            return upgrades.stream().map(InventoryStack::stack).toList();
+        }
+
+        private PortableSettings copy() {
+            return new PortableSettings(settings, upgrades, configuredItems, configuredFluids);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof PortableSettings portable && Objects.equals(settings, portable.settings) &&
+                    upgrades.equals(portable.upgrades) && configuredItems.equals(portable.configuredItems) &&
+                    configuredFluids.equals(portable.configuredFluids);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(settings, upgrades, configuredItems, configuredFluids);
+        }
+    }
+
+    public record P2PState(short frequency, boolean output) {}
 
     /** Explicit Pattern Provider payload that keeps normal card transfer separate from Smart Copy links. */
     public static final class PatternProviderContents {
