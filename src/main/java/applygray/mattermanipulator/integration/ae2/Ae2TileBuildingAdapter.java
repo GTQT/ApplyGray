@@ -20,6 +20,8 @@ import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import ae2.api.inventories.ISegmentedInventory;
 import ae2.api.inventories.InternalInventory;
+import ae2.api.implementations.blockentities.IColorableBlockEntity;
+import ae2.api.implementations.blockentities.IViewCellStorage;
 import ae2.api.networking.energy.IAEPowerStorage;
 import ae2.api.stacks.AEFluidKey;
 import ae2.api.stacks.AEItemKey;
@@ -62,6 +64,8 @@ import ae2.tile.storage.TileIOPort;
 import ae2.tile.storage.TileMEChest;
 import ae2.tile.storage.TileSkyChest;
 import ae2.tile.storage.TileSkyStoneTank;
+import ae2.api.util.AEColor;
+import ae2.api.util.KeyTypeSelectionHost;
 import ae2.util.CustomNameUtil;
 import ae2.util.SettingsFrom;
 import net.minecraft.block.Block;
@@ -93,6 +97,8 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
     private static final String CELL_WORKBENCH_CONFIG = "applygray_cell_workbench_config";
     private static final String OUTPUT_SIDES = "applygray_output_sides";
     private static final String CANER_MODE = "applygray_caner_mode";
+    private static final String KEY_TYPE_SELECTION = "applygray_key_type_selection";
+    private static final String PAINTED_COLOR = "applygray_painted_color";
     private static final int WORLD_UPDATE_FLAGS = 3;
     private static final long BASE_EU_PER_COMPONENT = 750L;
     private static final double ENERGY_EPSILON = 0.000_001D;
@@ -205,13 +211,24 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
 
     @Override
     public PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target) {
+        return prepareMove(context, source, target, false);
+    }
+
+    @Override
+    public PreparedBlockChange prepareMoveAfterTargetRemoval(BuildingContext context, BlockPos source,
+                                                              BlockPos target) {
+        return prepareMove(context, source, target, true);
+    }
+
+    private PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target,
+                                            boolean targetPrecleared) {
         if (source.equals(target)) {
             throw new BuildingException(BuildingException.Reason.OVERLAPPING_MOVE, source,
                     "An AE2 move source and target cannot be the same block");
         }
         IBlockState sourceState = validateEditable(context, source);
         IBlockState targetState = validateEditable(context, target);
-        if (!isAir(context, target, targetState)) {
+        if (!targetPrecleared && !isAir(context, target, targetState)) {
             throw unsupported(target, "Moving an AE2 block entity requires an empty destination");
         }
         if (!context.world().checkNoEntityCollision(new AxisAlignedBB(target))) {
@@ -219,7 +236,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
                     "An entity blocks the AE2 move destination");
         }
         return new MoveChange(context, source, target, sourceState, targetState,
-                captureTile(context, source, CapturePurpose.MOVE));
+                captureTile(context, source, CapturePurpose.MOVE), targetPrecleared);
     }
 
     private static PreparedBlockChange preparePlacement(BuildingContext context, BlockPos position,
@@ -277,6 +294,8 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         NBTTagCompound settings = capturePortableSettings(tile);
 
         List<Ae2BusCaptureData.InventoryStack> inventory = captureInventory(portableInventory(tile));
+        List<Ae2BusCaptureData.InventoryStack> viewCells = tile instanceof IViewCellStorage viewCellStorage
+                ? captureInventory(viewCellStorage.getViewCellStorage()) : List.of();
         List<Ae2BusCaptureData.InventoryStack> upgrades = List.of();
         List<Ae2BusCaptureData.InventoryStack> patterns = List.of();
         boolean patternProvider = tile instanceof TilePatternProvider;
@@ -308,8 +327,8 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         }
 
         return new Ae2TileCaptureData(placementStack, blockDrops, additionalDrops, settings, tile.getForward(),
-                tile.getUp(), inventory, upgrades, patterns, configuredItems, configuredFluids, genericInventory,
-                storedFluids, storedEnergy, patternProvider);
+                tile.getUp(), inventory, viewCells, upgrades, patterns, configuredItems, configuredFluids,
+                genericInventory, storedFluids, storedEnergy, patternProvider);
     }
 
     private static NBTTagCompound capturePortableSettings(AEBaseTile tile) {
@@ -325,6 +344,14 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
             settings.setInteger(OUTPUT_SIDES, facingMask(assembler.getOutputSides()));
         } else if (tile instanceof TileCaner caner) {
             settings.setInteger(CANER_MODE, caner.getMode().ordinal());
+        }
+        if (tile instanceof KeyTypeSelectionHost keyTypeHost) {
+            NBTTagCompound keyTypes = new NBTTagCompound();
+            keyTypeHost.getKeyTypeSelection().writeToNBT(keyTypes);
+            settings.setTag(KEY_TYPE_SELECTION, keyTypes);
+        }
+        if (tile instanceof IColorableBlockEntity colorable) {
+            settings.setInteger(PAINTED_COLOR, colorable.getColor().ordinal());
         }
         return settings;
     }
@@ -543,6 +570,13 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         requireSupported(position, tile);
 
         restoreInventory(position, portableInventory(tile), data.inventory());
+        if (!data.viewCells().isEmpty()) {
+            if (!(tile instanceof IViewCellStorage viewCellStorage)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed AE2 block cannot restore view-cell configuration");
+            }
+            restoreInventory(position, viewCellStorage.getViewCellStorage(), data.viewCells());
+        }
         if (data.patternProvider()) {
             if (!(tile instanceof TilePatternProvider provider)) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
@@ -559,7 +593,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         }
         restoreGenericInventory(position, tile, data.genericInventory());
         restoreStoredFluids(position, tile, data.storedFluids());
-        restorePortableSettings(position, tile, data.settings());
+        restorePortableSettings(context, position, tile, data.settings());
         if (data.forward() != null) tile.setOrientation(data.forward(), data.up());
         restoreStoredEnergy(position, tile, data.storedEnergy());
         if (tile instanceof TilePatternProvider provider) provider.getLogic().updatePatterns();
@@ -615,7 +649,8 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         }
     }
 
-    private static void restorePortableSettings(BlockPos position, AEBaseTile tile, NBTTagCompound settings) {
+    private static void restorePortableSettings(BuildingContext context, BlockPos position, AEBaseTile tile,
+                                                NBTTagCompound settings) {
         NBTTagCompound portable = settings.copy();
         NBTTagList workbenchConfig = portable.hasKey(CELL_WORKBENCH_CONFIG, Constants.NBT.TAG_LIST)
                 ? portable.getTagList(CELL_WORKBENCH_CONFIG, Constants.NBT.TAG_COMPOUND).copy() : null;
@@ -626,6 +661,12 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         Integer canerMode = portable.hasKey(CANER_MODE, Constants.NBT.TAG_INT)
                 ? portable.getInteger(CANER_MODE) : null;
         portable.removeTag(CANER_MODE);
+        NBTTagCompound keyTypes = portable.hasKey(KEY_TYPE_SELECTION, Constants.NBT.TAG_COMPOUND)
+                ? portable.getCompoundTag(KEY_TYPE_SELECTION).copy() : null;
+        portable.removeTag(KEY_TYPE_SELECTION);
+        Integer paintedColor = portable.hasKey(PAINTED_COLOR, Constants.NBT.TAG_INT)
+                ? portable.getInteger(PAINTED_COLOR) : null;
+        portable.removeTag(PAINTED_COLOR);
         tile.importSettings(SettingsFrom.MEMORY_CARD, portable, null);
         if (workbenchConfig != null) {
             if (!(tile instanceof TileCellWorkbench workbench)) {
@@ -636,6 +677,27 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         }
         if (outputSides != null) restoreOutputSides(position, tile, outputSides);
         if (canerMode != null) restoreCanerMode(position, tile, canerMode);
+        if (keyTypes != null) {
+            if (!(tile instanceof KeyTypeSelectionHost keyTypeHost)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed AE2 block cannot restore key-type configuration");
+            }
+            keyTypeHost.getKeyTypeSelection().readFromNBT(keyTypes);
+        }
+        if (paintedColor != null) {
+            AEColor[] colors = AEColor.values();
+            if (paintedColor < 0 || paintedColor >= colors.length ||
+                    !(tile instanceof IColorableBlockEntity colorable)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed AE2 block cannot restore painted color");
+            }
+            AEColor color = colors[paintedColor];
+            if (colorable.getColor() != color && !colorable.recolourBlock(EnumFacing.UP, color, context.player()) &&
+                    colorable.getColor() != color) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed AE2 block rejected its painted color");
+            }
+        }
     }
 
     private static int facingMask(Iterable<EnumFacing> sides) {
@@ -901,17 +963,19 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         private final IBlockState sourceState;
         private final IBlockState targetState;
         private final Ae2TileCaptureData data;
+        private final boolean targetPrecleared;
         private BlockSnapshot sourceSnapshot;
         private BlockSnapshot targetSnapshot;
 
         MoveChange(BuildingContext context, BlockPos source, BlockPos target, IBlockState sourceState,
-                   IBlockState targetState, Ae2TileCaptureData data) {
+                   IBlockState targetState, Ae2TileCaptureData data, boolean targetPrecleared) {
             this.context = context;
             this.source = source;
             this.target = target;
             this.sourceState = sourceState;
             this.targetState = targetState;
             this.data = data;
+            this.targetPrecleared = targetPrecleared;
         }
 
         @Override
@@ -938,7 +1002,11 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         @Override
         public void apply() {
             verifyState(source, sourceState);
-            verifyState(target, targetState);
+            if (targetPrecleared) {
+                verifyState(target, Blocks.AIR.getDefaultState());
+            } else {
+                verifyState(target, targetState);
+            }
             if (!data.equals(captureTile(context, source, CapturePurpose.MOVE))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
                         "The source AE2 block changed after the move was prepared");

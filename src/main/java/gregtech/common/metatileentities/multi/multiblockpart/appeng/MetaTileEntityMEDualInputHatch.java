@@ -696,6 +696,19 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         }
     }
 
+    /** Portable configuration boundary used by Matter Manipulator copy/move operations. */
+    public final NBTTagCompound applygray$exportPortableConfiguration() {
+        NBTTagCompound tag = writeConfigToTag();
+        tag.setBoolean(WORKING_TAG, workingEnabled);
+        return tag;
+    }
+
+    /** Restores ME item/fluid configuration without restoring live network buffers. */
+    public final void applygray$importPortableConfiguration(NBTTagCompound tag) {
+        readConfigFromTag(tag);
+        if (tag.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) workingEnabled = tag.getBoolean(WORKING_TAG);
+    }
+
     @Override
     public @NotNull List<MultiblockAbility<?>> getAbilities() {
         return Arrays.asList(MultiblockAbility.IMPORT_ITEMS, MultiblockAbility.IMPORT_FLUIDS);

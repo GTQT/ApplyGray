@@ -42,4 +42,10 @@ public interface BuildingAdapter {
 
     /** Prepares an atomic source/target move operation. */
     PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target);
+
+    /** Prepares a move whose target will be removed by the surrounding transaction before this change is applied. */
+    default PreparedBlockChange prepareMoveAfterTargetRemoval(BuildingContext context, BlockPos source,
+                                                              BlockPos target) {
+        return prepareMove(context, source, target);
+    }
 }

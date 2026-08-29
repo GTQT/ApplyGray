@@ -2,9 +2,14 @@ package applygray.mattermanipulator.building;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.StringJoiner;
 
+import applygray.ApplyGrayMod;
+import applygray.mattermanipulator.inventory.ResourceRequirements;
 import applygray.mattermanipulator.state.ManipulatorTransform;
 
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
 
 /** Ordered target-adapter registry. Specialised GT and AE2 adapters are registered before the vanilla fallback. */
@@ -26,8 +31,36 @@ public final class BuildingAdapterRegistry {
         Objects.requireNonNull(position, "position");
         Objects.requireNonNull(specification, "specification");
 
+        if (specification.isAir()) {
+            BuildingAdapter targetAdapter = captureAdapter(context, position);
+            if (targetAdapter != null) return targetAdapter.prepareRemove(context, position);
+        }
+
         for (BuildingAdapter adapter : adapters) {
             if (adapter.supports(context, position, specification)) {
+                if (adapter instanceof VanillaBuildingAdapter vanilla) {
+                    BuildingAdapter targetAdapter = captureAdapter(context, position);
+                    if (targetAdapter != null) {
+                        PreparedBlockChange removal = targetAdapter.prepareRemove(context, position);
+                        PreparedBlockChange placement = vanilla.prepareApplyAfterTileRemoval(context, position,
+                                specification);
+                        return new SpecializedTargetReplacement(position, removal, placement);
+                    }
+                    TileEntity targetTile = context.world().getTileEntity(position);
+                    if (targetTile != null || context.world().getBlockState(position).getBlock().hasTileEntity(
+                            context.world().getBlockState(position))) {
+                        StringJoiner matches = new StringJoiner(", ");
+                        for (BuildingAdapter candidate : adapters) {
+                            if (candidate instanceof VanillaBuildingAdapter) continue;
+                            matches.add(candidate.id() + "=" + candidate.supportsCapture(context, position));
+                        }
+                        ApplyGrayMod.LOGGER.warn("Matter Manipulator target adapter miss at {}: tileClass={}, "
+                                        + "block={}, candidates=[{}], selectedMaterial={}",
+                                position, targetTile == null ? "<null>" : targetTile.getClass().getName(),
+                                context.world().getBlockState(position).getBlock().getRegistryName(), matches,
+                                specification.sortKey());
+                    }
+                }
                 return adapter.prepareApply(context, position, specification);
             }
         }
@@ -77,6 +110,18 @@ public final class BuildingAdapterRegistry {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
 
+        // Resolve a live specialized source first so a failed move reports the source adapter's actual constraint
+        // instead of falling through to VanillaBuildingAdapter and producing a misleading TileEntity rejection.
+        for (BuildingAdapter adapter : adapters) {
+            if (!(adapter instanceof VanillaBuildingAdapter) && adapter.supportsCapture(context, source)) {
+                if (!isAir(context, target)) {
+                    PreparedBlockChange targetRemoval = prepareRemove(context, target);
+                    PreparedBlockChange sourceMove = adapter.prepareMoveAfterTargetRemoval(context, source, target);
+                    return new TargetClearingMoveChange(source, target, targetRemoval, sourceMove);
+                }
+                return adapter.prepareMove(context, source, target);
+            }
+        }
         for (BuildingAdapter adapter : adapters) {
             if (adapter.supportsMove(context, source, target)) return adapter.prepareMove(context, source, target);
         }
@@ -84,10 +129,134 @@ public final class BuildingAdapterRegistry {
                 "No target building adapter can move this block");
     }
 
+    private static boolean isAir(BuildingContext context, BlockPos position) {
+        IBlockState state = context.world().getBlockState(position);
+        return state.getBlock().isAir(state, context.world(), position);
+    }
+
     private BuildingAdapter adapterFor(CapturedBlock captured) {
         for (BuildingAdapter adapter : adapters) {
             if (adapter.id().equals(captured.adapterId())) return adapter;
         }
         throw new IllegalArgumentException("The captured block references an unavailable adapter: " + captured.adapterId());
+    }
+
+    private BuildingAdapter captureAdapter(BuildingContext context, BlockPos position) {
+        for (BuildingAdapter adapter : adapters) {
+            if (!(adapter instanceof VanillaBuildingAdapter) && adapter.supportsCapture(context, position)) return adapter;
+        }
+        return null;
+    }
+
+    private static final class SpecializedTargetReplacement implements PreparedBlockChange {
+        private final BlockPos position;
+        private final PreparedBlockChange removal;
+        private final PreparedBlockChange placement;
+
+        private SpecializedTargetReplacement(BlockPos position, PreparedBlockChange removal,
+                                             PreparedBlockChange placement) {
+            this.position = position;
+            this.removal = removal;
+            this.placement = placement;
+        }
+
+        @Override
+        public BlockPos position() {
+            return position;
+        }
+
+        @Override
+        public BlockSpec materialCost() {
+            return placement.materialCost();
+        }
+
+        @Override
+        public ResourceRequirements requiredResources() {
+            return ResourceRequirements.combine(removal.requiredResources(), placement.requiredResources());
+        }
+
+        @Override
+        public ResourceRequirements producedResources() {
+            return ResourceRequirements.combine(removal.producedResources(), placement.producedResources());
+        }
+
+        @Override
+        public long energyCost() {
+            return Math.addExact(removal.energyCost(), placement.energyCost());
+        }
+
+        @Override
+        public boolean changesWorld() {
+            return removal.changesWorld() || placement.changesWorld();
+        }
+
+        @Override
+        public void apply() {
+            removal.apply();
+            placement.apply();
+        }
+
+        @Override
+        public void rollback() {
+            placement.rollback();
+            removal.rollback();
+        }
+    }
+
+    private static final class TargetClearingMoveChange implements PreparedBlockChange {
+        private final BlockPos source;
+        private final BlockPos target;
+        private final PreparedBlockChange targetRemoval;
+        private final PreparedBlockChange sourceMove;
+
+        private TargetClearingMoveChange(BlockPos source, BlockPos target, PreparedBlockChange targetRemoval,
+                                         PreparedBlockChange sourceMove) {
+            this.source = source;
+            this.target = target;
+            this.targetRemoval = targetRemoval;
+            this.sourceMove = sourceMove;
+        }
+
+        @Override
+        public BlockPos position() {
+            return source;
+        }
+
+        @Override
+        public BlockSpec materialCost() {
+            return BlockSpec.air();
+        }
+
+        @Override
+        public ResourceRequirements requiredResources() {
+            return ResourceRequirements.combine(targetRemoval.requiredResources(), sourceMove.requiredResources());
+        }
+
+        @Override
+        public ResourceRequirements producedResources() {
+            return ResourceRequirements.combine(targetRemoval.producedResources(), sourceMove.producedResources());
+        }
+
+        @Override
+        public long energyCost() {
+            return Math.addExact(targetRemoval.energyCost(), sourceMove.energyCost());
+        }
+
+        @Override
+        public boolean changesWorld() {
+            return targetRemoval.changesWorld() || sourceMove.changesWorld();
+        }
+
+        @Override
+        public void apply() {
+            targetRemoval.apply();
+            sourceMove.apply();
+        }
+
+        @Override
+        public void rollback() {
+            sourceMove.rollback();
+            targetRemoval.rollback();
+        }
     }
 }

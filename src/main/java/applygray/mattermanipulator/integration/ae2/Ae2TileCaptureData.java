@@ -28,6 +28,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     private final EnumFacing forward;
     private final EnumFacing up;
     private final List<Ae2BusCaptureData.InventoryStack> inventory;
+    private final List<Ae2BusCaptureData.InventoryStack> viewCells;
     private final List<Ae2BusCaptureData.InventoryStack> upgrades;
     private final List<Ae2BusCaptureData.InventoryStack> patterns;
     private final List<ResourceRequirement> configuredItems;
@@ -40,6 +41,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     public Ae2TileCaptureData(ItemStack placementStack, List<ItemStack> blockDrops, List<ItemStack> additionalDrops,
                               NBTTagCompound settings, EnumFacing forward, EnumFacing up,
                               List<Ae2BusCaptureData.InventoryStack> inventory,
+                              List<Ae2BusCaptureData.InventoryStack> viewCells,
                               List<Ae2BusCaptureData.InventoryStack> upgrades,
                               List<Ae2BusCaptureData.InventoryStack> patterns,
                               List<ResourceRequirement> configuredItems,
@@ -53,6 +55,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
         this.forward = forward;
         this.up = up;
         this.inventory = copyInventory(inventory);
+        this.viewCells = copyInventory(viewCells);
         this.upgrades = copyInventory(upgrades);
         this.patterns = copyInventory(patterns);
         this.configuredItems = List.copyOf(configuredItems);
@@ -72,7 +75,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     public static Ae2TileCaptureData forMaterial(ItemStack material) {
         ItemStack stack = checkedStack(material);
         return new Ae2TileCaptureData(stack, List.of(stack), List.of(), new NBTTagCompound(), null, null, List.of(),
-                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), 0.0D, false);
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), 0.0D, false);
     }
 
     public BlockSpec primaryMaterial() {
@@ -83,6 +86,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
         List<ResourceRequirement> itemRequirements = new ArrayList<>();
         itemRequirements.add(new ResourceRequirement(primaryMaterial(), 1L));
         addInventoryRequirements(itemRequirements, inventory);
+        addInventoryRequirements(itemRequirements, viewCells);
         addInventoryRequirements(itemRequirements, upgrades);
         addInventoryRequirements(itemRequirements, patterns);
         for (GenericInventoryStack stack : genericInventory) {
@@ -100,9 +104,11 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     }
 
     public ResourceRequirements producedResources() {
-        List<ItemStack> outputs = new ArrayList<>(blockDrops.size() + inventory.size() + upgrades.size() + patterns.size());
+        List<ItemStack> outputs = new ArrayList<>(
+                blockDrops.size() + inventory.size() + viewCells.size() + upgrades.size() + patterns.size());
         outputs.addAll(copyStacks(blockDrops));
         outputs.addAll(stacksFrom(inventory));
+        outputs.addAll(stacksFrom(viewCells));
         outputs.addAll(stacksFrom(upgrades));
         outputs.addAll(stacksFrom(patterns));
         for (GenericInventoryStack stack : genericInventory) {
@@ -143,7 +149,8 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
         }
         return new Ae2TileCaptureData(placementStack, blockDrops, additionalDrops, transformedSettings,
                 forward == null ? null : transform.apply(forward), up == null ? null : transform.apply(up), inventory,
-                upgrades, patterns, configuredItems, configuredFluids, genericInventory, storedFluids, storedEnergy,
+                viewCells, upgrades, patterns, configuredItems, configuredFluids, genericInventory, storedFluids,
+                storedEnergy,
                 patternProvider);
     }
 
@@ -175,6 +182,10 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
         return copyInventory(inventory);
     }
 
+    public List<Ae2BusCaptureData.InventoryStack> viewCells() {
+        return copyInventory(viewCells);
+    }
+
     public List<Ae2BusCaptureData.InventoryStack> upgrades() {
         return copyInventory(upgrades);
     }
@@ -200,7 +211,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     }
 
     public int componentCount() {
-        return 1 + inventory.size() + upgrades.size() + patterns.size() + genericInventory.size() +
+        return 1 + inventory.size() + viewCells.size() + upgrades.size() + patterns.size() + genericInventory.size() +
                 storedFluids.size() + configuredItems.size() + configuredFluids.size();
     }
 
@@ -331,7 +342,8 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
                 ItemStack.areItemStacksEqual(placementStack, data.placementStack) &&
                 sameStacks(blockDrops, data.blockDrops) && sameStacks(additionalDrops, data.additionalDrops) &&
                 Objects.equals(settings, data.settings) && forward == data.forward && up == data.up &&
-                inventory.equals(data.inventory) && upgrades.equals(data.upgrades) && patterns.equals(data.patterns) &&
+                inventory.equals(data.inventory) && viewCells.equals(data.viewCells) && upgrades.equals(data.upgrades) &&
+                patterns.equals(data.patterns) &&
                 configuredItems.equals(data.configuredItems) && configuredFluids.equals(data.configuredFluids) &&
                 genericInventory.equals(data.genericInventory) && sameFluids(storedFluids, data.storedFluids) &&
                 Double.compare(storedEnergy, data.storedEnergy) == 0 && patternProvider == data.patternProvider;
@@ -341,7 +353,7 @@ public final class Ae2TileCaptureData implements CapturedBlockData {
     public int hashCode() {
         return Objects.hash(placementStack.getItem().getRegistryName(), placementStack.getMetadata(),
                 placementStack.getTagCompound(), stackHash(blockDrops), stackHash(additionalDrops), settings, forward,
-                up, inventory, upgrades, patterns, configuredItems, configuredFluids, genericInventory,
+                up, inventory, viewCells, upgrades, patterns, configuredItems, configuredFluids, genericInventory,
                 fluidHash(storedFluids), storedEnergy, patternProvider);
     }
 

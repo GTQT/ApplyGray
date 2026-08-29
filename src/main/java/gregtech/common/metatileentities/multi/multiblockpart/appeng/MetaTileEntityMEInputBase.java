@@ -487,4 +487,19 @@ public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostable
         }
     }
 
+    /** Portable configuration boundary used by integrations that relocate this ME hatch/bus. */
+    public final NBTTagCompound applygray$exportPortableConfiguration() {
+        NBTTagCompound tag = writeConfigToTag();
+        tag.setBoolean(WORKING_TAG, workingEnabled);
+        tag.setBoolean("PreciseMode", preciseMode);
+        return tag;
+    }
+
+    /** Restores only the user-facing ME configuration, never live network stock. */
+    public final void applygray$importPortableConfiguration(NBTTagCompound tag) {
+        readConfigFromTag(tag);
+        if (tag.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) workingEnabled = tag.getBoolean(WORKING_TAG);
+        if (tag.hasKey("PreciseMode", Constants.NBT.TAG_BYTE)) preciseMode = tag.getBoolean("PreciseMode");
+    }
+
 }

@@ -76,6 +76,16 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
                 dropsFor(context, position, originalState));
     }
 
+    /** Prepares the ordinary block half of a replacement after a specialized TileEntity has been removed. */
+    PreparedBlockChange prepareApplyAfterTileRemoval(BuildingContext context, BlockPos position,
+                                                     BlockSpec specification) {
+        if (specification.isAir()) return new NoOpBlockChange(position);
+        IBlockState originalState = Blocks.AIR.getDefaultState();
+        IBlockState targetState = stateForOrThrow(specification, position);
+        return new VanillaPlacementChange(context, position, originalState, targetState, specification,
+                ResourceRequirements.empty());
+    }
+
     @Override
     public PreparedBlockChange prepareRemove(BuildingContext context, BlockPos position) {
         IBlockState originalState = validatePosition(context, position);

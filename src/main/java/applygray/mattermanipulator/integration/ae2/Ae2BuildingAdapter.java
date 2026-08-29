@@ -143,6 +143,17 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
 
     @Override
     public PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target) {
+        return prepareMove(context, source, target, false);
+    }
+
+    @Override
+    public PreparedBlockChange prepareMoveAfterTargetRemoval(BuildingContext context, BlockPos source,
+                                                              BlockPos target) {
+        return prepareMove(context, source, target, true);
+    }
+
+    private PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target,
+                                            boolean targetPrecleared) {
         if (source.equals(target)) {
             throw new BuildingException(BuildingException.Reason.OVERLAPPING_MOVE, source,
                     "A move source and target cannot be the same block");
@@ -153,7 +164,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, source,
                     "The move source is not an AE2 cable bus");
         }
-        if (!isAir(context, target, targetState)) {
+        if (!targetPrecleared && !isAir(context, target, targetState)) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, target,
                     "Moving an AE2 cable bus currently requires an empty destination");
         }
@@ -162,7 +173,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
                     "An entity blocks the AE2 cable bus destination");
         }
         return new Ae2MoveChange(context, source, target, sourceState, targetState,
-                captureBus(context, source, false, CapturePurpose.MOVE));
+                captureBus(context, source, false, CapturePurpose.MOVE), targetPrecleared);
     }
 
     private static PreparedBlockChange preparePlacement(BuildingContext context, BlockPos position,
@@ -722,17 +733,19 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         private final IBlockState sourceState;
         private final IBlockState targetState;
         private final Ae2BusCaptureData data;
+        private final boolean targetPrecleared;
         private BlockSnapshot sourceSnapshot;
         private BlockSnapshot targetSnapshot;
 
         private Ae2MoveChange(BuildingContext context, BlockPos source, BlockPos target, IBlockState sourceState,
-                              IBlockState targetState, Ae2BusCaptureData data) {
+                              IBlockState targetState, Ae2BusCaptureData data, boolean targetPrecleared) {
             this.context = context;
             this.source = source;
             this.target = target;
             this.sourceState = sourceState;
             this.targetState = targetState;
             this.data = data;
+            this.targetPrecleared = targetPrecleared;
         }
 
         @Override
@@ -759,7 +772,11 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         @Override
         public void apply() {
             verifyState(source, sourceState);
-            verifyState(target, targetState);
+            if (targetPrecleared) {
+                verifyState(target, Blocks.AIR.getDefaultState());
+            } else {
+                verifyState(target, targetState);
+            }
             if (!data.equals(captureBus(context, source, false, CapturePurpose.MOVE))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
                         "The source AE2 cable bus changed after the move was prepared");

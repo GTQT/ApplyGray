@@ -40,6 +40,7 @@ import gregtech.api.cover.CoverableView;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;
 import gregtech.api.metatileentity.SimpleMachineMetaTileEntity;
+import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.mattermanipulator.ISmartCopyLinkable;
 import gregtech.api.mattermanipulator.SmartCopyLink;
 import gregtech.api.pipenet.block.BlockPipe;
@@ -57,6 +58,8 @@ import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityItemB
 import gregtech.common.pipelike.fluidpipe.tile.TileEntityFluidPipeTickable;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEInputBase;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEDualInputHatch;
 import gregtech.common.metatileentities.storage.MetaTileEntityBuffer;
 import gregtech.common.metatileentities.storage.MetaTileEntityDrum;
 import gregtech.common.metatileentities.storage.MetaTileEntityLongDistanceEndpoint;
@@ -166,6 +169,17 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
     @Override
     public PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target) {
+        return prepareMove(context, source, target, false);
+    }
+
+    @Override
+    public PreparedBlockChange prepareMoveAfterTargetRemoval(BuildingContext context, BlockPos source,
+                                                              BlockPos target) {
+        return prepareMove(context, source, target, true);
+    }
+
+    private PreparedBlockChange prepareMove(BuildingContext context, BlockPos source, BlockPos target,
+                                            boolean targetPrecleared) {
         if (source.equals(target)) {
             throw new BuildingException(BuildingException.Reason.OVERLAPPING_MOVE, source,
                     "A move source and target cannot be the same block");
@@ -173,7 +187,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         IBlockState sourceState = validateEditable(context, source);
         IBlockState targetState = validateEditable(context, target);
         PortableData data = requirePortableData(context, source, false, true);
-        if (!isAir(context, target, targetState)) {
+        if (!targetPrecleared && !isAir(context, target, targetState)) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, target,
                     "Moving a GregTech block currently requires an empty destination");
         }
@@ -181,7 +195,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, target,
                     "An entity blocks the GregTech destination");
         }
-        return new GregTechMoveChange(context, source, target, sourceState, targetState, data);
+        return new GregTechMoveChange(context, source, target, sourceState, targetState, data, targetPrecleared);
     }
 
     private static PreparedBlockChange preparePlacement(BuildingContext context, BlockPos position, PortableData data) {
@@ -379,6 +393,23 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                 mte.isValidFrontFacing(data.frontFacing())) {
             mte.setFrontFacing(data.frontFacing());
         }
+        if (data.upwardsFacing() != null) {
+            if (!(mte instanceof MultiblockControllerBase controller) || !controller.allowsExtendedFacing()) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The placed GregTech machine cannot restore its upwards facing");
+            }
+            controller.setUpwardsFacing(data.upwardsFacing());
+        }
+        if (data.frontFacing() != null && mte.getFrontFacing() != data.frontFacing()) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "The placed GregTech machine did not retain its front facing");
+        }
+        if (data.upwardsFacing() != null &&
+                (!(mte instanceof MultiblockControllerBase controller) ||
+                        controller.getUpwardsFacing() != data.upwardsFacing())) {
+            throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                    "The placed GregTech machine did not retain its upwards facing");
+        }
         if (data.paintingColor() != mte.getPaintingColor()) mte.setPaintingColor(data.paintingColor());
         if (data.configuration() != null) data.configuration().apply(mte);
         installGhostCircuit(mte, data.ghostCircuit());
@@ -552,6 +583,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final ItemStack placementStack;
         private final BlockSpec inputMaterial;
         private final EnumFacing frontFacing;
+        private final EnumFacing upwardsFacing;
         private final int paintingColor;
         private final SmartCopyLink smartCopyLink;
         private final BlockPos proxyMaster;
@@ -560,13 +592,15 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final MteConfiguration configuration;
         private final ResourceRequirements liveContents;
 
-        private MteData(ItemStack placementStack, BlockSpec inputMaterial, EnumFacing frontFacing, int paintingColor,
-                                       SmartCopyLink smartCopyLink, BlockPos proxyMaster, List<CoverState> covers,
+        private MteData(ItemStack placementStack, BlockSpec inputMaterial, EnumFacing frontFacing,
+                        EnumFacing upwardsFacing, int paintingColor,
+                       SmartCopyLink smartCopyLink, BlockPos proxyMaster, List<CoverState> covers,
                         ItemStack ghostCircuit, MteConfiguration configuration,
                         ResourceRequirements liveContents) {
             this.placementStack = checkedStack(placementStack);
             this.inputMaterial = Objects.requireNonNull(inputMaterial, "inputMaterial");
             this.frontFacing = frontFacing;
+            this.upwardsFacing = upwardsFacing;
             this.paintingColor = paintingColor;
             this.smartCopyLink = smartCopyLink;
             this.proxyMaster = proxyMaster;
@@ -577,7 +611,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         }
 
         private static MteData forMaterial(ItemStack material) {
-            return new MteData(material, BlockSpec.of(material), null, -1, null, null, List.of(), ItemStack.EMPTY,
+            return new MteData(material, BlockSpec.of(material), null, null, -1, null, null, List.of(), ItemStack.EMPTY,
                     null, ResourceRequirements.empty());
         }
 
@@ -595,7 +629,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                             "GregTech CRIB proxy is not registered");
                 }
                 return new MteData(proxyStack, bare(proxyStack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), null, position.toImmutable(), covers, ghostCircuit,
+                        upwardsFacing(mte), mte.getPaintingColor(), null, position.toImmutable(), covers, ghostCircuit,
                         MteConfiguration.capture(mte), clearContents ? captureLiveContents(mte) : ResourceRequirements.empty());
             }
             if (smartCopySource && mte instanceof ISmartCopyLinkable linkable) {
@@ -603,7 +637,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                         () -> new SmartCopyLink(context.world().provider.getDimension(), position));
                 ItemStack stack = mte.getStackForm();
                 return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), source, null, covers, ghostCircuit, MteConfiguration.capture(mte),
+                        upwardsFacing(mte), mte.getPaintingColor(), source, null, covers, ghostCircuit,
+                        MteConfiguration.capture(mte),
                         ResourceRequirements.empty());
             }
             validateMtePortable(context, position, mte, clearContents);
@@ -613,8 +648,14 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             if (!itemData.isEmpty()) stack.setTagCompound(itemData);
             if (holder.hasCustomName()) stack.setStackDisplayName(holder.getName());
             return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                    mte.getPaintingColor(), null, null, covers, ghostCircuit, MteConfiguration.capture(mte),
+                    upwardsFacing(mte), mte.getPaintingColor(), null, null, covers, ghostCircuit,
+                    MteConfiguration.capture(mte),
                     clearContents ? captureLiveContents(mte) : ResourceRequirements.empty());
+        }
+
+        private static EnumFacing upwardsFacing(MetaTileEntity mte) {
+            return mte instanceof MultiblockControllerBase controller && controller.allowsExtendedFacing()
+                    ? controller.getUpwardsFacing() : null;
         }
 
         private static void validateMtePortable(BuildingContext context, BlockPos position, MetaTileEntity mte,
@@ -709,8 +750,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public MteData transformed(ManipulatorTransform transform) {
             EnumFacing transformed = frontFacing == null ? null : transform.apply(frontFacing);
+            EnumFacing transformedUpwards = upwardsFacing == null ? null : transform.apply(upwardsFacing);
             List<CoverState> transformedCovers = covers.stream().map(cover -> cover.transformed(transform)).toList();
-            return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink, proxyMaster,
+            return new MteData(placementStack, inputMaterial, transformed, transformedUpwards, paintingColor,
+                    smartCopyLink, proxyMaster,
                     transformedCovers, ghostCircuit, configuration == null ? null : configuration.transformed(transform),
                     liveContents);
         }
@@ -721,6 +764,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
         private EnumFacing frontFacing() {
             return frontFacing;
+        }
+
+        private EnumFacing upwardsFacing() {
+            return upwardsFacing;
         }
 
         private int paintingColor() {
@@ -750,6 +797,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public boolean equals(Object other) {
             return other instanceof MteData data && frontFacing == data.frontFacing &&
+                    upwardsFacing == data.upwardsFacing &&
                     paintingColor == data.paintingColor && Objects.equals(smartCopyLink, data.smartCopyLink) &&
                     Objects.equals(proxyMaster, data.proxyMaster) &&
                     Objects.equals(covers, data.covers) &&
@@ -760,7 +808,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
         @Override
         public int hashCode() {
-            return Objects.hash(frontFacing, paintingColor, placementStack.getItem().getRegistryName(),
+            return Objects.hash(frontFacing, upwardsFacing, paintingColor, placementStack.getItem().getRegistryName(),
                     placementStack.getMetadata(), placementStack.getTagCompound(), smartCopyLink, proxyMaster, covers,
                     ghostCircuit.getItem().getRegistryName(), ghostCircuit.getMetadata(), ghostCircuit.getTagCompound(),
                     configuration);
@@ -783,6 +831,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final Boolean energyLackWarning;
         private final Integer recipeMapIndex;
         private final IOType longDistanceIoType;
+        private final NBTTagCompound meConfiguration;
 
         private MteConfiguration(boolean muffled, Boolean workingEnabled,
                                  SimpleMachineConfiguration simpleMachine,
@@ -790,7 +839,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                                  ItemBusFilterConfiguration itemBusFilter,
                                  FluidHatchConfiguration fluidHatch, BufferConfiguration buffer,
                                  Boolean drumAutoOutput, Boolean batchEnabled, Boolean distinct,
-                                 Boolean energyLackWarning, Integer recipeMapIndex, IOType longDistanceIoType) {
+                                 Boolean energyLackWarning, Integer recipeMapIndex, IOType longDistanceIoType,
+                                 NBTTagCompound meConfiguration) {
             this.muffled = muffled;
             this.workingEnabled = workingEnabled;
             this.simpleMachine = simpleMachine;
@@ -804,6 +854,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             this.energyLackWarning = energyLackWarning;
             this.recipeMapIndex = recipeMapIndex;
             this.longDistanceIoType = longDistanceIoType;
+            this.meConfiguration = meConfiguration == null ? null : meConfiguration.copy();
         }
 
         private static MteConfiguration capture(MetaTileEntity mte) {
@@ -833,9 +884,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             }
             Integer recipeMapIndex = mte instanceof IMultipleRecipeMaps maps ? maps.getRecipeMapIndex() : null;
             IOType ioType = mte instanceof MetaTileEntityLongDistanceEndpoint endpoint ? endpoint.getIoType() : null;
+            NBTTagCompound meConfiguration = meConfiguration(mte);
             return new MteConfiguration(mte.isMuffled(), workingEnabled, simpleMachine, itemHandling, itemBusFilter,
                     fluidHatch, buffer, drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex,
-                    ioType);
+                    ioType, meConfiguration);
         }
 
         private void apply(MetaTileEntity mte) {
@@ -916,17 +968,35 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                     incompatible(mte, "long-distance endpoint mode");
                 }
             }
+            if (meConfiguration != null) {
+                if (mte instanceof MetaTileEntityMEInputBase me) {
+                    me.applygray$importPortableConfiguration(meConfiguration.copy());
+                } else if (mte instanceof MetaTileEntityMEDualInputHatch dual) {
+                    dual.applygray$importPortableConfiguration(meConfiguration.copy());
+                } else {
+                    incompatible(mte, "ME configuration");
+                }
+            }
         }
 
         private MteConfiguration transformed(ManipulatorTransform transform) {
             return new MteConfiguration(muffled, workingEnabled,
                     simpleMachine == null ? null : simpleMachine.transformed(transform), itemHandling, itemBusFilter,
                     fluidHatch, buffer == null ? null : buffer.transformed(transform), drumAutoOutput, batchEnabled,
-                    distinct, energyLackWarning, recipeMapIndex, longDistanceIoType);
+                    distinct, energyLackWarning, recipeMapIndex, longDistanceIoType,
+                    meConfiguration == null ? null : meConfiguration.copy());
         }
 
         private List<ItemStack> storedStacks() {
             return itemBusFilter == null ? List.of() : itemBusFilter.storedStacks();
+        }
+
+        private static NBTTagCompound meConfiguration(MetaTileEntity mte) {
+            if (mte instanceof MetaTileEntityMEInputBase me) return me.applygray$exportPortableConfiguration();
+            if (mte instanceof MetaTileEntityMEDualInputHatch dual) {
+                return dual.applygray$exportPortableConfiguration();
+            }
+            return null;
         }
 
         private static IControllable controllable(MetaTileEntity mte) {
@@ -951,13 +1021,15 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                     Objects.equals(batchEnabled, config.batchEnabled) && Objects.equals(distinct, config.distinct) &&
                     Objects.equals(energyLackWarning, config.energyLackWarning) &&
                     Objects.equals(recipeMapIndex, config.recipeMapIndex) &&
-                    longDistanceIoType == config.longDistanceIoType;
+                    longDistanceIoType == config.longDistanceIoType &&
+                    Objects.equals(meConfiguration, config.meConfiguration);
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(muffled, workingEnabled, simpleMachine, itemHandling, itemBusFilter, fluidHatch, buffer,
-                    drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex, longDistanceIoType);
+                    drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex, longDistanceIoType,
+                    meConfiguration);
         }
     }
 
@@ -1513,17 +1585,19 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final IBlockState sourceState;
         private final IBlockState targetState;
         private final PortableData data;
+        private final boolean targetPrecleared;
         private BlockSnapshot sourceSnapshot;
         private BlockSnapshot targetSnapshot;
 
         private GregTechMoveChange(BuildingContext context, BlockPos source, BlockPos target, IBlockState sourceState,
-                                   IBlockState targetState, PortableData data) {
+                                   IBlockState targetState, PortableData data, boolean targetPrecleared) {
             this.context = context;
             this.source = source;
             this.target = target;
             this.sourceState = sourceState;
             this.targetState = targetState;
             this.data = data;
+            this.targetPrecleared = targetPrecleared;
         }
 
         @Override
@@ -1555,7 +1629,11 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public void apply() {
             verifyState(source, sourceState);
-            verifyState(target, targetState);
+            if (targetPrecleared) {
+                verifyState(target, Blocks.AIR.getDefaultState());
+            } else {
+                verifyState(target, targetState);
+            }
             if (!data.equals(requirePortableData(context, source, false))) {
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
                         "The GregTech source changed after the move was prepared");

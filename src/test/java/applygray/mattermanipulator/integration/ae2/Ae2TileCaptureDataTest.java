@@ -122,8 +122,9 @@ class Ae2TileCaptureDataTest {
                                            List<FluidStack> storedFluids, double storedEnergy,
                                            boolean patternProvider) {
         ItemStack block = new ItemStack(Blocks.STONE);
-        return new Ae2TileCaptureData(block, List.of(block), List.of(), settings, forward, up, inventory, upgrades,
-                patterns, configuredItems, configuredFluids, generic, storedFluids, storedEnergy, patternProvider);
+        return new Ae2TileCaptureData(block, List.of(block), List.of(), settings, forward, up, inventory, List.of(),
+                upgrades, patterns, configuredItems, configuredFluids, generic, storedFluids, storedEnergy,
+                patternProvider);
     }
 
     private static Fluid fluid(String name) {
