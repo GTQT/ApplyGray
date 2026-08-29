@@ -152,6 +152,27 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
 
     @Override
     public PreparedBlockChange prepareApply(BuildingContext context, BlockPos position, BlockSpec specification) {
+        return preparePlacement(context, position, dataForMaterial(context, position, specification), false);
+    }
+
+    @Override
+    public boolean absorbsTargetContents(BuildingContext context, BlockPos position) {
+        // A supported AE2 block entity surrenders its contents through this adapter's own placement.
+        return supportsCapture(context, position) || !BuildingAdapter.hasTileEntity(context, position);
+    }
+
+    @Override
+    public PreparedBlockChange prepareApplyAfterTargetRemoval(BuildingContext context, BlockPos position,
+                                                              BlockSpec specification) {
+        Ae2TileCaptureData data = dataForMaterial(context, position, specification);
+        validateEditable(context, position);
+        requireEmptyDestination(context, position);
+        return new PlacementChange(context, position, Blocks.AIR.getDefaultState(), TargetContents.empty(), data,
+                false);
+    }
+
+    private static Ae2TileCaptureData dataForMaterial(BuildingContext context, BlockPos position,
+                                                      BlockSpec specification) {
         Block block = blockFor(specification);
         if (!(block instanceof AEBaseTileBlock<?>)) {
             throw unsupported(position, "The selected material is not an AE2 block entity");
@@ -163,7 +184,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
             String name = prototype == null ? block.getRegistryName().toString() : prototype.getClass().getSimpleName();
             throw unsupported(position, "AE2 " + name + " has no lossless portable contract");
         }
-        return preparePlacement(context, position, Ae2TileCaptureData.forMaterial(specification.toStack()), false);
+        return Ae2TileCaptureData.forMaterial(specification.toStack());
     }
 
     @Override
@@ -244,11 +265,15 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         IBlockState originalState = validateEditable(context, position);
         TargetContents target = inspectTarget(context, position, originalState);
         requireReplacement(context, position, originalState);
+        requireEmptyDestination(context, position);
+        return new PlacementChange(context, position, originalState, target, data, verifyCapture);
+    }
+
+    private static void requireEmptyDestination(BuildingContext context, BlockPos position) {
         if (!context.world().checkNoEntityCollision(new AxisAlignedBB(position))) {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
                     "An entity blocks the AE2 block destination");
         }
-        return new PlacementChange(context, position, originalState, target, data, verifyCapture);
     }
 
     private static TargetContents inspectTarget(BuildingContext context, BlockPos position, IBlockState state) {

@@ -39,6 +39,8 @@ import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 
+import ae2.api.crafting.IPatternDetails;
+import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.api.networking.GridFlags;
 import ae2.api.networking.IGrid;
 import ae2.api.networking.IGridNode;
@@ -47,6 +49,7 @@ import ae2.api.networking.IManagedGridNode;
 import ae2.api.networking.crafting.CalculationStrategy;
 import ae2.api.networking.crafting.ICraftingLink;
 import ae2.api.networking.crafting.ICraftingPlan;
+import ae2.api.networking.crafting.ICraftingProvider;
 import ae2.api.networking.crafting.ICraftingRequester;
 import ae2.api.networking.crafting.ICraftingSubmitResult;
 import ae2.api.networking.security.IActionSource;
@@ -55,6 +58,9 @@ import ae2.api.networking.ticking.TickRateModulation;
 import ae2.api.networking.ticking.TickingRequest;
 import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
+import ae2.api.stacks.AmountFormat;
+import ae2.api.stacks.GenericStack;
+import ae2.api.stacks.KeyCounter;
 import ae2.api.storage.MEStorage;
 import ae2.api.storage.StorageHelper;
 import ae2.api.util.AECableType;
@@ -62,6 +68,7 @@ import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
 import codechicken.lib.vec.Matrix4;
+import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -70,18 +77,29 @@ import static gregtech.api.capability.GregtechDataCodes.UPDATE_ONLINE_STATUS;
 /** The AE2-facing multiblock part used exclusively by a Quantum Uplink controller. */
 public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultiblockPart implements
                                                    IMultiblockAbilityPart<MetaTileEntityQuantumUplinkHatch>,
-                                                   IAEManagedMetaTileEntity, ICraftingRequester, IGridTickable {
+                                                   IAEManagedMetaTileEntity, ICraftingRequester, ICraftingProvider,
+                                                   IGridTickable {
 
     private static final String EXTRA_CONNECTIONS_KEY = "ExtraConnections";
     private static final String CRAFTING_REQUESTS_KEY = "CraftingRequests";
+    private static final String PENDING_DELIVERIES_KEY = "PendingDeliveries";
+    private static final String NEXT_DISCRIMINATOR_KEY = "NextPlanDiscriminator";
     private static final int MAX_QUEUED_REQUESTS = 32;
     private static final int MAX_CRAFTING_TRANSITIONS_PER_TICK = 4;
+    /** One pattern push can never hand over more than its own input slots; the rest is read-back sanity. */
+    private static final int MAX_PENDING_DELIVERIES = 4 * UplinkPlanToken.MAX_PATTERN_INPUTS;
+    private static final int MAX_REPORTED_MISSING_MATERIALS = 8;
 
     @Nullable
     private IManagedGridNode mainNode;
     private ConnectionStatus connectionStatus = ConnectionStatus.DISCONNECTED;
     private boolean allowsExtraConnections;
     private final List<UplinkCraftingRequest> craftingRequests = new ArrayList<>();
+    /** Materials handed over by a pattern push, waiting to be put back into network storage. */
+    private final List<GenericStack> pendingDeliveries = new ArrayList<>();
+    private List<IPatternDetails> advertisedPatterns = List.of();
+    private boolean advertisedPatternsDirty = true;
+    private long nextDiscriminator;
 
     public MetaTileEntityQuantumUplinkHatch(ResourceLocation metaTileEntityId) {
         super(metaTileEntityId, GTValues.ZPM);
@@ -112,6 +130,7 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
                     .setExposedOnSides(getConnectableSides())
                     .setVisualRepresentation(getStackForm())
                     .addService(ICraftingRequester.class, this)
+                    .addService(ICraftingProvider.class, this)
                     .addService(IGridTickable.class, this);
         }
         return mainNode;
@@ -211,11 +230,13 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
     public NBTTagCompound writeToNBT(NBTTagCompound data) {
         super.writeToNBT(data);
         data.setBoolean(EXTRA_CONNECTIONS_KEY, allowsExtraConnections);
+        data.setLong(NEXT_DISCRIMINATOR_KEY, nextDiscriminator);
         NBTTagList serializedRequests = new NBTTagList();
         for (UplinkCraftingRequest request : craftingRequests) {
             serializedRequests.appendTag(request.writeToNbt());
         }
         data.setTag(CRAFTING_REQUESTS_KEY, serializedRequests);
+        data.setTag(PENDING_DELIVERIES_KEY, GenericStack.writeList(pendingDeliveries));
         return data;
     }
 
@@ -223,6 +244,7 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         allowsExtraConnections = data.getBoolean(EXTRA_CONNECTIONS_KEY);
+        nextDiscriminator = data.getLong(NEXT_DISCRIMINATOR_KEY);
         craftingRequests.clear();
         NBTTagList serializedRequests = data.getTagList(CRAFTING_REQUESTS_KEY,
                 net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND);
@@ -232,6 +254,15 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
                     this);
             if (request != null && !request.isTerminal()) craftingRequests.add(request);
         }
+
+        pendingDeliveries.clear();
+        for (GenericStack delivery : GenericStack.readList(data.getTagList(PENDING_DELIVERIES_KEY,
+                net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND))) {
+            if (delivery == null || delivery.amount() <= 0L) continue;
+            if (pendingDeliveries.size() >= MAX_PENDING_DELIVERIES) break;
+            pendingDeliveries.add(delivery);
+        }
+        invalidateAdvertisedPatterns();
     }
 
     @Override
@@ -328,13 +359,17 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
         }
 
         try {
-            UplinkCraftingRequest request = UplinkCraftingRequest.create(requesterId, requestName, requirements);
+            UplinkCraftingRequest request = UplinkCraftingRequest.create(requesterId, requestName, nextDiscriminator,
+                    requirements);
             craftingRequests.add(request);
+            nextDiscriminator++;
+            invalidateAdvertisedPatterns();
             markDirty();
             wakeCraftingQueue();
-            ApplyGrayMod.LOGGER.info("Queued Matter Manipulator uplink crafting request with {} item type(s) at {}",
-                    request.jobs().size(), getPos());
-            return UplinkCraftingRequestResult.accepted(request.jobs().size());
+            ApplyGrayMod.LOGGER.info("Advertised Matter Manipulator uplink plan '{}' as {} pattern(s) at {}",
+                    request.requestName(), request.plans().size(), getPos());
+            return UplinkCraftingRequestResult.accepted(requirements.entries().size() +
+                    requirements.fluidEntries().size());
         } catch (IllegalArgumentException exception) {
             return UplinkCraftingRequestResult.rejected(requirements.isEmpty()
                     ? UplinkCraftingRequestResult.Status.EMPTY
@@ -353,6 +388,7 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
             canceled++;
         }
         if (canceled > 0) {
+            invalidateAdvertisedPatterns();
             markDirty();
             wakeCraftingQueue();
         }
@@ -374,10 +410,8 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
         com.google.common.collect.ImmutableSet.Builder<ICraftingLink> links =
                 com.google.common.collect.ImmutableSet.builder();
         for (UplinkCraftingRequest request : craftingRequests) {
-            for (UplinkCraftingRequest.Job job : request.jobs()) {
-                if (job.state() == UplinkCraftingRequest.JobState.SUBMITTED && job.link() != null) {
-                    links.add(job.link());
-                }
+            for (UplinkCraftingRequest.Plan plan : request.plans()) {
+                if (plan.link() != null) links.add(plan.link());
             }
         }
         return links.build();
@@ -398,18 +432,20 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
     public void jobStateChange(ICraftingLink link) {
         boolean changed = false;
         for (UplinkCraftingRequest request : craftingRequests) {
-            for (UplinkCraftingRequest.Job job : request.jobs()) {
-                if (!job.matches(link)) continue;
-                if (link.isCanceled()) {
-                    job.fail();
-                } else if (link.isDone()) {
-                    job.complete();
+            for (UplinkCraftingRequest.Plan plan : request.plans()) {
+                if (!plan.matches(link)) continue;
+                if (link.isDone() || plan.state() == UplinkCraftingRequest.PlanState.DELIVERED) {
+                    plan.complete();
+                } else if (link.isCanceled()) {
+                    plan.awaitManual();
+                    notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.awaiting_manual",
+                            request.requestName());
                 }
                 changed = true;
             }
         }
         if (changed) {
-            finishTerminalRequests();
+            invalidateAdvertisedPatterns();
             markDirty();
             wakeCraftingQueue();
         }
@@ -417,20 +453,139 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
 
     @Override
     public @NotNull TickingRequest getTickingRequest(IGridNode node) {
-        return new TickingRequest(1, 20, craftingRequests.isEmpty());
+        return new TickingRequest(1, 20, isCraftingIdle());
     }
 
     @Override
     public @NotNull TickRateModulation tickingRequest(IGridNode node, int ticksSinceLastCall) {
         World world = getWorld();
         if (world == null || world.isRemote || !getMainNode().isActive()) return TickRateModulation.SLEEP;
-        if (craftingRequests.isEmpty()) return TickRateModulation.SLEEP;
+        if (isCraftingIdle()) return TickRateModulation.SLEEP;
 
-        boolean changed = advanceCraftingRequests(world);
-        finishTerminalRequests();
+        boolean changed = drainPendingDeliveries();
+        changed |= advanceCraftingRequests(world);
+        changed |= finishTerminalRequests();
+        if (advertisedPatternsDirty) ICraftingProvider.requestUpdate(getMainNode());
         if (changed) markDirty();
-        return craftingRequests.isEmpty() ? TickRateModulation.SLEEP
+        return isCraftingIdle() ? TickRateModulation.SLEEP
                 : changed ? TickRateModulation.URGENT : TickRateModulation.SLOWER;
+    }
+
+    private boolean isCraftingIdle() {
+        return craftingRequests.isEmpty() && pendingDeliveries.isEmpty();
+    }
+
+    /**
+     * Every plan that has not delivered its materials yet stays advertised, which is what makes it visible, searchable
+     * and manually craftable from any ME terminal.
+     */
+    @Override
+    public @NotNull List<IPatternDetails> getAvailablePatterns() {
+        World world = getWorld();
+        if (world == null || world.isRemote) return List.of();
+        if (!advertisedPatternsDirty) return advertisedPatterns;
+
+        List<IPatternDetails> patterns = new ArrayList<>();
+        for (UplinkCraftingRequest request : craftingRequests) {
+            for (UplinkCraftingRequest.Plan plan : request.plans()) {
+                if (plan.state() == UplinkCraftingRequest.PlanState.COMPLETE) continue;
+                IPatternDetails details = plan.details(world);
+                if (details != null) {
+                    patterns.add(details);
+                } else {
+                    ApplyGrayMod.LOGGER.warn("Could not decode Matter Manipulator uplink plan '{}' at {}",
+                            request.requestName(), getPos());
+                }
+            }
+        }
+        advertisedPatterns = List.copyOf(patterns);
+        advertisedPatternsDirty = false;
+        return advertisedPatterns;
+    }
+
+    /**
+     * A plan is a no-op recipe: AE2 gathers the planned materials, hands them over here, and they go straight back into
+     * network storage where the manipulator can spend them. The order token itself is never produced.
+     */
+    @Override
+    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder, int multiplier) {
+        World world = getWorld();
+        if (world == null || world.isRemote || isBusy()) return false;
+
+        UplinkCraftingRequest.Plan target = null;
+        for (UplinkCraftingRequest request : craftingRequests) {
+            UplinkCraftingRequest.Plan plan = request.findPlan(patternDetails);
+            if (plan != null && plan.state() != UplinkCraftingRequest.PlanState.COMPLETE) {
+                target = plan;
+                break;
+            }
+        }
+        if (target == null) return false;
+
+        for (KeyCounter counter : inputHolder) {
+            for (Object2LongMap.Entry<AEKey> input : counter) {
+                if (input.getLongValue() > 0L) {
+                    pendingDeliveries.add(new GenericStack(input.getKey(), input.getLongValue()));
+                }
+            }
+        }
+        // The link is wound down on the next tick instead of here, so AE2 is never re-entered mid-push.
+        target.deliver();
+        invalidateAdvertisedPatterns();
+        markDirty();
+        wakeCraftingQueue();
+        return true;
+    }
+
+    /** Plans are pushed one at a time so a single push never hands over more than one pattern's worth of materials. */
+    @Override
+    public boolean canMergePatternPush(IPatternDetails patternDetails) {
+        return false;
+    }
+
+    @Override
+    public int getMaxPatternPushMultiplier(IPatternDetails patternDetails, int maxMultiplier) {
+        return 1;
+    }
+
+    @Override
+    public boolean isBusy() {
+        return !pendingDeliveries.isEmpty();
+    }
+
+    @Override
+    public @NotNull PatternContainerGroup getTerminalGroup() {
+        return new PatternContainerGroup(AEItemKey.of(getStackForm()), new TextComponentTranslation(getMetaFullName()),
+                List.of());
+    }
+
+    private void invalidateAdvertisedPatterns() {
+        advertisedPatterns = List.of();
+        advertisedPatternsDirty = true;
+    }
+
+    /** Puts pushed materials back into network storage; anything that does not fit is retried next tick. */
+    private boolean drainPendingDeliveries() {
+        if (pendingDeliveries.isEmpty()) return false;
+        IGrid grid = getMainNode().getGrid();
+        if (grid == null) return false;
+
+        boolean changed = false;
+        java.util.ListIterator<GenericStack> iterator = pendingDeliveries.listIterator();
+        while (iterator.hasNext()) {
+            GenericStack delivery = iterator.next();
+            long inserted = StorageHelper.poweredInsert(grid.getEnergyService(),
+                    grid.getStorageService().getInventory(), delivery.what(), delivery.amount(), getActionSource(),
+                    ae2.api.config.Actionable.MODULATE);
+            if (inserted <= 0L) continue;
+            changed = true;
+            if (inserted >= delivery.amount()) {
+                iterator.remove();
+            } else {
+                iterator.set(new GenericStack(delivery.what(), delivery.amount() - inserted));
+            }
+        }
+        return changed;
     }
 
     private EnumSet<EnumFacing> getConnectableSides() {
@@ -448,9 +603,9 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
         boolean changed = false;
         int transitions = 0;
         for (UplinkCraftingRequest request : craftingRequests) {
-            for (UplinkCraftingRequest.Job job : request.jobs()) {
+            for (UplinkCraftingRequest.Plan plan : request.plans()) {
                 if (transitions >= MAX_CRAFTING_TRANSITIONS_PER_TICK) return changed;
-                if (advanceCraftingJob(grid, world, request, job)) {
+                if (advanceCraftingPlan(grid, world, request, plan)) {
                     changed = true;
                     transitions++;
                 }
@@ -459,111 +614,169 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
         return changed;
     }
 
-    private boolean advanceCraftingJob(IGrid grid, World world, UplinkCraftingRequest request,
-                                       UplinkCraftingRequest.Job job) {
-        return switch (job.state()) {
-            case QUEUED -> beginCraftingCalculation(grid, world, request, job);
-            case CALCULATING -> finishCraftingCalculation(grid, request, job);
-            case SUBMITTED -> updateSubmittedCraftingJob(job);
-            case COMPLETE, FAILED -> false;
+    private boolean advanceCraftingPlan(IGrid grid, World world, UplinkCraftingRequest request,
+                                        UplinkCraftingRequest.Plan plan) {
+        return switch (plan.state()) {
+            case PENDING -> beginCraftingCalculation(grid, world, request, plan);
+            case CALCULATING -> finishCraftingCalculation(grid, request, plan);
+            case SUBMITTED -> updateSubmittedPlan(request, plan);
+            case DELIVERED -> finishDeliveredPlan(request, plan);
+            case AWAITING_MANUAL, COMPLETE -> false;
         };
     }
 
+    /** Fires the single automatic attempt: request the plan's own order token so AE2 gathers its materials. */
     private boolean beginCraftingCalculation(IGrid grid, World world, UplinkCraftingRequest request,
-                                             UplinkCraftingRequest.Job job) {
-        AEItemKey key = AEItemKey.of(job.specification().toStack());
-        if (key == null) {
-            job.fail();
-            ApplyGrayMod.LOGGER.warn("Rejected invalid Matter Manipulator crafting item for request {} at {}",
+                                             UplinkCraftingRequest.Plan plan) {
+        AEItemKey token = AEItemKey.of(plan.token());
+        if (token == null) {
+            plan.awaitManual();
+            ApplyGrayMod.LOGGER.warn("Matter Manipulator uplink plan '{}' has an invalid order token at {}",
                     request.requestName(), getPos());
             return true;
         }
         Future<ICraftingPlan> calculation = grid.getCraftingService().beginCraftingCalculation(world,
-                this::getActionSource, key, job.amount(), CalculationStrategy.REPORT_MISSING_ITEMS);
+                this::getActionSource, token, 1L, CalculationStrategy.REPORT_MISSING_ITEMS);
         if (calculation == null) {
-            job.fail();
-            ApplyGrayMod.LOGGER.warn("AE2 did not start Matter Manipulator crafting request {} at {}",
-                    request.requestName(), getPos());
+            plan.awaitManual();
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.awaiting_manual",
+                    request.requestName());
             return true;
         }
-        job.beginCalculation(calculation);
+        plan.beginCalculation(calculation);
         return true;
     }
 
     private boolean finishCraftingCalculation(IGrid grid, UplinkCraftingRequest request,
-                                              UplinkCraftingRequest.Job job) {
-        Future<ICraftingPlan> calculation = job.calculation();
+                                              UplinkCraftingRequest.Plan plan) {
+        Future<ICraftingPlan> calculation = plan.calculation();
         if (calculation == null) {
-            job.fail();
+            plan.awaitManual();
             return true;
         }
         if (!calculation.isDone()) return false;
 
         try {
-            ICraftingPlan plan = calculation.get();
-            if (plan == null) {
-                job.fail();
+            ICraftingPlan craftingPlan = calculation.get();
+            if (craftingPlan == null) {
+                reportUnavailableMaterials(request, plan, null);
                 return true;
             }
-            ICraftingSubmitResult result = grid.getCraftingService().submitJob(plan, this, null, false,
+            if (craftingPlan.simulation() || !craftingPlan.missingItems().isEmpty()) {
+                reportUnavailableMaterials(request, plan, craftingPlan.missingItems());
+                return true;
+            }
+            ICraftingSubmitResult result = grid.getCraftingService().submitJob(craftingPlan, this, null, false,
                     getActionSource());
             if (!result.successful() || result.link() == null) {
-                job.fail();
-                ApplyGrayMod.LOGGER.warn("AE2 rejected Matter Manipulator crafting request {} at {}: {}",
+                reportUnavailableMaterials(request, plan, craftingPlan.missingItems());
+                ApplyGrayMod.LOGGER.warn("AE2 rejected Matter Manipulator uplink plan '{}' at {}: {}",
                         request.requestName(), getPos(), result.errorCode());
                 return true;
             }
-            job.submit(result.link());
+            plan.submit(result.link());
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.submitted",
+                    request.requestName());
             return true;
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            job.fail();
+            plan.awaitManual();
             return true;
         } catch (CancellationException | ExecutionException exception) {
-            job.fail();
-            ApplyGrayMod.LOGGER.warn("AE2 calculation failed for Matter Manipulator request {} at {}",
+            plan.awaitManual();
+            ApplyGrayMod.LOGGER.warn("AE2 calculation failed for Matter Manipulator uplink plan '{}' at {}",
                     request.requestName(), getPos(), exception);
             return true;
         }
     }
 
-    private static boolean updateSubmittedCraftingJob(UplinkCraftingRequest.Job job) {
-        ICraftingLink link = job.link();
+    /**
+     * Ends the single automatic attempt and tells the player what is missing. The pattern stays advertised, so the plan
+     * can be crafted by hand from an ME terminal once the network has the materials.
+     */
+    private void reportUnavailableMaterials(UplinkCraftingRequest request, UplinkCraftingRequest.Plan plan,
+                                            @Nullable KeyCounter missingItems) {
+        plan.awaitManual();
+        invalidateAdvertisedPatterns();
+        String missing = missingItems == null ? "" : describeMaterials(missingItems);
+        if (missing.isEmpty()) {
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.awaiting_manual",
+                    request.requestName());
+        } else {
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.missing",
+                    request.requestName(), missing);
+        }
+    }
+
+    private static String describeMaterials(KeyCounter materials) {
+        StringBuilder description = new StringBuilder();
+        int described = 0;
+        for (Object2LongMap.Entry<AEKey> material : materials) {
+            if (material.getLongValue() <= 0L) continue;
+            if (described >= MAX_REPORTED_MISSING_MATERIALS) {
+                description.append(", ...");
+                break;
+            }
+            if (described > 0) description.append(", ");
+            description.append(material.getKey().getDisplayName().getUnformattedText()).append(" x")
+                    .append(material.getKey().formatAmount(material.getLongValue(), AmountFormat.FULL));
+            described++;
+        }
+        return description.toString();
+    }
+
+    private boolean updateSubmittedPlan(UplinkCraftingRequest request, UplinkCraftingRequest.Plan plan) {
+        ICraftingLink link = plan.link();
         if (link == null || link.isCanceled()) {
-            job.fail();
+            plan.awaitManual();
+            invalidateAdvertisedPatterns();
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.awaiting_manual",
+                    request.requestName());
             return true;
         }
         if (link.isDone()) {
-            job.complete();
+            plan.complete();
+            invalidateAdvertisedPatterns();
             return true;
         }
         return false;
+    }
+
+    /** Winds down the automatic job of a plan whose materials have already been handed over. */
+    private boolean finishDeliveredPlan(UplinkCraftingRequest request, UplinkCraftingRequest.Plan plan) {
+        plan.complete();
+        invalidateAdvertisedPatterns();
+        ApplyGrayMod.LOGGER.info("Matter Manipulator uplink plan '{}' at {} delivered its materials",
+                request.requestName(), getPos());
+        return true;
     }
 
     private boolean ownsCraftingLink(ICraftingLink link) {
         return craftingRequests.stream().anyMatch(request -> request.owns(link));
     }
 
-    private void finishTerminalRequests() {
+    private boolean finishTerminalRequests() {
+        boolean changed = false;
         Iterator<UplinkCraftingRequest> iterator = craftingRequests.iterator();
         while (iterator.hasNext()) {
             UplinkCraftingRequest request = iterator.next();
             if (!request.isTerminal()) continue;
             iterator.remove();
-            notifyRequester(request);
-            ApplyGrayMod.LOGGER.info("Matter Manipulator uplink crafting request {} at {} {}", request.requestName(),
-                    getPos(), request.completedSuccessfully() ? "completed" : "failed");
+            changed = true;
+            notifyPlayer(request.requesterId(), "applygray.matter_manipulator.uplink.crafting.complete",
+                    request.requestName());
+            ApplyGrayMod.LOGGER.info("Matter Manipulator uplink plan '{}' at {} completed", request.requestName(),
+                    getPos());
         }
+        if (changed) invalidateAdvertisedPatterns();
+        return changed;
     }
 
-    private void notifyRequester(UplinkCraftingRequest request) {
+    private void notifyPlayer(UUID requesterId, String translationKey, Object... arguments) {
         World world = getWorld();
         if (world == null || world.getMinecraftServer() == null) return;
-        EntityPlayerMP player = world.getMinecraftServer().getPlayerList().getPlayerByUUID(request.requesterId());
-        if (player == null) return;
-        player.sendStatusMessage(new net.minecraft.util.text.TextComponentTranslation(
-                request.completedSuccessfully() ? "applygray.matter_manipulator.uplink.crafting.complete"
-                        : "applygray.matter_manipulator.uplink.crafting.failed"), true);
+        EntityPlayerMP player = world.getMinecraftServer().getPlayerList().getPlayerByUUID(requesterId);
+        if (player != null) player.sendMessage(new TextComponentTranslation(translationKey, arguments));
     }
 
     private void cancelCraftingRequests() {
@@ -571,6 +784,7 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
             request.cancel();
         }
         craftingRequests.clear();
+        invalidateAdvertisedPatterns();
     }
 
     private void wakeCraftingQueue() {

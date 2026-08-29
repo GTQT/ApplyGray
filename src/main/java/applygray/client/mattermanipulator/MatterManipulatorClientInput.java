@@ -79,7 +79,10 @@ public final class MatterManipulatorClientInput {
         Minecraft minecraft = Minecraft.getMinecraft();
         EnumHand hand = heldManipulator(minecraft.player);
         if (hand == null || minecraft.currentScreen != null) return;
-        MatterManipulatorNetwork.CHANNEL.sendToServer(new PickManipulatorBlockMessage(hand));
+        // Send the highlighted target along: the client highlight already went through every block's own collision
+        // shape, which is what tells an AE2 cable apart from the bus sharing its block.
+        MatterManipulatorNetwork.CHANNEL.sendToServer(new PickManipulatorBlockMessage(hand,
+                minecraft.objectMouseOver));
         event.setCanceled(true);
     }
 

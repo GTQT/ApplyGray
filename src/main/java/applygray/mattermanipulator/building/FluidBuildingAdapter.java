@@ -64,6 +64,23 @@ public final class FluidBuildingAdapter implements BuildingAdapter {
         return false;
     }
 
+    /** Prepares the fluid half of a replacement after the target's own adapter has removed it. */
+    @Override
+    public PreparedBlockChange prepareApplyAfterTargetRemoval(BuildingContext context, BlockPos position,
+                                                              BlockSpec specification) {
+        if (!specification.isFluid()) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                    "The selected material is not a fluid");
+        }
+        FluidStack fluid = specification.fluidStack();
+        if (!(fluid.getFluid().getBlock() instanceof IFluidBlock)) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                    "The selected fluid has no placeable Forge fluid block");
+        }
+        return new FluidPlacementChange(context, position, Blocks.AIR.getDefaultState(), specification, fluid,
+                ResourceRequirements.empty());
+    }
+
     @Override
     public CapturedBlock capture(BuildingContext context, BlockPos position) {
         throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,

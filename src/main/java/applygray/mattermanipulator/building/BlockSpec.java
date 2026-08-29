@@ -5,6 +5,7 @@ import java.util.Objects;
 import applygray.mattermanipulator.state.ManipulatorTransform;
 
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
 import net.minecraft.item.Item;
@@ -12,6 +13,9 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.block.properties.IProperty;
 import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.world.World;
 import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
@@ -78,6 +82,48 @@ public final class BlockSpec {
         Item item = Item.getItemFromBlock(state.getBlock());
         if (item == null || item == Items.AIR) return air();
         return of(new ItemStack(item, 1, state.getBlock().getMetaFromState(state)));
+    }
+
+    /**
+     * Resolves the material a crosshair hit stands for, including tile-backed blocks.
+     *
+     * <p>A block state alone cannot identify a tile-backed block: every AE2 cable, bus and terminal shares
+     * {@code ae2:cable_bus} — a block with no item form at all — and every GregTech machine shares one block whose
+     * state carries no meta. The vanilla pick contract is asked first, then the block's own item form, and
+     * {@link #fromState(IBlockState)} stays the fallback for ordinary blocks. A miss resolves to air, which is the
+     * canonical way to select air.</p>
+     */
+    @SuppressWarnings("deprecation")
+    public static BlockSpec fromPickBlock(World world, EntityPlayer player, RayTraceResult hit) {
+        if (world == null || hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) return air();
+        BlockPos position = hit.getBlockPos();
+        if (position == null) return air();
+
+        IBlockState state = world.getBlockState(position);
+        BlockSpec fromState = fromState(state);
+        if (fromState.isFluid() || !state.getBlock().hasTileEntity(state)) return fromState;
+
+        // Both contracts read the tile, and a foreign block may not expect a hit rebuilt outside its own ray trace.
+        ItemStack picked = pickBlockOrEmpty(state, hit, world, position, player);
+        if (picked.isEmpty()) picked = itemOrEmpty(state, world, position);
+        return picked.isEmpty() ? fromState : of(picked);
+    }
+
+    private static ItemStack pickBlockOrEmpty(IBlockState state, RayTraceResult hit, World world, BlockPos position,
+                                              EntityPlayer player) {
+        try {
+            return state.getBlock().getPickBlock(state, hit, world, position, player);
+        } catch (RuntimeException exception) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    private static ItemStack itemOrEmpty(IBlockState state, World world, BlockPos position) {
+        try {
+            return state.getBlock().getItem(world, position, state);
+        } catch (RuntimeException exception) {
+            return ItemStack.EMPTY;
+        }
     }
 
     public boolean isAir() {

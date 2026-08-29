@@ -37,35 +37,40 @@ public final class BuildingAdapterRegistry {
         }
 
         for (BuildingAdapter adapter : adapters) {
-            if (adapter.supports(context, position, specification)) {
-                if (adapter instanceof VanillaBuildingAdapter vanilla) {
-                    BuildingAdapter targetAdapter = captureAdapter(context, position);
-                    if (targetAdapter != null) {
-                        PreparedBlockChange removal = targetAdapter.prepareRemove(context, position);
-                        PreparedBlockChange placement = vanilla.prepareApplyAfterTileRemoval(context, position,
-                                specification);
-                        return new SpecializedTargetReplacement(position, removal, placement);
-                    }
-                    TileEntity targetTile = context.world().getTileEntity(position);
-                    if (targetTile != null || context.world().getBlockState(position).getBlock().hasTileEntity(
-                            context.world().getBlockState(position))) {
-                        StringJoiner matches = new StringJoiner(", ");
-                        for (BuildingAdapter candidate : adapters) {
-                            if (candidate instanceof VanillaBuildingAdapter) continue;
-                            matches.add(candidate.id() + "=" + candidate.supportsCapture(context, position));
-                        }
-                        ApplyGrayMod.LOGGER.warn("Matter Manipulator target adapter miss at {}: tileClass={}, "
-                                        + "block={}, candidates=[{}], selectedMaterial={}",
-                                position, targetTile == null ? "<null>" : targetTile.getClass().getName(),
-                                context.world().getBlockState(position).getBlock().getRegistryName(), matches,
-                                specification.sortKey());
-                    }
-                }
+            if (!adapter.supports(context, position, specification)) continue;
+            if (adapter.absorbsTargetContents(context, position)) {
                 return adapter.prepareApply(context, position, specification);
             }
+            // The placing adapter cannot account for the tile already standing here, so the adapter that owns it
+            // hands its contents back through the transaction before the placement runs.
+            BuildingAdapter targetAdapter = captureAdapter(context, position);
+            if (targetAdapter != null && targetAdapter != adapter) {
+                PreparedBlockChange removal = targetAdapter.prepareRemove(context, position);
+                PreparedBlockChange placement = adapter.prepareApplyAfterTargetRemoval(context, position,
+                        specification);
+                return new SpecializedTargetReplacement(position, removal, placement);
+            }
+            logTargetAdapterMiss(context, position, specification);
+            return adapter.prepareApply(context, position, specification);
         }
         throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                 "No target building adapter supports " + specification.sortKey());
+    }
+
+    /** Records why no adapter claimed a tile-backed target, so the rejection that follows can be traced. */
+    private void logTargetAdapterMiss(BuildingContext context, BlockPos position, BlockSpec specification) {
+        if (!BuildingAdapter.hasTileEntity(context, position)) return;
+        TileEntity targetTile = context.world().getTileEntity(position);
+        StringJoiner matches = new StringJoiner(", ");
+        for (BuildingAdapter candidate : adapters) {
+            if (candidate instanceof VanillaBuildingAdapter) continue;
+            matches.add(candidate.id() + "=" + candidate.supportsCapture(context, position));
+        }
+        ApplyGrayMod.LOGGER.warn("Matter Manipulator target adapter miss at {}: tileClass={}, block={}, "
+                        + "candidates=[{}], selectedMaterial={}",
+                position, targetTile == null ? "<null>" : targetTile.getClass().getName(),
+                context.world().getBlockState(position).getBlock().getRegistryName(), matches,
+                specification.sortKey());
     }
 
     public CapturedBlock capture(BuildingContext context, BlockPos position) {

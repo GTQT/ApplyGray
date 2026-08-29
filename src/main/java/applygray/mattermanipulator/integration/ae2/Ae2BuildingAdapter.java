@@ -92,6 +92,26 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
     }
 
     @Override
+    public boolean absorbsTargetContents(BuildingContext context, BlockPos position) {
+        // An existing bus is merged into rather than cleared, so this adapter already accounts for its parts.
+        return context.world().getTileEntity(position) instanceof TileCableBus ||
+                !BuildingAdapter.hasTileEntity(context, position);
+    }
+
+    @Override
+    public PreparedBlockChange prepareApplyAfterTargetRemoval(BuildingContext context, BlockPos position,
+                                                              BlockSpec specification) {
+        if (!isCenterCable(specification)) {
+            throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
+                    "The selected AE2 material is not a center cable");
+        }
+        validateEditable(context, position);
+        requireEmptyDestination(context, position);
+        return new Ae2PlacementChange(context, position, Blocks.AIR.getDefaultState(), TargetContents.empty(),
+                Ae2BusCaptureData.singleCable(specification.toStack()));
+    }
+
+    @Override
     public boolean supportsCapture(BuildingContext context, BlockPos position) {
         return context.world().getTileEntity(position) instanceof TileCableBus;
     }
@@ -181,11 +201,15 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
         IBlockState originalState = validateEditable(context, position);
         TargetContents target = inspectTarget(context, position, originalState);
         requireReplacement(context, position, originalState);
+        requireEmptyDestination(context, position);
+        return new Ae2PlacementChange(context, position, originalState, target, data);
+    }
+
+    private static void requireEmptyDestination(BuildingContext context, BlockPos position) {
         if (!context.world().checkNoEntityCollision(new AxisAlignedBB(position))) {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
                     "An entity blocks the AE2 cable bus destination");
         }
-        return new Ae2PlacementChange(context, position, originalState, target, data);
     }
 
     private static TargetContents inspectTarget(BuildingContext context, BlockPos position, IBlockState state) {

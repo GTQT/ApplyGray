@@ -509,11 +509,17 @@ public final class MatterManipulatorBuildManager {
             case CABLES -> cableRequirements(context, new CableBuildRequest(player, stack, hand, manipulator.tier(),
                     state, access.materialSources, access.powerSource));
         };
-        List<ResourceRequirement> requirements = new ArrayList<>();
+        List<ResourceRequirement> items = new ArrayList<>();
+        List<FluidRequirement> fluids = new ArrayList<>();
         for (PreparedBlockChange change : changes) {
-            if (change.changesWorld()) requirements.addAll(change.requiredResources().entries());
+            if (!change.changesWorld()) continue;
+            ResourceRequirements required = change.requiredResources();
+            items.addAll(required.entries());
+            fluids.addAll(required.fluidEntries());
         }
-        return ResourceRequirements.of(requirements.toArray(ResourceRequirement[]::new));
+        return ResourceRequirements.combine(
+                ResourceRequirements.of(items.toArray(ResourceRequirement[]::new)),
+                ResourceRequirements.fluids(fluids.toArray(FluidRequirement[]::new)));
     }
 
     private static List<PreparedBlockChange> geometryRequirements(BuildingContext context, GeometryBuildRequest request) {

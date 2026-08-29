@@ -111,16 +111,36 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
     @Override
     public PreparedBlockChange prepareApply(BuildingContext context, BlockPos position, BlockSpec specification) {
+        return preparePlacement(context, position, dataForMaterial(position, specification));
+    }
+
+    @Override
+    public boolean absorbsTargetContents(BuildingContext context, BlockPos position) {
+        // A GregTech machine or pipe already standing here surrenders its contents through this adapter's placement.
+        return dataForTile(context, position, false, true) != null ||
+                !BuildingAdapter.hasTileEntity(context, position);
+    }
+
+    @Override
+    public PreparedBlockChange prepareApplyAfterTargetRemoval(BuildingContext context, BlockPos position,
+                                                              BlockSpec specification) {
+        PortableData data = dataForMaterial(position, specification);
+        validateEditable(context, position);
+        requireEmptyDestination(context, position);
+        return new GregTechPlacementChange(context, position, Blocks.AIR.getDefaultState(), TargetContents.empty(),
+                data);
+    }
+
+    private static PortableData dataForMaterial(BlockPos position, BlockSpec specification) {
         PortableType type = typeFor(specification.toStack());
         if (type == null) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                     "The selected material is not a GregTech machine or pipe");
         }
-        PortableData data = switch (type) {
+        return switch (type) {
             case MTE -> MteData.forMaterial(specification.toStack());
             case PIPE -> PipeData.forMaterial(specification.toStack());
         };
-        return preparePlacement(context, position, data);
     }
 
     @Override
@@ -204,11 +224,15 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         IBlockState originalState = validateEditable(context, position);
         TargetContents target = inspectTarget(context, position, originalState);
         requireReplacement(context, position, originalState);
+        requireEmptyDestination(context, position);
+        return new GregTechPlacementChange(context, position, originalState, target, data);
+    }
+
+    private static void requireEmptyDestination(BuildingContext context, BlockPos position) {
         if (!context.world().checkNoEntityCollision(new AxisAlignedBB(position))) {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
                     "An entity blocks the GregTech destination");
         }
-        return new GregTechPlacementChange(context, position, originalState, target, data);
     }
 
     private static TargetContents inspectTarget(BuildingContext context, BlockPos position, IBlockState state) {

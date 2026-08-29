@@ -4,10 +4,12 @@ import applygray.common.items.ApplyGrayMetaItems;
 
 import ae2.api.networking.energy.IEnergyService;
 import ae2.api.stacks.AEItemKey;
+import ae2.api.stacks.AEKey;
 import ae2.me.cluster.implementations.CraftingCPUCluster;
 import ae2.crafting.execution.CraftingCpuLogic;
 import ae2.crafting.execution.ExecutingCraftingJob;
 import ae2.me.service.CraftingService;
+import net.minecraft.item.ItemStack;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -39,10 +41,20 @@ public abstract class MixinCraftingCPUCluster {
         if (waitingFor.size() != 1) return;
 
         var only = waitingFor.getFirstEntry();
-        AEItemKey order = AEItemKey.of(ApplyGrayMetaItems.ORDER.getStackForm());
-        if (only == null || order == null || !order.equals(only.getKey())) return;
+        if (only == null || !applygray$isOrderToken(only.getKey())) return;
 
         finishJob(true);
         cluster.updateOutput(null);
+    }
+
+    /**
+     * Order tokens carry per-request names and discriminators, so they are matched by item and metadata only; the tag
+     * is what distinguishes one plan's token from another's and must be ignored here.
+     */
+    private static boolean applygray$isOrderToken(AEKey key) {
+        if (!(key instanceof AEItemKey itemKey)) return false;
+        ItemStack order = ApplyGrayMetaItems.ORDER.getStackForm();
+        return itemKey.getItem() == order.getItem() &&
+                itemKey.getReadOnlyStack().getItemDamage() == order.getItemDamage();
     }
 }
