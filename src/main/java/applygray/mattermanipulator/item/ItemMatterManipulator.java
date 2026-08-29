@@ -139,29 +139,9 @@ public final class ItemMatterManipulator extends Item {
 
         ItemStack stack = player.getHeldItem(hand);
         ManipulatorState state = state(stack);
-        if (state.pendingAction() == ManipulatorPendingAction.GEOM_SELECTING_BLOCK ||
-                state.pendingAction() == ManipulatorPendingAction.EXCH_SET_TARGET ||
-                state.pendingAction() == ManipulatorPendingAction.EXCH_SET_REPLACE ||
-                state.pendingAction() == ManipulatorPendingAction.EXCH_ADD_REPLACE ||
-                state.pendingAction() == ManipulatorPendingAction.PICK_CABLE) {
-            BlockSpec picked = BlockSpec.fromState(world.getBlockState(position));
-            if (!picked.isAir()) {
-                if (state.pendingAction() == ManipulatorPendingAction.EXCH_SET_TARGET) {
-                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
-                } else if (state.pendingAction() == ManipulatorPendingAction.EXCH_SET_REPLACE) {
-                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
-                } else if (state.pendingAction() == ManipulatorPendingAction.EXCH_ADD_REPLACE) {
-                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
-                } else if (state.pendingAction() == ManipulatorPendingAction.PICK_CABLE) {
-                    state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.CABLE);
-                }
-                ManipulatorMaterialPicker.apply(state, picked, player.isSneaking() &&
-                        state.pendingAction() == ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
-                state.setPendingAction(ManipulatorPendingAction.NONE);
-                saveState(stack, state);
-                if (player instanceof EntityPlayerMP serverPlayer) MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
-                return EnumActionResult.SUCCESS;
-            }
+        if (isMaterialPickAction(state.pendingAction())) {
+            applyPickedMaterial(player, hand, stack, state, BlockSpec.fromState(world.getBlockState(position)));
+            return EnumActionResult.SUCCESS;
         }
         BlockPos selectedPosition = ManipulatorTargeting.blockTarget(position, facing, player.isSneaking());
         return applyCoordinateClick(player, world, hand, stack, state, selectedPosition);
@@ -209,6 +189,10 @@ public final class ItemMatterManipulator extends Item {
     public ActionResult<ItemStack> onItemRightClick(World world, EntityPlayer player, EnumHand hand) {
         ItemStack stack = player.getHeldItem(hand);
         ManipulatorState state = state(stack);
+        if (isMaterialPickAction(state.pendingAction())) {
+            if (!world.isRemote) applyPickedMaterial(player, hand, stack, state, BlockSpec.air());
+            return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
+        }
         if (state.pendingAction().selectsCoordinates()) {
             if (!world.isRemote) {
                 applyCoordinateClick(player, world, hand, stack, state,
@@ -228,6 +212,39 @@ public final class ItemMatterManipulator extends Item {
 
         if (world.isRemote) ApplyGrayMod.proxy.openMatterManipulatorConfiguration(hand);
         return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
+    }
+
+    private static boolean isMaterialPickAction(ManipulatorPendingAction action) {
+        return action == ManipulatorPendingAction.GEOM_SELECTING_BLOCK ||
+                action == ManipulatorPendingAction.EXCH_SET_TARGET ||
+                action == ManipulatorPendingAction.EXCH_SET_REPLACE ||
+                action == ManipulatorPendingAction.EXCH_ADD_REPLACE ||
+                action == ManipulatorPendingAction.PICK_CABLE;
+    }
+
+    private void applyPickedMaterial(EntityPlayer player, EnumHand hand, ItemStack stack, ManipulatorState state,
+                                     BlockSpec picked) {
+        switch (state.pendingAction()) {
+            case EXCH_SET_TARGET -> state.setPickTarget(
+                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
+            case EXCH_SET_REPLACE -> state.setPickTarget(
+                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
+            case EXCH_ADD_REPLACE -> state.setPickTarget(
+                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
+            case PICK_CABLE -> state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.CABLE);
+            default -> { }
+        }
+        ManipulatorMaterialPicker.Result result = ManipulatorMaterialPicker.apply(state, picked,
+                player.isSneaking() && state.pendingAction() == ManipulatorPendingAction.GEOM_SELECTING_BLOCK);
+        state.setPendingAction(ManipulatorPendingAction.NONE);
+        saveState(stack, state);
+        if (player instanceof EntityPlayerMP serverPlayer) {
+            MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
+        }
+        Object materialName = picked.isAir() ? new TextComponentTranslation("tile.air.name")
+                : picked.isFluid() ? picked.fluidStack().getLocalizedName() : picked.toStack().getDisplayName();
+        player.sendStatusMessage(new TextComponentTranslation(result == ManipulatorMaterialPicker.Result.ADDED
+                ? "applygray.matter_manipulator.pick.add" : "applygray.matter_manipulator.pick.set", materialName), true);
     }
 
     @Override

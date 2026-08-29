@@ -1,8 +1,11 @@
 package applygray.mattermanipulator.integration.gregtech;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.BuildingAdapter;
@@ -24,6 +27,8 @@ import gregtech.api.capability.IBatch;
 import gregtech.api.capability.IControllable;
 import gregtech.api.capability.IDistinctBusController;
 import gregtech.api.capability.IMultipleRecipeMaps;
+import gregtech.api.capability.IMultipleTankHandler;
+import gregtech.api.capability.IObjectHolder;
 import gregtech.api.capability.IRecipeControl;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
@@ -73,7 +78,7 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.fluids.FluidStack;
-import net.minecraftforge.fluids.capability.IFluidTankProperties;
+import net.minecraftforge.fluids.FluidTank;
 import net.minecraftforge.items.IItemHandler;
 
 /**
@@ -148,7 +153,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
     public PreparedBlockChange prepareRemove(BuildingContext context, BlockPos position) {
         IBlockState originalState = validateEditable(context, position);
         requireRemoval(context, position, originalState);
-        return new GregTechRemovalChange(context, position, originalState, requirePortableData(context, position, false));
+        return new GregTechRemovalChange(context, position, originalState,
+                requirePortableData(context, position, false, true));
     }
 
     @Override
@@ -166,7 +172,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         }
         IBlockState sourceState = validateEditable(context, source);
         IBlockState targetState = validateEditable(context, target);
-        PortableData data = requirePortableData(context, source, false);
+        PortableData data = requirePortableData(context, source, false, true);
         if (!isAir(context, target, targetState)) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, target,
                     "Moving a GregTech block currently requires an empty destination");
@@ -190,7 +196,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
     }
 
     private static TargetContents inspectTarget(BuildingContext context, BlockPos position, IBlockState state) {
-        PortableData portable = dataForTile(context, position, false);
+        PortableData portable = dataForTile(context, position, false, true);
         if (portable != null) return new TargetContents(portable.producedResources(), portable);
 
         TileEntity tile = context.world().getTileEntity(position);
@@ -207,7 +213,12 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
     private static PortableData requirePortableData(BuildingContext context, BlockPos position,
                                                     boolean smartCopySource) {
-        PortableData data = dataForTile(context, position, smartCopySource);
+        return requirePortableData(context, position, smartCopySource, false);
+    }
+
+    private static PortableData requirePortableData(BuildingContext context, BlockPos position,
+                                                    boolean smartCopySource, boolean clearContents) {
+        PortableData data = dataForTile(context, position, smartCopySource, clearContents);
         if (data == null) {
             throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                     "The target is not a supported GregTech machine or pipe");
@@ -216,12 +227,17 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
     }
 
     private static PortableData dataForTile(BuildingContext context, BlockPos position, boolean smartCopySource) {
+        return dataForTile(context, position, smartCopySource, false);
+    }
+
+    private static PortableData dataForTile(BuildingContext context, BlockPos position, boolean smartCopySource,
+                                            boolean clearContents) {
         TileEntity tile = context.world().getTileEntity(position);
         if (tile instanceof MetaTileEntityHolder holder && holder.getMetaTileEntity() != null) {
-            return MteData.capture(context, position, holder, smartCopySource);
+            return MteData.capture(context, position, holder, smartCopySource, clearContents);
         }
         if (tile instanceof IPipeTile<?, ?> pipe) {
-            return PipeData.capture(context, position, pipe);
+            return PipeData.capture(context, position, pipe, clearContents);
         }
         return null;
     }
@@ -257,6 +273,49 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
     private static void requireReplacement(BuildingContext context, BlockPos position, IBlockState state) {
         if (!isAir(context, position, state)) requireRemoval(context, position, state);
+    }
+
+    private static ResourceRequirements captureLiveContents(MetaTileEntity mte) {
+        List<ItemStack> items = new ArrayList<>();
+        Set<IItemHandler> seenItems = Collections.newSetFromMap(new IdentityHashMap<>());
+        captureItems(mte.getImportItems(), seenItems, items);
+        captureItems(mte.getExportItems(), seenItems, items);
+        if (mte instanceof IObjectHolder objectHolder) captureItems(objectHolder.getAsHandler(), seenItems, items);
+
+        List<FluidStack> fluids = new ArrayList<>();
+        Set<IMultipleTankHandler> seenFluids = Collections.newSetFromMap(new IdentityHashMap<>());
+        captureFluids(mte.getImportFluids(), seenFluids, fluids);
+        captureFluids(mte.getExportFluids(), seenFluids, fluids);
+        return ResourceRequirements.combine(ResourceRequirements.fromStacks(items),
+                ResourceRequirements.fromFluids(fluids));
+    }
+
+    private static void captureItems(IItemHandler handler, Set<IItemHandler> seen, List<ItemStack> output) {
+        if (handler instanceof GhostCircuitItemStackHandler) return;
+        if (!seen.add(handler)) return;
+        if (handler instanceof ItemHandlerList list) {
+            for (IItemHandler nested : list.getBackingHandlers()) captureItems(nested, seen, output);
+            return;
+        }
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            ItemStack stack = handler.getStackInSlot(slot);
+            if (stack != null && !stack.isEmpty()) output.add(stack.copy());
+        }
+    }
+
+    private static void captureFluids(IMultipleTankHandler handler, Set<IMultipleTankHandler> seen,
+                                      List<FluidStack> output) {
+        if (!seen.add(handler)) return;
+        for (IMultipleTankHandler.ITankEntry tank : handler.getFluidTanks()) {
+            FluidStack stack = tank.getFluid();
+            if (stack != null && stack.amount > 0) output.add(stack.copy());
+        }
+    }
+
+    private static void clearFluids(IMultipleTankHandler handler) {
+        for (IMultipleTankHandler.ITankEntry tank : handler.getFluidTanks()) {
+            if (tank.getFluidAmount() > 0) tank.drain(Integer.MAX_VALUE, true);
+        }
     }
 
     private static boolean isAir(BuildingContext context, BlockPos position, IBlockState state) {
@@ -479,6 +538,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
         ResourceRequirements producedResources();
 
+        ResourceRequirements liveContents();
+
+        void clearLiveContents(BuildingContext context, BlockPos position);
+
         int componentCount();
 
         PortableData transformed(ManipulatorTransform transform);
@@ -495,10 +558,12 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final List<CoverState> covers;
         private final ItemStack ghostCircuit;
         private final MteConfiguration configuration;
+        private final ResourceRequirements liveContents;
 
         private MteData(ItemStack placementStack, BlockSpec inputMaterial, EnumFacing frontFacing, int paintingColor,
-                        SmartCopyLink smartCopyLink, BlockPos proxyMaster, List<CoverState> covers,
-                        ItemStack ghostCircuit, MteConfiguration configuration) {
+                                       SmartCopyLink smartCopyLink, BlockPos proxyMaster, List<CoverState> covers,
+                        ItemStack ghostCircuit, MteConfiguration configuration,
+                        ResourceRequirements liveContents) {
             this.placementStack = checkedStack(placementStack);
             this.inputMaterial = Objects.requireNonNull(inputMaterial, "inputMaterial");
             this.frontFacing = frontFacing;
@@ -508,15 +573,16 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             this.covers = List.copyOf(covers);
             this.ghostCircuit = ghostCircuit == null || ghostCircuit.isEmpty() ? ItemStack.EMPTY : checkedStack(ghostCircuit);
             this.configuration = configuration;
+            this.liveContents = liveContents == null ? ResourceRequirements.empty() : liveContents;
         }
 
         private static MteData forMaterial(ItemStack material) {
             return new MteData(material, BlockSpec.of(material), null, -1, null, null, List.of(), ItemStack.EMPTY,
-                    null);
+                    null, ResourceRequirements.empty());
         }
 
         private static MteData capture(BuildingContext context, BlockPos position, MetaTileEntityHolder holder,
-                                       boolean smartCopySource) {
+                                       boolean smartCopySource, boolean clearContents) {
             MetaTileEntity mte = holder.getMetaTileEntity();
             List<CoverState> covers = captureCovers(mte);
             ItemStack ghostCircuit = captureGhostCircuit(mte);
@@ -530,31 +596,32 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                 }
                 return new MteData(proxyStack, bare(proxyStack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
                         mte.getPaintingColor(), null, position.toImmutable(), covers, ghostCircuit,
-                        MteConfiguration.capture(mte));
+                        MteConfiguration.capture(mte), clearContents ? captureLiveContents(mte) : ResourceRequirements.empty());
             }
             if (smartCopySource && mte instanceof ISmartCopyLinkable linkable) {
                 SmartCopyLink source = linkable.getSmartCopyLink().orElseGet(
                         () -> new SmartCopyLink(context.world().provider.getDimension(), position));
                 ItemStack stack = mte.getStackForm();
                 return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                        mte.getPaintingColor(), source, null, covers, ghostCircuit, MteConfiguration.capture(mte));
+                        mte.getPaintingColor(), source, null, covers, ghostCircuit, MteConfiguration.capture(mte),
+                        ResourceRequirements.empty());
             }
-            validateMtePortable(context, position, mte);
+            validateMtePortable(context, position, mte, clearContents);
             ItemStack stack = mte.getStackForm();
             NBTTagCompound itemData = new NBTTagCompound();
             mte.writeItemStackData(itemData);
             if (!itemData.isEmpty()) stack.setTagCompound(itemData);
             if (holder.hasCustomName()) stack.setStackDisplayName(holder.getName());
             return new MteData(stack, bare(stack), mte.hasFrontFacing() ? mte.getFrontFacing() : null,
-                    mte.getPaintingColor(), null, null, covers, ghostCircuit, MteConfiguration.capture(mte));
+                    mte.getPaintingColor(), null, null, covers, ghostCircuit, MteConfiguration.capture(mte),
+                    clearContents ? captureLiveContents(mte) : ResourceRequirements.empty());
         }
 
-        private static void validateMtePortable(BuildingContext context, BlockPos position, MetaTileEntity mte) {
-            if (mte.keepsInventory() || !itemsEmpty(mte.getImportItems(), true) || !itemsEmpty(mte.getExportItems(), true) ||
-                    !fluidsEmpty(mte.getImportFluids().getTankProperties()) ||
-                    !fluidsEmpty(mte.getExportFluids().getTankProperties())) {
+        private static void validateMtePortable(BuildingContext context, BlockPos position, MetaTileEntity mte,
+                                                boolean clearContents) {
+            if (clearContents && mte.keepsInventory()) {
                 throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
-                        "The GregTech machine has stored items or fluids and cannot be copied safely yet");
+                        "The GregTech machine keeps internal inventory and cannot be cleared safely");
             }
             List<ItemStack> extraDrops = new ArrayList<>();
             mte.getDrops(extraDrops, context.player());
@@ -613,7 +680,25 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             outputs.add(placementStack);
             covers.forEach(cover -> outputs.addAll(cover.drops()));
             if (configuration != null) outputs.addAll(configuration.storedStacks());
-            return ResourceRequirements.fromStacks(outputs);
+            return ResourceRequirements.combine(ResourceRequirements.fromStacks(outputs), liveContents);
+        }
+
+        @Override
+        public ResourceRequirements liveContents() {
+            return liveContents;
+        }
+
+        @Override
+        public void clearLiveContents(BuildingContext context, BlockPos position) {
+            TileEntity tile = context.world().getTileEntity(position);
+            if (!(tile instanceof MetaTileEntityHolder holder) || holder.getMetaTileEntity() == null) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The GregTech machine disappeared before its inventory could be cleared");
+            }
+            MetaTileEntity mte = holder.getMetaTileEntity();
+            mte.clearMachineInventory(new ArrayList<>());
+            clearFluids(mte.getImportFluids());
+            clearFluids(mte.getExportFluids());
         }
 
         @Override
@@ -626,8 +711,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             EnumFacing transformed = frontFacing == null ? null : transform.apply(frontFacing);
             List<CoverState> transformedCovers = covers.stream().map(cover -> cover.transformed(transform)).toList();
             return new MteData(placementStack, inputMaterial, transformed, paintingColor, smartCopyLink, proxyMaster,
-                    transformedCovers, ghostCircuit,
-                    configuration == null ? null : configuration.transformed(transform));
+                    transformedCovers, ghostCircuit, configuration == null ? null : configuration.transformed(transform),
+                    liveContents);
         }
 
         private ItemStack placementStack() {
@@ -1111,9 +1196,11 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final int paintingColor;
         private final Material frameMaterial;
         private final List<CoverState> covers;
+        private final ResourceRequirements liveContents;
 
         private PipeData(ItemStack pipeStack, BlockSpec inputMaterial, int connections, int blockedConnections,
-                         int paintingColor, Material frameMaterial, List<CoverState> covers) {
+                         int paintingColor, Material frameMaterial, List<CoverState> covers,
+                         ResourceRequirements liveContents) {
             this.pipeStack = checkedStack(pipeStack);
             this.inputMaterial = Objects.requireNonNull(inputMaterial, "inputMaterial");
             this.connections = connections;
@@ -1121,22 +1208,17 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             this.paintingColor = paintingColor;
             this.frameMaterial = frameMaterial;
             this.covers = List.copyOf(covers);
+            this.liveContents = liveContents == null ? ResourceRequirements.empty() : liveContents;
         }
 
         private static PipeData forMaterial(ItemStack material) {
-            return new PipeData(material, BlockSpec.of(material), 0, 0, -1, null, List.of());
+            return new PipeData(material, BlockSpec.of(material), 0, 0, -1, null, List.of(),
+                    ResourceRequirements.empty());
         }
 
         @SuppressWarnings({ "rawtypes", "unchecked" })
-        private static PipeData capture(BuildingContext context, BlockPos position, IPipeTile<?, ?> pipe) {
-            if (pipe instanceof TileEntityFluidPipeTickable fluidPipe) {
-                for (FluidStack fluid : fluidPipe.getContainedFluids()) {
-                    if (fluid != null && fluid.amount > 0) {
-                        throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
-                                "The GregTech fluid pipe contains fluid and cannot be copied safely yet");
-                    }
-                }
-            }
+        private static PipeData capture(BuildingContext context, BlockPos position, IPipeTile<?, ?> pipe,
+                                        boolean clearContents) {
             IBlockState state = context.world().getBlockState(position);
             ItemStack pipeStack = state.getBlock().getPickBlock(state,
                     new RayTraceResult(Vec3d.ZERO, EnumFacing.UP, position), context.world(), position,
@@ -1149,7 +1231,10 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             ResourceRequirements requirements = pipeRequirements(pipeStack, frame);
             return new PipeData(pipeStack, primaryRequirement(requirements), pipe.getConnections(),
                     pipe.getBlockedConnections(), pipe.isPainted() ? pipe.getPaintingColor() : -1, frame,
-                    captureCovers(pipe.getCoverableImplementation()));
+                    captureCovers(pipe.getCoverableImplementation()),
+                    clearContents && pipe instanceof TileEntityFluidPipeTickable fluidPipe
+                            ? ResourceRequirements.fromFluids(List.of(fluidPipe.getContainedFluids()))
+                            : ResourceRequirements.empty());
         }
 
         @Override
@@ -1171,7 +1256,29 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             ResourceRequirements requirements = pipeRequirements(pipeStack, frameMaterial);
             List<ItemStack> coverDrops = new ArrayList<>();
             covers.forEach(cover -> coverDrops.addAll(cover.drops()));
-            return ResourceRequirements.combine(requirements, ResourceRequirements.fromStacks(coverDrops));
+            return ResourceRequirements.combine(ResourceRequirements.combine(requirements,
+                    ResourceRequirements.fromStacks(coverDrops)), liveContents);
+        }
+
+        @Override
+        public ResourceRequirements liveContents() {
+            return liveContents;
+        }
+
+        @Override
+        public void clearLiveContents(BuildingContext context, BlockPos position) {
+            TileEntity tile = context.world().getTileEntity(position);
+            if (!(tile instanceof IPipeTile<?, ?> pipe)) {
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, position,
+                        "The GregTech pipe disappeared before its contents could be cleared");
+            }
+            if (pipe instanceof TileEntityFluidPipeTickable fluidPipe) {
+                for (FluidTank tank : fluidPipe.getFluidTanks()) {
+                    if (tank.getFluidAmount() > 0) {
+                        tank.drain(Integer.MAX_VALUE, true);
+                    }
+                }
+            }
         }
 
         @Override
@@ -1183,7 +1290,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         public PipeData transformed(ManipulatorTransform transform) {
             List<CoverState> transformedCovers = covers.stream().map(cover -> cover.transformed(transform)).toList();
             return new PipeData(pipeStack, inputMaterial, transform.applyFacingMask(connections),
-                    transform.applyFacingMask(blockedConnections), paintingColor, frameMaterial, transformedCovers);
+                    transform.applyFacingMask(blockedConnections), paintingColor, frameMaterial, transformedCovers,
+                    liveContents);
         }
 
         private ItemStack pipeStack() {
@@ -1237,28 +1345,6 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
 
     private static BlockSpec primaryRequirement(ResourceRequirements requirements) {
         return requirements.entries().getFirst().specification();
-    }
-
-    private static boolean itemsEmpty(IItemHandler handler, boolean ignoreGhostCircuit) {
-        if (ignoreGhostCircuit && handler instanceof GhostCircuitItemStackHandler) return true;
-        if (handler instanceof ItemHandlerList list) {
-            for (IItemHandler nested : list.getBackingHandlers()) {
-                if (!itemsEmpty(nested, ignoreGhostCircuit)) return false;
-            }
-            return true;
-        }
-        for (int slot = 0; slot < handler.getSlots(); slot++) {
-            if (!handler.getStackInSlot(slot).isEmpty()) return false;
-        }
-        return true;
-    }
-
-    private static boolean fluidsEmpty(IFluidTankProperties[] properties) {
-        for (IFluidTankProperties property : properties) {
-            FluidStack fluid = property.getContents();
-            if (fluid != null && fluid.amount > 0) return false;
-        }
-        return true;
     }
 
     private static BlockSpec bare(ItemStack stack) {
@@ -1366,6 +1452,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                         "The destination GregTech block changed after the build was prepared");
             }
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
+            if (target.data != null) target.data.clearLiveContents(context, position);
             clearForReplacement(context, position, originalState);
             install(context, position, data);
             if (BuildingEventHooks.isPlayerPlaceCanceled(context, snapshot)) {
@@ -1413,6 +1500,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                         "A protection handler denied the GregTech removal");
             }
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
+            data.clearLiveContents(context, position);
             clearForReplacement(context, position, originalState);
         }
     }
@@ -1449,6 +1537,11 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         }
 
         @Override
+        public ResourceRequirements producedResources() {
+            return data.liveContents();
+        }
+
+        @Override
         public long energyCost() {
             return GregTechBuildingAdapter.energyCost(context, source, data.componentCount()) +
                     GregTechBuildingAdapter.energyCost(context, target, data.componentCount());
@@ -1474,6 +1567,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             }
             sourceSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), source);
             targetSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), target);
+            data.clearLiveContents(context, source);
             clearForReplacement(context, source, sourceState);
             install(context, target, data);
             if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {

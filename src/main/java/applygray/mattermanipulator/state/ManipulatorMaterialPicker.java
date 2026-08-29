@@ -17,7 +17,6 @@ public final class ManipulatorMaterialPicker {
     public static Result apply(ManipulatorState state, BlockSpec specification, boolean add) {
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(specification, "specification");
-        if (specification.isAir()) throw new IllegalArgumentException("Cannot pick air as a material");
 
         return switch (state.pickTarget()) {
             case ALL -> applyAllGeometry(state, specification, add);

@@ -59,10 +59,7 @@ public final class PickManipulatorBlockMessage implements IMessage {
             // Include liquid collision shapes, matching GT5's middle-click material pick path.
             RayTraceResult hit = player.world.rayTraceBlocks(start, start.add(player.getLook(1.0F).scale(6.0D)),
                     true, true, false);
-            if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) return;
             ManipulatorState state = manipulator.state(stack);
-            BlockSpec specification = BlockSpec.fromState(player.world.getBlockState(hit.getBlockPos()));
-            if (specification.isAir()) return;
 
             ManipulatorPickTarget target = switch (state.placeMode()) {
                 case GEOMETRY -> state.pickTarget();
@@ -73,6 +70,9 @@ public final class PickManipulatorBlockMessage implements IMessage {
                 case COPYING, MOVING -> null;
             };
             if (target == null) return;
+            // A middle-click miss is the canonical way to select air, matching the source manipulator behavior.
+            BlockSpec specification = hit != null && hit.typeOfHit == RayTraceResult.Type.BLOCK
+                    ? BlockSpec.fromState(player.world.getBlockState(hit.getBlockPos())) : BlockSpec.air();
             state.setPickTarget(target);
             ManipulatorMaterialPicker.Result result = ManipulatorMaterialPicker.apply(state, specification,
                     player.isSneaking() && state.placeMode() == ManipulatorPlaceMode.GEOMETRY);
@@ -86,7 +86,8 @@ public final class PickManipulatorBlockMessage implements IMessage {
             player.inventory.markDirty();
             player.inventoryContainer.detectAndSendChanges();
             MatterManipulatorNetwork.sendStateTo(player, hand, state);
-            String materialName = specification.isFluid() ? specification.fluidStack().getLocalizedName()
+            Object materialName = specification.isAir() ? new TextComponentTranslation("tile.air.name")
+                    : specification.isFluid() ? specification.fluidStack().getLocalizedName()
                     : specification.toStack().getDisplayName();
             player.sendStatusMessage(new TextComponentTranslation(result == ManipulatorMaterialPicker.Result.ADDED
                     ? "applygray.matter_manipulator.pick.add" : "applygray.matter_manipulator.pick.set",
