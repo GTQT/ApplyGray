@@ -12,7 +12,7 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumHand;
 
-/** Server-authoritative input for a cable-line operation. */
+/** Server-authoritative input for a cable-path operation. */
 public record CableBuildRequest(EntityPlayer player, ItemStack manipulatorStack, EnumHand hand, ManipulatorTier tier,
                                 ManipulatorState state, List<? extends MaterialSource> materialSources,
                                 PowerSource powerSource) {

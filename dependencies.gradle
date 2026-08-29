@@ -48,6 +48,50 @@ def localArtifactName = { File jarFile -> jarFile.name.replaceFirst(/\.jar$/, ''
 def ae2SupergiantArtifact = localArtifactName(ae2SupergiantJar)
 def gregTechArtifact = localArtifactName(gregTechJar)
 
+def localJarFingerprint = { File jarFile ->
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    jarFile.withInputStream { input ->
+        byte[] buffer = new byte[8192]
+        int bytesRead
+        while ((bytesRead = input.read(buffer)) != -1) {
+            digest.update(buffer, 0, bytesRead)
+        }
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+// Unimined keys flatDir remap outputs by artifact name, so replacing a fixed-name jar can leave
+// an old mapped jar in place. Track the input content separately and invalidate only that output.
+def gregTechFingerprint = localJarFingerprint(gregTechJar)
+def gregTechFingerprintFile = file(".gradle/applygray/local-mod-cache/${gregTechArtifact}.sha256")
+def previousGregTechFingerprint = gregTechFingerprintFile.isFile() ?
+        gregTechFingerprintFile.getText('UTF-8').trim() : null
+
+if (previousGregTechFingerprint != gregTechFingerprint) {
+    def modTransformDirectory = file('.gradle/unimined/local/modTransform')
+    def mappedArtifactPrefix = "${gregTechArtifact}-mapped-"
+    def invalidatedArtifacts = []
+
+    if (modTransformDirectory.isDirectory()) {
+        modTransformDirectory.eachFile { File candidate ->
+            if (candidate.isFile() && candidate.name.startsWith(mappedArtifactPrefix) &&
+                    candidate.name.endsWith('.jar')) {
+                if (!candidate.delete()) {
+                    throw new GradleException("Could not invalidate stale GregTech remap cache: ${candidate}")
+                }
+                invalidatedArtifacts.add(candidate.name)
+            }
+        }
+    }
+
+    gregTechFingerprintFile.parentFile.mkdirs()
+    gregTechFingerprintFile.setText("${gregTechFingerprint}${System.lineSeparator()}", 'UTF-8')
+    if (!invalidatedArtifacts.isEmpty()) {
+        logger.lifecycle("GregTech jar content changed; invalidated ${invalidatedArtifacts.size()} cached " +
+                "Unimined remap artifact(s).")
+    }
+}
+
 // One line per build makes the selected local artifacts clear without runtime log noise.
 logger.lifecycle("Using Applied Energistics 2 Supergiant dependency: ${ae2SupergiantJar.name}")
 logger.lifecycle("Using GregTech development dependency: ${gregTechJar.name}")

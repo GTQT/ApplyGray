@@ -113,21 +113,23 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
         rejectTileEntity(context, source, sourceState);
         rejectTileEntity(context, target, targetState);
         if (isAir(context, source, sourceState)) return new NoOpBlockChange(source);
-        if (sourceState.getBlockHardness(context.world(), source) < 0.0F ||
-                !isAir(context, target, targetState) &&
-                        targetState.getBlockHardness(context.world(), target) < 0.0F) {
+        if (sourceState.getBlockHardness(context.world(), source) < 0.0F) {
             throw new BuildingException(BuildingException.Reason.UNBREAKABLE, source,
                     "The move contains an unbreakable block");
+        }
+        if (sourceState.equals(targetState)) {
+            return new VanillaRemovalChange(context, source, sourceState, dropsFor(context, source, sourceState));
+        }
+        if (!isAir(context, target, targetState) && targetState.getBlockHardness(context.world(), target) < 0.0F) {
+            throw new BuildingException(BuildingException.Reason.UNBREAKABLE, target,
+                    "The move target is unbreakable");
         }
         if (!canReplace(context, target, targetState)) {
             throw new BuildingException(BuildingException.Reason.REMOVAL_NOT_ALLOWED, target,
                     "The configured removal mode does not permit replacing the move target");
         }
-        if (!context.world().mayPlace(sourceState.getBlock(), target, false, EnumFacing.UP, context.player())) {
-            throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, target,
-                    "The source block cannot be placed at the move target");
-        }
-        return new VanillaMoveChange(context, source, target, sourceState, targetState);
+        return new VanillaMoveChange(context, source, target, sourceState, targetState,
+                dropsFor(context, target, targetState));
     }
 
     private static IBlockState validatePosition(BuildingContext context, BlockPos position) {
@@ -386,16 +388,18 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
         private final BlockPos target;
         private final IBlockState sourceState;
         private final IBlockState targetState;
+        private final ResourceRequirements outputs;
         private BlockSnapshot sourceSnapshot;
         private BlockSnapshot targetSnapshot;
 
         private VanillaMoveChange(BuildingContext context, BlockPos source, BlockPos target, IBlockState sourceState,
-                                  IBlockState targetState) {
+                                  IBlockState targetState, ResourceRequirements outputs) {
             this.context = context;
             this.source = source;
             this.target = target;
             this.sourceState = sourceState;
             this.targetState = targetState;
+            this.outputs = outputs;
         }
 
         @Override
@@ -406,6 +410,11 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
         @Override
         public BlockSpec materialCost() {
             return BlockSpec.air();
+        }
+
+        @Override
+        public ResourceRequirements producedResources() {
+            return outputs;
         }
 
         @Override
@@ -439,19 +448,27 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
 
             sourceSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), source);
             targetSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), target);
-            if (!context.world().setBlockState(source, Blocks.AIR.getDefaultState(), WORLD_UPDATE_FLAGS) ||
-                    !context.world().setBlockState(target, sourceState, WORLD_UPDATE_FLAGS)) {
+            if (!context.world().setBlockState(source, Blocks.AIR.getDefaultState(), WORLD_UPDATE_FLAGS)) {
+                rollback();
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
+                        "Minecraft rejected removal of the move source");
+            }
+            if (!isAir(context, target, targetState) &&
+                    !context.world().setBlockState(target, Blocks.AIR.getDefaultState(), WORLD_UPDATE_FLAGS)) {
+                rollback();
+                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, target,
+                        "Minecraft rejected removal of the move target");
+            }
+            if (!context.world().mayPlace(sourceState.getBlock(), target, false, EnumFacing.UP, context.player())) {
+                rollback();
+                throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, target,
+                        "The source block cannot be placed after clearing the move target");
+            }
+            if (!context.world().setBlockState(target, sourceState, WORLD_UPDATE_FLAGS)) {
                 rollback();
                 throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, target,
                         "Minecraft rejected the move target state");
             }
-            if (!isAir(context, source, targetState) &&
-                    !context.world().setBlockState(source, targetState, WORLD_UPDATE_FLAGS)) {
-                rollback();
-                throw new BuildingException(BuildingException.Reason.BLOCK_CHANGE_FAILED, source,
-                        "Minecraft rejected the exchanged source state");
-            }
-
             if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {
                 rollback();
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, target,

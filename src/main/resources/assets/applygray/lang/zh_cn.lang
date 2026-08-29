@@ -167,6 +167,7 @@ applygray.matter_manipulator.selection.c=已标记 C：%1$d，%2$d，%3$d（维�
 applygray.matter_manipulator.selection.complete=选区已完整；请先清除后再标记新的坐标
 applygray.matter_manipulator.selection.incomplete=无法标记阵列：复制区域或粘贴坐标不完整
 applygray.matter_manipulator.selection.cleared=已清除物质操纵器选区
+applygray.matter_manipulator.selection.dimensions=dX=%1$s dY=%2$s dZ=%3$s V=%4$s
 applygray.matter_manipulator.array.marked=已设置阵列边界：X %1$d，Y %2$d，Z %3$d
 applygray.matter_manipulator.config.title=物质操纵器
 applygray.matter_manipulator.config.mode=模式：%s

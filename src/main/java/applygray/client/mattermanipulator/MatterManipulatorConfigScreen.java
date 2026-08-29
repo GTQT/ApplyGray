@@ -161,7 +161,6 @@ public final class MatterManipulatorConfigScreen extends GuiScreen {
     private void addMoving(List<MenuEntry> root) {
         root.add(action("applygray.matter_manipulator.radial.mark_cut", ConfigureManipulatorMessage.Action.MARK_CUT));
         root.add(action("applygray.matter_manipulator.radial.mark_paste", ConfigureManipulatorMessage.Action.MARK_PASTE));
-        root.add(entry("applygray.matter_manipulator.radial.edit_transform", this::openTransform));
     }
 
     private void addExchanging(List<MenuEntry> root) {

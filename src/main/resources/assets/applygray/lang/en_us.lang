@@ -167,6 +167,7 @@ applygray.matter_manipulator.selection.c=Marked C: %1$d, %2$d, %3$d (dimension %
 applygray.matter_manipulator.selection.complete=Selection is complete; clear it before marking another point
 applygray.matter_manipulator.selection.incomplete=Cannot mark array: copy or paste coordinates are incomplete
 applygray.matter_manipulator.selection.cleared=Matter Manipulator selection cleared
+applygray.matter_manipulator.selection.dimensions=dX=%1$s dY=%2$s dZ=%3$s V=%4$s
 applygray.matter_manipulator.array.marked=Array bounds set: X %1$d, Y %2$d, Z %3$d
 applygray.matter_manipulator.config.title=Matter Manipulator
 applygray.matter_manipulator.config.mode=Mode: %s

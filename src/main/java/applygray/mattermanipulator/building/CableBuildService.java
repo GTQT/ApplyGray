@@ -3,17 +3,14 @@ package applygray.mattermanipulator.building;
 import java.util.Objects;
 
 import applygray.mattermanipulator.planning.BoundGeometryPlan;
+import applygray.mattermanipulator.planning.CablePathPlanner;
 import applygray.mattermanipulator.planning.GeometryPlan;
 import applygray.mattermanipulator.planning.GeometryPlanBinder;
 import applygray.mattermanipulator.planning.GeometryPlanException;
-import applygray.mattermanipulator.planning.GeometryPlanner;
-import applygray.mattermanipulator.planning.GeometrySelection;
 import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 
-import net.minecraft.util.math.BlockPos;
-
-/** Builds one target-native, cardinal cable line using the normal safe placement transaction. */
+/** Builds one target-native, axis-aligned cable path using the normal safe placement transaction. */
 public final class CableBuildService {
 
     private final GeometryBuildService geometry;
@@ -26,10 +23,7 @@ public final class CableBuildService {
         validateRequest(request);
         ManipulatorLocation a = request.state().selectionA();
         ManipulatorLocation b = request.state().selectionB();
-        BlockPos pinnedTarget = GeometryPlanner.pinToAxes(a.position(), b.position());
-        GeometryPlan plan = GeometryPlanner.plan(new GeometrySelection(
-                applygray.mattermanipulator.state.ManipulatorShape.LINE, a,
-                new ManipulatorLocation(a.dimension(), pinnedTarget), null));
+        GeometryPlan plan = CablePathPlanner.plan(a, b);
         GeometryConfiguration configuration = new GeometryConfiguration();
         configuration.edges().setSingle(request.state().cableMaterial());
         return GeometryPlanBinder.bind(plan, configuration);
@@ -57,7 +51,7 @@ public final class CableBuildService {
         }
         if (a.dimension() != b.dimension() || a.dimension() != request.player().world.provider.getDimension()) {
             throw new GeometryPlanException(GeometryPlanException.Reason.CROSS_DIMENSION_SELECTION,
-                    "The cable line must be in the player's current dimension");
+                    "The cable path must be in the player's current dimension");
         }
     }
 

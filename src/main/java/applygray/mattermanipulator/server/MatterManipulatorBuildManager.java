@@ -33,6 +33,7 @@ import applygray.mattermanipulator.building.MoveBuildResult;
 import applygray.mattermanipulator.building.MoveBuildService;
 import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.ElectricItemPowerSource;
+import applygray.mattermanipulator.inventory.CreativeMaterialSource;
 import applygray.mattermanipulator.inventory.InsufficientOutputCapacityException;
 import applygray.mattermanipulator.inventory.InsufficientPowerException;
 import applygray.mattermanipulator.inventory.InsufficientResourcesException;
@@ -180,6 +181,11 @@ public final class MatterManipulatorBuildManager {
         ItemStack stack = player.getHeldItem(hand);
         if (!(stack.getItem() instanceof ItemMatterManipulator manipulator)) {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.no_tool"), true);
+            return;
+        }
+        if (player.capabilities.isCreativeMode) {
+            player.sendStatusMessage(new TextComponentTranslation(
+                    "applygray.matter_manipulator.uplink.crafting.no_requirements"), true);
             return;
         }
 
@@ -599,6 +605,11 @@ public final class MatterManipulatorBuildManager {
     }
 
     private static ResourceAccess resources(EntityPlayerMP player, ItemStack stack, ItemMatterManipulator manipulator) {
+        if (player.capabilities.isCreativeMode) {
+            return new ResourceAccess(List.of(CreativeMaterialSource.INSTANCE),
+                    new ElectricItemPowerSource("manipulator", stack, manipulator.tier(), player));
+        }
+
         CombinedInvWrapper inventory = new CombinedInvWrapper(new PlayerMainInvWrapper(player.inventory),
                 new PlayerOffhandInvWrapper(player.inventory));
         List<MaterialSource> sources = new ArrayList<>();

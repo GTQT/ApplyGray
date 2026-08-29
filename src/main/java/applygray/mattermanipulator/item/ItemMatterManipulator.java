@@ -10,12 +10,14 @@ import applygray.mattermanipulator.network.ExecuteManipulatorOperationMessage;
 import applygray.mattermanipulator.state.ManipulatorCapability;
 import applygray.mattermanipulator.state.ManipulatorLocation;
 import applygray.mattermanipulator.state.ManipulatorState;
-import applygray.mattermanipulator.planning.CopyArraySpan;
 import applygray.mattermanipulator.state.ManipulatorPendingAction;
 import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
 import applygray.mattermanipulator.state.ManipulatorRemovalMode;
 import applygray.mattermanipulator.state.ManipulatorSelectionActions;
+import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionOutcome;
+import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionResult;
+import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionSlot;
 import applygray.mattermanipulator.state.ManipulatorShape;
 import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.state.ManipulatorTier;
@@ -133,14 +135,6 @@ public final class ItemMatterManipulator extends Item {
     @Override
     public EnumActionResult onItemUse(EntityPlayer player, World world, BlockPos position, EnumHand hand,
                                       EnumFacing facing, float hitX, float hitY, float hitZ) {
-        if (player.isSneaking()) {
-            player.setActiveHand(hand);
-            if (world.isRemote) {
-                MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
-                        ExecuteManipulatorOperationMessage.Action.START));
-            }
-            return EnumActionResult.SUCCESS;
-        }
         if (world.isRemote) return EnumActionResult.SUCCESS;
 
         ItemStack stack = player.getHeldItem(hand);
@@ -169,105 +163,65 @@ public final class ItemMatterManipulator extends Item {
                 return EnumActionResult.SUCCESS;
             }
         }
-        BlockPos selectedPosition = player.isSneaking() ? position : position.offset(facing);
+        BlockPos selectedPosition = ManipulatorTargeting.blockTarget(position, facing, player.isSneaking());
         return applyCoordinateClick(player, world, hand, stack, state, selectedPosition);
     }
 
     private EnumActionResult applyCoordinateClick(EntityPlayer player, World world, EnumHand hand, ItemStack stack,
                                                    ManipulatorState state, BlockPos selectedPosition) {
         ManipulatorLocation location = ManipulatorLocation.fromWorld(world, selectedPosition);
-        if (state.pendingAction() == ManipulatorPendingAction.MARK_ARRAY) {
-            if (state.selectionA() == null || state.selectionB() == null || state.selectionC() == null) {
-                state.setPendingAction(ManipulatorPendingAction.NONE);
-                saveState(stack, state);
-                player.sendStatusMessage(new TextComponentTranslation(
-                        "applygray.matter_manipulator.selection.incomplete"), true);
-                return EnumActionResult.FAIL;
-            }
-            BlockPos span = CopyArraySpan.calculate(state.selectionA(), state.selectionB(), state.selectionC(),
-                    selectedPosition, state.copyTransform());
-            state.setCopyRepeats(span.getX(), span.getY(), span.getZ());
-            state.setPendingAction(ManipulatorPendingAction.NONE);
-            saveState(stack, state);
-            if (player instanceof EntityPlayerMP serverPlayer) {
-                MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
-            }
-            player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.array.marked",
-                    span.getX(), span.getY(), span.getZ()), true);
-            return EnumActionResult.SUCCESS;
-        }
-        SelectionSlot slot = applyPendingSelection(state, location);
-        if (slot == null && state.pendingAction() == ManipulatorPendingAction.NONE) {
-            if (usesDirectCoordinateSelection(state.placeMode())) {
-                ManipulatorSelectionActions.beginCoordinates(state, location);
-                slot = SelectionSlot.A;
-            } else {
-                slot = markNextSelection(state, location);
-            }
-        }
-        if (slot == null) {
+        SelectionResult result = ManipulatorSelectionActions.confirmCoordinates(state, location);
+        if (result.outcome() == SelectionOutcome.REJECTED) {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.selection.complete"),
                     true);
             return EnumActionResult.FAIL;
         }
 
-        saveState(stack, state);
-        if (player instanceof EntityPlayerMP serverPlayer) {
-            MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
+        if (result.outcome() == SelectionOutcome.ARRAY_INCOMPLETE) {
+            saveAndSynchronize(player, hand, stack, state);
+            player.sendStatusMessage(new TextComponentTranslation(
+                    "applygray.matter_manipulator.selection.incomplete"), true);
+            return EnumActionResult.FAIL;
         }
-        player.sendStatusMessage(new TextComponentTranslation(slot.translationKey, selectedPosition.getX(),
+
+        saveAndSynchronize(player, hand, stack, state);
+        if (result.outcome() == SelectionOutcome.ARRAY_MARKED) {
+            BlockPos span = result.arraySpan();
+            player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.array.marked",
+                    span.getX(), span.getY(), span.getZ()), true);
+            return EnumActionResult.SUCCESS;
+        }
+
+        player.sendStatusMessage(new TextComponentTranslation(selectionTranslationKey(result.slot()),
+                selectedPosition.getX(),
                 selectedPosition.getY(), selectedPosition.getZ(), world.provider.getDimension()), true);
         return EnumActionResult.SUCCESS;
     }
 
-    private static SelectionSlot applyPendingSelection(ManipulatorState state, ManipulatorLocation location) {
-        switch (state.pendingAction()) {
-            case MARK_COPY_A -> { state.setSelectionA(location); state.setPendingAction(ManipulatorPendingAction.MARK_COPY_B); return SelectionSlot.A; }
-            case MARK_COPY_B -> { state.setSelectionB(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.B; }
-            case MARK_CUT_A -> { state.setSelectionA(location); state.setPendingAction(ManipulatorPendingAction.MARK_CUT_B); return SelectionSlot.A; }
-            case MARK_CUT_B -> { state.setSelectionB(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.B; }
-            case MARK_PASTE -> { state.setSelectionC(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.C; }
-            case MOVING_COORDS -> {
-                SelectionSlot slot;
-                if (state.selectionA() == null) {
-                    state.setSelectionA(location);
-                    slot = SelectionSlot.A;
-                } else if (state.selectionB() == null) {
-                    state.setSelectionB(location);
-                    slot = SelectionSlot.B;
-                } else if (state.shape().requiresThirdPoint() && state.selectionC() == null) {
-                    state.setSelectionC(location);
-                    slot = SelectionSlot.C;
-                } else {
-                    state.setPendingAction(ManipulatorPendingAction.NONE);
-                    return null;
-                }
-                if (state.selectionB() != null && (!state.shape().requiresThirdPoint() || state.selectionC() != null)) {
-                    state.setPendingAction(ManipulatorPendingAction.NONE);
-                }
-                return slot;
-            }
-            default -> { return null; }
+    private void saveAndSynchronize(EntityPlayer player, EnumHand hand, ItemStack stack, ManipulatorState state) {
+        saveState(stack, state);
+        if (player instanceof EntityPlayerMP serverPlayer) {
+            MatterManipulatorNetwork.sendStateTo(serverPlayer, hand, state);
         }
     }
 
     @Override
     public ActionResult<ItemStack> onItemRightClick(World world, EntityPlayer player, EnumHand hand) {
         ItemStack stack = player.getHeldItem(hand);
-        if (player.isSneaking()) {
-            player.setActiveHand(hand);
-            if (world.isRemote) {
-                MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
-                        ExecuteManipulatorOperationMessage.Action.START));
-            }
-            return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
-        }
-
         ManipulatorState state = state(stack);
         if (state.pendingAction().selectsCoordinates()) {
             if (!world.isRemote) {
                 applyCoordinateClick(player, world, hand, stack, state,
                         ManipulatorTargeting.lookingAt(player, 1.0F));
+            }
+            return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
+        }
+
+        if (player.isSneaking()) {
+            player.setActiveHand(hand);
+            if (world.isRemote) {
+                MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
+                        ExecuteManipulatorOperationMessage.Action.START));
             }
             return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
         }
@@ -299,6 +253,7 @@ public final class ItemMatterManipulator extends Item {
     @Override
     public void onUpdate(ItemStack stack, World world, Entity holder, int itemSlot, boolean selected) {
         if (world.isRemote || world.getTotalWorldTime() % 100L != 0L) return;
+        if (holder instanceof EntityPlayer player && player.capabilities.isCreativeMode) return;
 
         ManipulatorState state = state(stack);
         if (!state.hasUpgrade(ManipulatorUpgrade.POWER_P2P) || state.uplinkAddress() == null) return;
@@ -445,22 +400,6 @@ public final class ItemMatterManipulator extends Item {
         return joiner.toString();
     }
 
-    private static SelectionSlot markNextSelection(ManipulatorState state, ManipulatorLocation location) {
-        if (state.selectionA() == null) {
-            state.setSelectionA(location);
-            return SelectionSlot.A;
-        }
-        if (state.selectionB() == null) {
-            state.setSelectionB(location);
-            return SelectionSlot.B;
-        }
-        if (requiresThirdSelection(state) && state.selectionC() == null) {
-            state.setSelectionC(location);
-            return SelectionSlot.C;
-        }
-        return null;
-    }
-
     private static String selectionSummary(ManipulatorState state) {
         int selected = 0;
         if (state.selectionA() != null) selected++;
@@ -478,20 +417,7 @@ public final class ItemMatterManipulator extends Item {
         };
     }
 
-    private static boolean usesDirectCoordinateSelection(ManipulatorPlaceMode mode) {
-        return mode == ManipulatorPlaceMode.GEOMETRY || mode == ManipulatorPlaceMode.EXCHANGING ||
-                mode == ManipulatorPlaceMode.CABLES;
-    }
-
-    private enum SelectionSlot {
-        A("applygray.matter_manipulator.selection.a"),
-        B("applygray.matter_manipulator.selection.b"),
-        C("applygray.matter_manipulator.selection.c");
-
-        private final String translationKey;
-
-        SelectionSlot(String translationKey) {
-            this.translationKey = translationKey;
-        }
+    private static String selectionTranslationKey(SelectionSlot slot) {
+        return "applygray.matter_manipulator.selection." + slot.name().toLowerCase(java.util.Locale.ROOT);
     }
 }

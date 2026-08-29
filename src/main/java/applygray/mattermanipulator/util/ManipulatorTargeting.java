@@ -1,6 +1,7 @@
 package applygray.mattermanipulator.util;
 
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.RayTraceResult;
@@ -15,12 +16,16 @@ public final class ManipulatorTargeting {
         double reach = player.getEntityAttribute(EntityPlayer.REACH_DISTANCE).getAttributeValue();
         RayTraceResult hit = player.rayTrace(reach, partialTicks);
         if (hit != null && hit.typeOfHit == RayTraceResult.Type.BLOCK) {
-            BlockPos block = hit.getBlockPos();
-            return player.isSneaking() ? block : block.offset(hit.sideHit);
+            return blockTarget(hit.getBlockPos(), hit.sideHit, player.isSneaking());
         }
 
         Vec3d start = player.getPositionEyes(partialTicks);
         Vec3d end = start.add(player.getLook(partialTicks).scale(reach));
         return new BlockPos(MathHelper.floor(end.x), MathHelper.floor(end.y), MathHelper.floor(end.z));
+    }
+
+    public static BlockPos blockTarget(BlockPos hitBlock, EnumFacing hitSide, boolean selectHitBlock) {
+        if (hitBlock == null || hitSide == null) throw new IllegalArgumentException("Block hit must have a side");
+        return selectHitBlock ? hitBlock : hitBlock.offset(hitSide);
     }
 }

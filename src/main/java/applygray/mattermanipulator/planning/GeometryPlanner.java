@@ -69,18 +69,6 @@ public final class GeometryPlanner {
         };
     }
 
-    public static BlockPos pinToAxes(BlockPos origin, BlockPos point) {
-        return switch (largestAbsoluteComponent(
-                point.getX() - origin.getX(),
-                point.getY() - origin.getY(),
-                point.getZ() - origin.getZ())) {
-            case 0 -> new BlockPos(point.getX(), origin.getY(), origin.getZ());
-            case 1 -> new BlockPos(origin.getX(), point.getY(), origin.getZ());
-            case 2 -> new BlockPos(origin.getX(), origin.getY(), point.getZ());
-            default -> throw new AssertionError();
-        };
-    }
-
     private static void validateSelection(GeometrySelection selection) {
         if (selection == null || selection.a() == null || selection.b() == null ||
                 selection.shape().requiresThirdPoint() && selection.c() == null) {
@@ -378,14 +366,6 @@ public final class GeometryPlanner {
         long absoluteZ = Math.abs((long) z);
         if (absoluteX <= absoluteY && absoluteX <= absoluteZ) return 0;
         return absoluteY <= absoluteZ ? 1 : 2;
-    }
-
-    private static int largestAbsoluteComponent(int x, int y, int z) {
-        long absoluteX = Math.abs((long) x);
-        long absoluteY = Math.abs((long) y);
-        long absoluteZ = Math.abs((long) z);
-        if (absoluteX >= absoluteY && absoluteX >= absoluteZ) return 0;
-        return absoluteY >= absoluteZ ? 1 : 2;
     }
 
     private static long span(int minimum, int maximum) {
