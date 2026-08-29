@@ -60,20 +60,20 @@ public final class ResourceRequirements {
     }
 
     public static ResourceRequirements fluids(FluidRequirement... requirements) {
-        Map<String, FluidRequirement> amounts = new LinkedHashMap<>();
+        Map<FluidKey, FluidRequirement> amounts = new LinkedHashMap<>();
         for (FluidRequirement requirement : requirements) {
-            amounts.merge(requirement.fluidName(), requirement, (first, second) ->
+            amounts.merge(FluidKey.of(requirement), requirement, (first, second) ->
                     new FluidRequirement(first.fluidName(), first.tag(), Math.addExact(first.amount(), second.amount())));
         }
         return new ResourceRequirements(List.of(), amounts.values().stream().toList());
     }
 
     public static ResourceRequirements fromFluids(Iterable<FluidStack> stacks) {
-        Map<String, FluidRequirement> amounts = new LinkedHashMap<>();
+        Map<FluidKey, FluidRequirement> amounts = new LinkedHashMap<>();
         for (FluidStack stack : stacks) {
             if (stack == null || stack.amount <= 0) continue;
             FluidRequirement requirement = new FluidRequirement(stack, stack.amount);
-            amounts.merge(requirement.fluidName(), requirement, (first, second) ->
+            amounts.merge(FluidKey.of(requirement), requirement, (first, second) ->
                     new FluidRequirement(first.fluidName(), first.tag(), Math.addExact(first.amount(), second.amount())));
         }
         return new ResourceRequirements(List.of(), amounts.values().stream().toList());
@@ -83,9 +83,9 @@ public final class ResourceRequirements {
         Map<BlockSpec, Long> items = new LinkedHashMap<>();
         first.entries.forEach(entry -> items.merge(entry.specification(), entry.amount(), Math::addExact));
         second.entries.forEach(entry -> items.merge(entry.specification(), entry.amount(), Math::addExact));
-        Map<String, FluidRequirement> fluids = new LinkedHashMap<>();
+        Map<FluidKey, FluidRequirement> fluids = new LinkedHashMap<>();
         java.util.stream.Stream.concat(first.fluidEntries.stream(), second.fluidEntries.stream()).forEach(entry ->
-                fluids.merge(entry.fluidName(), entry, (a, b) -> new FluidRequirement(a.fluidName(), a.tag(),
+                fluids.merge(FluidKey.of(entry), entry, (a, b) -> new FluidRequirement(a.fluidName(), a.tag(),
                         Math.addExact(a.amount(), b.amount()))));
         return new ResourceRequirements(items.entrySet().stream().map(e -> new ResourceRequirement(e.getKey(), e.getValue())).toList(),
                 fluids.values().stream().toList());
@@ -101,5 +101,11 @@ public final class ResourceRequirements {
 
     public List<FluidRequirement> fluidEntries() {
         return fluidEntries;
+    }
+
+    private record FluidKey(String name, net.minecraft.nbt.NBTTagCompound tag) {
+        private static FluidKey of(FluidRequirement requirement) {
+            return new FluidKey(requirement.fluidName(), requirement.tag());
+        }
     }
 }

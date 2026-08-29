@@ -30,6 +30,7 @@
     "supergiant.MixinPatternProviderPartSmartCopy",
     "supergiant.MixinPatternProviderLogicSmartCopy",
     "supergiant.MixinP2PTunnelPartPortableState",
+    "supergiant.MixinTileCanerRuntimeState",
     "supergiantfc.MixinUtil",
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],

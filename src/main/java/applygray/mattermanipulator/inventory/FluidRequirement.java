@@ -23,6 +23,11 @@ public record FluidRequirement(String fluidName, NBTTagCompound tag, long amount
         this(Objects.requireNonNull(stack, "stack").getFluid().getName(), stack.tag, amount);
     }
 
+    @Override
+    public NBTTagCompound tag() {
+        return tag == null ? null : tag.copy();
+    }
+
     public Fluid fluid() {
         return Objects.requireNonNull(FluidRegistry.getFluid(fluidName), "fluid registry changed");
     }

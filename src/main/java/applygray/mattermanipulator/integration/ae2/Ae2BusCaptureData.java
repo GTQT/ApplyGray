@@ -380,7 +380,7 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         public InventoryStack(int slot, ItemStack stack) {
             if (slot < 0) throw new IllegalArgumentException("Inventory slots cannot be negative");
             this.slot = slot;
-            this.stack = checkedStack(stack);
+            this.stack = checkedInventoryStack(stack);
         }
 
         public int slot() {
@@ -403,7 +403,8 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
 
         @Override
         public int hashCode() {
-            return Objects.hash(slot, stack.getItem().getRegistryName(), stack.getMetadata(), stack.getTagCompound());
+            return Objects.hash(slot, stack.getItem().getRegistryName(), stack.getMetadata(), stack.getCount(),
+                    stack.getTagCompound());
         }
     }
 
@@ -447,6 +448,12 @@ public final class Ae2BusCaptureData implements CapturedBlockData {
         ItemStack copy = stack.copy();
         copy.setCount(1);
         return copy;
+    }
+
+    private static ItemStack checkedInventoryStack(ItemStack stack) {
+        Objects.requireNonNull(stack, "stack");
+        if (stack.isEmpty()) throw new IllegalArgumentException("AE2 inventory capture cannot contain an empty stack");
+        return stack.copy();
     }
 
     @Override

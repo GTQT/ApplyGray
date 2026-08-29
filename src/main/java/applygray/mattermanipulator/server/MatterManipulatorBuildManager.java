@@ -43,6 +43,7 @@ import applygray.mattermanipulator.inventory.ResourceRequirements;
 import applygray.mattermanipulator.inventory.FluidRequirement;
 import applygray.mattermanipulator.integration.ae2.Ae2WirelessMaterialSource;
 import applygray.mattermanipulator.integration.ae2.Ae2BuildingAdapter;
+import applygray.mattermanipulator.integration.ae2.Ae2TileBuildingAdapter;
 import applygray.mattermanipulator.integration.gregtech.GregTechBuildingAdapter;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
 import applygray.mattermanipulator.uplink.UplinkMaterialSource;
@@ -86,7 +87,7 @@ import net.minecraftforge.items.wrapper.PlayerOffhandInvWrapper;
 public final class MatterManipulatorBuildManager {
 
     private static final BuildingAdapterRegistry ADAPTERS = new BuildingAdapterRegistry(List.of(
-            new GregTechBuildingAdapter(), new Ae2BuildingAdapter(), new FluidBuildingAdapter(),
+            new GregTechBuildingAdapter(), new Ae2BuildingAdapter(), new Ae2TileBuildingAdapter(), new FluidBuildingAdapter(),
             new VanillaBuildingAdapter()));
     private static final GeometryBuildService GEOMETRY_SERVICE = new GeometryBuildService(ADAPTERS);
     private static final CopyBuildService COPY_SERVICE = new CopyBuildService(ADAPTERS);
