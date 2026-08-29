@@ -51,6 +51,7 @@ import applygray.mattermanipulator.uplink.MatterManipulatorUplinkRegistry;
 import applygray.mattermanipulator.uplink.UplinkCraftingEndpoint;
 import applygray.mattermanipulator.uplink.UplinkCraftingRequestResult;
 import applygray.mattermanipulator.uplink.UplinkEndpoint;
+import applygray.mattermanipulator.uplink.UplinkStatus;
 import applygray.mattermanipulator.planning.BoundCopyPlan;
 import applygray.mattermanipulator.planning.BoundCopyOperation;
 import applygray.mattermanipulator.planning.BoundExchangePlan;
@@ -151,7 +152,7 @@ public final class MatterManipulatorBuildManager {
                 pending.ticksUntilNextBatch = batchInterval(pending) - 1;
             } catch (RuntimeException exception) {
                 ACTIVE_BUILDS.remove(playerId);
-                reportStartFailure(player, exception);
+                reportStartFailure(player, hand, exception);
                 return;
             }
             ApplyGrayMod.LOGGER.info("Matter Manipulator {} operation started for {} with {} block(s)", pending.kind,
@@ -159,7 +160,7 @@ public final class MatterManipulatorBuildManager {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.started",
                     pending.operationCount), true);
         } catch (RuntimeException exception) {
-            reportStartFailure(player, exception);
+            reportStartFailure(player, hand, exception);
         }
     }
 
@@ -220,7 +221,7 @@ public final class MatterManipulatorBuildManager {
                 reportCraftingRequestFailure(player, result.status());
             }
         } catch (RuntimeException exception) {
-            reportStartFailure(player, exception);
+            reportStartFailure(player, hand, exception);
         }
     }
 
@@ -281,7 +282,7 @@ public final class MatterManipulatorBuildManager {
                 }
             } catch (RuntimeException exception) {
                 iterator.remove();
-                reportStartFailure(player, exception);
+                reportStartFailure(player, pending.hand, exception);
             }
         }
     }
@@ -616,7 +617,9 @@ public final class MatterManipulatorBuildManager {
     private static void reportCraftingRequestFailure(EntityPlayerMP player, UplinkCraftingRequestResult.Status status) {
         String translationKey = switch (status) {
             case EMPTY -> "applygray.matter_manipulator.uplink.crafting.no_requirements";
-            case OFFLINE, AE_OFFLINE, NO_PLASMA -> "applygray.matter_manipulator.uplink.offline";
+            case OFFLINE -> "applygray.matter_manipulator.uplink.offline";
+            case AE_OFFLINE -> "applygray.matter_manipulator.uplink.ae_offline";
+            case NO_PLASMA -> "applygray.matter_manipulator.uplink.no_plasma";
             case QUEUE_FULL -> "applygray.matter_manipulator.uplink.crafting.queue_full";
             case INVALID_REQUIREMENTS -> "applygray.matter_manipulator.uplink.crafting.invalid";
             case ACCEPTED -> throw new IllegalArgumentException("Accepted crafting requests do not fail");
@@ -628,9 +631,9 @@ public final class MatterManipulatorBuildManager {
         return ManipulatorState.readFromNbt(state.writeToNbt());
     }
 
-    private static void reportStartFailure(EntityPlayerMP player, RuntimeException exception) {
+    private static void reportStartFailure(EntityPlayerMP player, EnumHand hand, RuntimeException exception) {
         if (exception instanceof TransactionFailedException failed) {
-            reportBatchFailure(player, failed.result);
+            reportBatchFailure(player, hand, failed.result);
             return;
         }
         if (exception instanceof BuildingException building) {
@@ -641,7 +644,11 @@ public final class MatterManipulatorBuildManager {
                     building.reason().name()), true);
             return;
         }
-        if (exception instanceof InsufficientResourcesException) {
+        if (exception instanceof InsufficientResourcesException insufficient) {
+            UplinkStatus uplinkStatus = boundUplinkStatus(player, hand);
+            ApplyGrayMod.LOGGER.info("Matter Manipulator operation for {} is missing resources: {}; uplinkStatus={}",
+                    player.getName(), insufficient.getMessage(), uplinkStatus);
+            if (reportUplinkFailure(player, uplinkStatus)) return;
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.no_material"), true);
             return;
         }
@@ -663,7 +670,7 @@ public final class MatterManipulatorBuildManager {
         player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.failed"), true);
     }
 
-    private static void reportBatchFailure(EntityPlayerMP player, BuildTransaction.Result result) {
+    private static void reportBatchFailure(EntityPlayerMP player, EnumHand hand, BuildTransaction.Result result) {
         if (result.failure() instanceof BuildingException building) {
             ApplyGrayMod.LOGGER.warn("Matter Manipulator batch rejected for {} at {}: reason={}, message={}",
                     player.getName(), building.position(), building.reason(), building.getMessage());
@@ -676,12 +683,36 @@ public final class MatterManipulatorBuildManager {
                 "manipulator".equals(result.failedSource())) {
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.no_power"), true);
         } else if (result.state() == BuildTransaction.State.RESOURCE_FAILURE || !result.failedSource().isEmpty()) {
+            if (result.failedSource().startsWith("uplink:") &&
+                    reportUplinkFailure(player, boundUplinkStatus(player, hand))) return;
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.no_material"), true);
         } else {
             ApplyGrayMod.LOGGER.warn("Matter Manipulator transaction did not commit for {}", player.getName(),
                     result.failure());
             player.sendStatusMessage(new TextComponentTranslation("applygray.matter_manipulator.build.failed"), true);
         }
+    }
+
+    private static UplinkStatus boundUplinkStatus(EntityPlayerMP player, EnumHand hand) {
+        ItemStack stack = player.getHeldItem(hand);
+        if (!(stack.getItem() instanceof ItemMatterManipulator manipulator) ||
+                !manipulator.hasCapability(stack, ManipulatorCapability.UPLINK)) return null;
+        Long address = manipulator.state(stack).uplinkAddress();
+        if (address == null) return null;
+        UplinkEndpoint endpoint = MatterManipulatorUplinkRegistry.find(address);
+        return endpoint == null ? UplinkStatus.OFFLINE : endpoint.status();
+    }
+
+    private static boolean reportUplinkFailure(EntityPlayerMP player, UplinkStatus status) {
+        if (status == null || status == UplinkStatus.OK) return false;
+        TextComponentTranslation message = switch (status) {
+            case OFFLINE -> new TextComponentTranslation("applygray.matter_manipulator.uplink.offline");
+            case AE_OFFLINE -> new TextComponentTranslation("applygray.matter_manipulator.uplink.ae_offline");
+            case NO_PLASMA -> new TextComponentTranslation("applygray.matter_manipulator.uplink.no_plasma");
+            case OK -> throw new IllegalStateException("An available Uplink is not a failure");
+        };
+        player.sendStatusMessage(message, true);
+        return true;
     }
 
     private enum BuildKind {

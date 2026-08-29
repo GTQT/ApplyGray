@@ -14,11 +14,15 @@ import applygray.mattermanipulator.planning.CopyArraySpan;
 import applygray.mattermanipulator.state.ManipulatorPendingAction;
 import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
+import applygray.mattermanipulator.state.ManipulatorRemovalMode;
+import applygray.mattermanipulator.state.ManipulatorSelectionActions;
+import applygray.mattermanipulator.state.ManipulatorShape;
 import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.state.ManipulatorTier;
 import applygray.mattermanipulator.state.ManipulatorUpgrade;
 import applygray.mattermanipulator.uplink.MatterManipulatorUplinkRegistry;
 import applygray.mattermanipulator.uplink.UplinkEndpoint;
+import applygray.mattermanipulator.util.ManipulatorTargeting;
 
 import gregtech.api.capability.GregtechCapabilities;
 import gregtech.api.capability.IElectricItem;
@@ -166,6 +170,11 @@ public final class ItemMatterManipulator extends Item {
             }
         }
         BlockPos selectedPosition = player.isSneaking() ? position : position.offset(facing);
+        return applyCoordinateClick(player, world, hand, stack, state, selectedPosition);
+    }
+
+    private EnumActionResult applyCoordinateClick(EntityPlayer player, World world, EnumHand hand, ItemStack stack,
+                                                   ManipulatorState state, BlockPos selectedPosition) {
         ManipulatorLocation location = ManipulatorLocation.fromWorld(world, selectedPosition);
         if (state.pendingAction() == ManipulatorPendingAction.MARK_ARRAY) {
             if (state.selectionA() == null || state.selectionB() == null || state.selectionC() == null) {
@@ -189,10 +198,11 @@ public final class ItemMatterManipulator extends Item {
         }
         SelectionSlot slot = applyPendingSelection(state, location);
         if (slot == null && state.pendingAction() == ManipulatorPendingAction.NONE) {
-            slot = markNextSelection(state, location);
-            if (slot == SelectionSlot.A && (state.placeMode() == ManipulatorPlaceMode.GEOMETRY ||
-                    state.placeMode() == ManipulatorPlaceMode.EXCHANGING || state.placeMode() == ManipulatorPlaceMode.CABLES)) {
-                state.setPendingAction(ManipulatorPendingAction.MOVING_COORDS);
+            if (usesDirectCoordinateSelection(state.placeMode())) {
+                ManipulatorSelectionActions.beginCoordinates(state, location);
+                slot = SelectionSlot.A;
+            } else {
+                slot = markNextSelection(state, location);
             }
         }
         if (slot == null) {
@@ -218,13 +228,24 @@ public final class ItemMatterManipulator extends Item {
             case MARK_CUT_B -> { state.setSelectionB(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.B; }
             case MARK_PASTE -> { state.setSelectionC(location); state.setPendingAction(ManipulatorPendingAction.NONE); return SelectionSlot.C; }
             case MOVING_COORDS -> {
-                if (state.selectionA() == null) state.setSelectionA(location);
-                else if (state.selectionB() == null) state.setSelectionB(location);
-                else if (state.shape().requiresThirdPoint() && state.selectionC() == null) state.setSelectionC(location);
+                SelectionSlot slot;
+                if (state.selectionA() == null) {
+                    state.setSelectionA(location);
+                    slot = SelectionSlot.A;
+                } else if (state.selectionB() == null) {
+                    state.setSelectionB(location);
+                    slot = SelectionSlot.B;
+                } else if (state.shape().requiresThirdPoint() && state.selectionC() == null) {
+                    state.setSelectionC(location);
+                    slot = SelectionSlot.C;
+                } else {
+                    state.setPendingAction(ManipulatorPendingAction.NONE);
+                    return null;
+                }
                 if (state.selectionB() != null && (!state.shape().requiresThirdPoint() || state.selectionC() != null)) {
                     state.setPendingAction(ManipulatorPendingAction.NONE);
                 }
-                return state.selectionC() != null ? SelectionSlot.C : SelectionSlot.B;
+                return slot;
             }
             default -> { return null; }
         }
@@ -238,6 +259,15 @@ public final class ItemMatterManipulator extends Item {
             if (world.isRemote) {
                 MatterManipulatorNetwork.CHANNEL.sendToServer(new ExecuteManipulatorOperationMessage(hand,
                         ExecuteManipulatorOperationMessage.Action.START));
+            }
+            return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
+        }
+
+        ManipulatorState state = state(stack);
+        if (state.pendingAction().selectsCoordinates()) {
+            if (!world.isRemote) {
+                applyCoordinateClick(player, world, hand, stack, state,
+                        ManipulatorTargeting.lookingAt(player, 1.0F));
             }
             return ActionResult.newResult(EnumActionResult.SUCCESS, stack);
         }
@@ -376,8 +406,24 @@ public final class ItemMatterManipulator extends Item {
         return net.minecraft.client.resources.I18n.format(key, args);
     }
 
-    private static String localizedEnum(Enum<?> value) {
-        return translate("applygray.matter_manipulator.enum." + value.name().toLowerCase());
+    private static String localizedEnum(ManipulatorPlaceMode value) {
+        return localizedEnum("mode", value);
+    }
+
+    private static String localizedEnum(ManipulatorRemovalMode value) {
+        return localizedEnum("removal", value);
+    }
+
+    private static String localizedEnum(ManipulatorShape value) {
+        return localizedEnum("shape", value);
+    }
+
+    private static String localizedEnum(ManipulatorPendingAction value) {
+        return localizedEnum("pending_action", value);
+    }
+
+    private static String localizedEnum(String category, Enum<?> value) {
+        return translate("applygray.matter_manipulator." + category + "." + value.name().toLowerCase());
     }
 
     private static String locationText(ManipulatorLocation location) {
@@ -430,6 +476,11 @@ public final class ItemMatterManipulator extends Item {
             case GEOMETRY -> state.shape().requiresThirdPoint();
             case EXCHANGING, CABLES -> false;
         };
+    }
+
+    private static boolean usesDirectCoordinateSelection(ManipulatorPlaceMode mode) {
+        return mode == ManipulatorPlaceMode.GEOMETRY || mode == ManipulatorPlaceMode.EXCHANGING ||
+                mode == ManipulatorPlaceMode.CABLES;
     }
 
     private enum SelectionSlot {

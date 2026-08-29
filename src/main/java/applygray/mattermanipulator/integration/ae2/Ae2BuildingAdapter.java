@@ -8,6 +8,7 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.BuildingAdapter;
 import applygray.mattermanipulator.building.BuildingContext;
 import applygray.mattermanipulator.building.BuildingException;
+import applygray.mattermanipulator.building.BuildingEventHooks;
 import applygray.mattermanipulator.building.CapturedBlock;
 import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
@@ -47,7 +48,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.NonNullList;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
-import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.fluids.FluidStack;
 
@@ -665,9 +665,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
             clearForReplacement(context, position, originalState);
             installBus(context, position, data);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), snapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, snapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, position,
                         "A protection handler denied the AE2 cable bus placement");
             }
@@ -776,9 +774,7 @@ public final class Ae2BuildingAdapter implements BuildingAdapter {
             targetSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), target);
             clearForReplacement(context, source, sourceState);
             installBus(context, target, data);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), targetSnapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, target,
                         "A protection handler denied the target AE2 cable bus move");
             }

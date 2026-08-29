@@ -30,6 +30,15 @@ public final class ManipulatorSelectionActions {
         state.setPendingAction(ManipulatorPendingAction.MARK_PASTE);
     }
 
+    /** Starts the A/B(/C) selection flow used directly by geometry, exchange, and cable modes. */
+    public static void beginCoordinates(ManipulatorState state, ManipulatorLocation location) {
+        Objects.requireNonNull(state, "state");
+        Objects.requireNonNull(location, "location");
+        state.clearSelections();
+        state.setSelectionA(location);
+        state.setPendingAction(ManipulatorPendingAction.MOVING_COORDS);
+    }
+
     public static void reset(ManipulatorState state) {
         Objects.requireNonNull(state, "state");
         state.clearSelections();

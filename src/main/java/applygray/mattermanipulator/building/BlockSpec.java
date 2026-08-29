@@ -125,6 +125,29 @@ public final class BlockSpec {
         return template.isEmpty() ? ItemStack.EMPTY : template.copy();
     }
 
+    /** Resolves this 1.12 item-and-metadata representation, or returns {@code null} when it is not a block state. */
+    public IBlockState toBlockState() {
+        return stateFor(template);
+    }
+
+    /**
+     * Tests whether a live world state already represents this placement target.
+     *
+     * <p>This is intentionally less strict than {@link #equals(Object)}: item NBT and fluid amount are material
+     * accounting details which cannot be reconstructed from an ordinary block state.</p>
+     */
+    public boolean matchesWorldState(IBlockState state) {
+        if (state == null) return false;
+        if (isAir()) return state.getBlock() == Blocks.AIR;
+        if (fluid != null) {
+            Fluid stateFluid = state.getBlock() instanceof IFluidBlock fluidBlock ? fluidBlock.getFluid()
+                    : FluidRegistry.lookupFluidForBlock(state.getBlock());
+            return stateFluid != null && stateFluid == fluid.getFluid();
+        }
+        IBlockState targetState = toBlockState();
+        return targetState != null && targetState.equals(state);
+    }
+
     public String sortKey() {
         if (fluid != null) return "fluid:" + fluid.getFluid().getName() + "@" + fluid.amount + ":" + fluid.tag;
         if (template.isEmpty()) return "minecraft:air";
@@ -156,6 +179,7 @@ public final class BlockSpec {
         return of(new ItemStack(data.getCompoundTag(KEY_STACK)));
     }
 
+    @SuppressWarnings("deprecation")
     private static IBlockState stateFor(ItemStack stack) {
         try {
             net.minecraft.block.Block block = net.minecraft.block.Block.getBlockFromItem(stack.getItem());

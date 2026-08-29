@@ -9,6 +9,7 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.BuildingAdapter;
 import applygray.mattermanipulator.building.BuildingContext;
 import applygray.mattermanipulator.building.BuildingException;
+import applygray.mattermanipulator.building.BuildingEventHooks;
 import applygray.mattermanipulator.building.CapturedBlock;
 import applygray.mattermanipulator.building.PreparedBlockChange;
 import applygray.mattermanipulator.inventory.FluidRequirement;
@@ -78,7 +79,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
 import net.minecraftforge.common.util.Constants;
-import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.fluids.FluidStack;
 
@@ -150,7 +150,8 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         if (!(block instanceof AEBaseTileBlock<?>)) {
             throw unsupported(position, "The selected material is not an AE2 block entity");
         }
-        IBlockState state = block.getStateFromMeta(specification.toStack().getMetadata());
+        IBlockState state = specification.toBlockState();
+        if (state == null) throw unsupported(position, "The selected AE2 material has invalid block metadata");
         TileEntity prototype = block.createTileEntity(context.world(), state);
         if (!(prototype instanceof AEBaseTile tile) || !isSupported(tile)) {
             String name = prototype == null ? block.getRegistryName().toString() : prototype.getClass().getSimpleName();
@@ -260,7 +261,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         if (!(state.getBlock() instanceof AEBaseTileBlock<?>)) {
             throw unsupported(position, "The AE2 tile is not hosted by an AE2 tile block");
         }
-        if (state.getBlock().getBlockHardness(state, context.world(), position) < 0.0F) {
+        if (state.getBlockHardness(context.world(), position) < 0.0F) {
             throw new BuildingException(BuildingException.Reason.UNBREAKABLE, position,
                     "The AE2 block entity is unbreakable");
         }
@@ -522,7 +523,10 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
         if (!(block instanceof AEBaseTileBlock<?>)) {
             throw unsupported(position, "The captured AE2 placement item is no longer an AE2 tile block");
         }
-        IBlockState targetState = block.getStateFromMeta(placement.getMetadata());
+        IBlockState targetState = BlockSpec.of(placement).toBlockState();
+        if (targetState == null) {
+            throw unsupported(position, "The captured AE2 placement item has invalid block metadata");
+        }
         if (!context.world().mayPlace(block, position, false, EnumFacing.UP, context.player())) {
             throw new BuildingException(BuildingException.Reason.CANNOT_PLACE, position,
                     "Minecraft rejected the AE2 block placement");
@@ -842,9 +846,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
             clearForReplacement(context, position, originalState);
             installTile(context, position, data, verifyCapture);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), snapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, snapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, position,
                         "A protection handler denied the AE2 block placement");
             }
@@ -950,9 +952,7 @@ public final class Ae2TileBuildingAdapter implements BuildingAdapter {
             targetSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), target);
             clearForReplacement(context, source, sourceState);
             installTile(context, target, data, true);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), targetSnapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, target,
                         "A protection handler denied the AE2 move destination");
             }

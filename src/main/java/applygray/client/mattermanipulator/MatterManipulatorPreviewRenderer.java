@@ -3,13 +3,18 @@ package applygray.client.mattermanipulator;
 import java.util.ArrayList;
 import java.util.List;
 
+import applygray.mattermanipulator.building.BlockSpec;
+import applygray.mattermanipulator.building.GeometryConfiguration;
 import applygray.mattermanipulator.config.MatterManipulatorConfig;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
+import applygray.mattermanipulator.planning.BoundGeometryOperation;
+import applygray.mattermanipulator.planning.BoundGeometryPlan;
 import applygray.mattermanipulator.planning.CopyPlan;
 import applygray.mattermanipulator.planning.CopyArraySpan;
 import applygray.mattermanipulator.planning.CopyPlanner;
 import applygray.mattermanipulator.planning.CopyTransform;
 import applygray.mattermanipulator.planning.GeometryPlan;
+import applygray.mattermanipulator.planning.GeometryPlanBinder;
 import applygray.mattermanipulator.planning.GeometryPlanException;
 import applygray.mattermanipulator.planning.GeometryPlanner;
 import applygray.mattermanipulator.planning.GeometrySelection;
@@ -19,12 +24,12 @@ import applygray.mattermanipulator.state.ManipulatorPlaceMode;
 import applygray.mattermanipulator.state.ManipulatorShape;
 import applygray.mattermanipulator.state.ManipulatorState;
 import applygray.mattermanipulator.state.ManipulatorTier;
+import applygray.mattermanipulator.util.ManipulatorTargeting;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.BufferBuilder;
-import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
@@ -32,9 +37,6 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.RayTraceResult;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -51,11 +53,16 @@ import org.lwjgl.opengl.GL11;
  */
 public final class MatterManipulatorPreviewRenderer {
 
+    private static final long VISIBILITY_REFRESH_INTERVAL_MS = 500L;
+
     private static boolean initialized;
     private static ManipulatorState cachedState;
     private static int cachedDimension = Integer.MIN_VALUE;
     private static BlockPos cachedPlayerBlock;
     private static Preview cachedPreview = Preview.empty();
+    private static Preview visibilityPreview;
+    private static List<PreviewBox> cachedVisibleBoxes = List.of();
+    private static long nextVisibilityRefreshMillis;
 
     private MatterManipulatorPreviewRenderer() {}
 
@@ -77,7 +84,7 @@ public final class MatterManipulatorPreviewRenderer {
 
         ManipulatorState state = manipulator.state(stack);
         Preview preview = preview(world, player, state, manipulator.tier(), event.getPartialTicks());
-        List<PreviewBox> visibleBoxes = preview.visibleBoxes();
+        List<PreviewBox> visibleBoxes = visibleBoxes(world, preview);
         if (visibleBoxes.isEmpty()) return;
 
         RenderManager renderManager = minecraft.getRenderManager();
@@ -89,19 +96,11 @@ public final class MatterManipulatorPreviewRenderer {
         if (MatterManipulatorConfig.hintsOnTop) GlStateManager.disableDepth();
         else GlStateManager.enableDepth();
         GlStateManager.depthMask(false);
-        GlStateManager.glLineWidth(2.0F);
 
         for (PreviewBox box : visibleBoxes) {
-            if (box.filled) drawGhostBox(box.bounds.grow(0.006D), box.red, box.green, box.blue, box.alpha);
+            drawGhostBox(box.bounds.grow(0.006D), box.red, box.green, box.blue, box.alpha);
         }
 
-        for (PreviewBox box : visibleBoxes) {
-            if (!box.filled) {
-                RenderGlobal.drawSelectionBoundingBox(box.bounds.grow(0.002D), box.red, box.green, box.blue, box.alpha);
-            }
-        }
-
-        GlStateManager.glLineWidth(1.0F);
         GlStateManager.depthMask(true);
         GlStateManager.enableDepth();
         GlStateManager.disableBlend();
@@ -128,8 +127,23 @@ public final class MatterManipulatorPreviewRenderer {
         cachedState = ManipulatorState.readFromNbt(effectiveState.writeToNbt());
         cachedDimension = dimension;
         cachedPlayerBlock = playerBlock;
-        cachedPreview = colorByRange(buildPreview(dimension, cachedState), player, tier.maximumRange());
+        cachedPreview = colorByRange(buildPreview(world, dimension, cachedState), player, tier.maximumRange());
         return cachedPreview;
+    }
+
+    private static List<PreviewBox> visibleBoxes(World world, Preview preview) {
+        long now = System.currentTimeMillis();
+        if (visibilityPreview == preview && now < nextVisibilityRefreshMillis) return cachedVisibleBoxes;
+
+        List<PreviewBox> candidates = preview.visibleBoxes(now);
+        List<PreviewBox> visible = new ArrayList<>(candidates.size());
+        for (PreviewBox box : candidates) {
+            if (!box.isSatisfiedBy(world)) visible.add(box);
+        }
+        visibilityPreview = preview;
+        cachedVisibleBoxes = List.copyOf(visible);
+        nextVisibilityRefreshMillis = now + VISIBILITY_REFRESH_INTERVAL_MS;
+        return cachedVisibleBoxes;
     }
 
     private static Preview colorByRange(Preview preview, EntityPlayerSP player, int maximumRange) {
@@ -141,7 +155,7 @@ public final class MatterManipulatorPreviewRenderer {
             double centerY = (box.bounds.minY + box.bounds.maxY) * 0.5D;
             double centerZ = (box.bounds.minZ + box.bounds.maxZ) * 0.5D;
             boolean inRange = player.getDistanceSq(centerX, centerY, centerZ) <= rangeSquared;
-            recolored.add(inRange ? box : new PreviewBox(box.bounds, 1.0F, 0.12F, 0.12F, box.alpha, box.filled));
+            recolored.add(inRange ? box : box.withColor(1.0F, 0.12F, 0.12F));
         }
         List<PreviewBox> recoloredTransient = new ArrayList<>(preview.transientBoxes.size());
         for (PreviewBox box : preview.transientBoxes) {
@@ -149,8 +163,7 @@ public final class MatterManipulatorPreviewRenderer {
             double centerY = (box.bounds.minY + box.bounds.maxY) * 0.5D;
             double centerZ = (box.bounds.minZ + box.bounds.maxZ) * 0.5D;
             boolean inRange = player.getDistanceSq(centerX, centerY, centerZ) <= rangeSquared;
-            recoloredTransient.add(inRange ? box
-                    : new PreviewBox(box.bounds, 1.0F, 0.12F, 0.12F, box.alpha, box.filled));
+            recoloredTransient.add(inRange ? box : box.withColor(1.0F, 0.12F, 0.12F));
         }
         return new Preview(recolored, recoloredTransient, preview.transientExpiresAtMillis);
     }
@@ -162,10 +175,9 @@ public final class MatterManipulatorPreviewRenderer {
     private static ManipulatorState withMovingTarget(World world, EntityPlayerSP player, ManipulatorState state,
                                                       float partialTicks) {
         ManipulatorPendingAction action = state.pendingAction();
-        if (!movesWithCrosshair(action)) return state;
+        if (!action.selectsCoordinates()) return state;
 
-        BlockPos target = lookingAt(player, partialTicks);
-        if (target == null) return state;
+        BlockPos target = ManipulatorTargeting.lookingAt(player, partialTicks);
 
         ManipulatorState preview = ManipulatorState.readFromNbt(state.writeToNbt());
         ManipulatorLocation location = ManipulatorLocation.fromWorld(world, target);
@@ -196,28 +208,7 @@ public final class MatterManipulatorPreviewRenderer {
         return preview;
     }
 
-    private static boolean movesWithCrosshair(ManipulatorPendingAction action) {
-        return action == ManipulatorPendingAction.MOVING_COORDS ||
-                action == ManipulatorPendingAction.MARK_COPY_A || action == ManipulatorPendingAction.MARK_COPY_B ||
-                action == ManipulatorPendingAction.MARK_CUT_A || action == ManipulatorPendingAction.MARK_CUT_B ||
-                action == ManipulatorPendingAction.MARK_PASTE || action == ManipulatorPendingAction.MARK_ARRAY;
-    }
-
-    private static BlockPos lookingAt(EntityPlayerSP player, float partialTicks) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        double reach = minecraft.playerController.getBlockReachDistance();
-        RayTraceResult hit = player.rayTrace(reach, partialTicks);
-        if (hit != null && hit.typeOfHit == RayTraceResult.Type.BLOCK) {
-            BlockPos block = hit.getBlockPos();
-            return player.isSneaking() ? block : block.offset(hit.sideHit);
-        }
-
-        Vec3d start = player.getPositionEyes(partialTicks);
-        Vec3d end = start.add(player.getLook(partialTicks).scale(reach));
-        return new BlockPos(MathHelper.floor(end.x), MathHelper.floor(end.y), MathHelper.floor(end.z));
-    }
-
-    private static Preview buildPreview(int dimension, ManipulatorState state) {
+    private static Preview buildPreview(World world, int dimension, ManipulatorState state) {
         List<PreviewBox> boxes = new ArrayList<>();
         List<PreviewBox> transientBoxes = new ArrayList<>();
         addSelection(boxes, state.selectionA(), dimension, 0.20F, 0.75F, 1.00F);
@@ -228,7 +219,7 @@ public final class MatterManipulatorPreviewRenderer {
             switch (state.placeMode()) {
                 case GEOMETRY -> addGeometryPreview(boxes, state, dimension);
                 case CABLES -> addCablePreview(boxes, state, dimension);
-                case COPYING, MOVING -> addCopyPreview(boxes, state, dimension);
+                case COPYING, MOVING -> addCopyPreview(boxes, world, state, dimension);
                 case EXCHANGING -> addRegionPreview(boxes, state.selectionA(), state.selectionB(), dimension,
                         0.95F, 0.35F, 0.20F);
             }
@@ -248,20 +239,24 @@ public final class MatterManipulatorPreviewRenderer {
         GeometrySelection selection = state.geometrySelection();
         if (!selection.isComplete() || selection.a().dimension() != dimension) return;
         GeometryPlan plan = GeometryPlanner.plan(selection, maxDetailedVoxels() + 1);
+        BoundGeometryPlan bound = GeometryPlanBinder.bind(plan, state.geometryConfiguration());
+        List<PreviewTarget> targets = bound.operations().stream()
+                .map(MatterManipulatorPreviewRenderer::previewTarget)
+                .toList();
         // GT5U's A/B volume hint is useful for volumetric shapes, but for a line it otherwise looks like
         // every block inside the bounding box will be built. Keep the ghost aligned with the actual plan.
         if (selection.shape() == ManipulatorShape.LINE) {
-            addRegionPreview(boxes, plan.operations().stream().map(operation -> operation.location().position()).toList(),
-                    0.15F, 0.60F, 0.75F, 0.90F);
+            addTrackedRegionPreview(boxes,
+                    plan.operations().stream().map(operation -> operation.location().position()).toList(), targets,
+                    0.15F, 0.60F, 0.75F);
         } else {
             List<BlockPos> anchors = new ArrayList<>();
             anchors.add(selection.a().position());
             anchors.add(selection.b().position());
             if (selection.c() != null) anchors.add(selection.c().position());
-            addRegionPreview(boxes, anchors, 0.15F, 0.60F, 0.75F, 0.90F);
+            addTrackedRegionPreview(boxes, anchors, targets, 0.15F, 0.60F, 0.75F);
         }
-        addOperationPreview(boxes, plan.operations().stream().map(operation -> operation.location().position()).toList(),
-                0.25F, 0.95F, 0.85F);
+        addOperationPreview(boxes, targets, 0.25F, 0.95F, 0.85F);
     }
 
     private static void addCablePreview(List<PreviewBox> boxes, ManipulatorState state, int dimension) {
@@ -269,14 +264,23 @@ public final class MatterManipulatorPreviewRenderer {
         ManipulatorLocation b = state.selectionB();
         if (!sameDimension(dimension, a, b)) return;
         BlockPos pinned = GeometryPlanner.pinToAxes(a.position(), b.position());
-        addRegionPreview(boxes, List.of(a.position(), pinned), 0.15F, 0.60F, 0.75F, 0.90F);
         GeometryPlan plan = GeometryPlanner.plan(new GeometrySelection(ManipulatorShape.LINE, a,
                 new ManipulatorLocation(dimension, pinned), null), maxDetailedVoxels() + 1);
-        addOperationPreview(boxes, plan.operations().stream().map(operation -> operation.location().position()).toList(),
-                0.25F, 0.95F, 0.85F);
+        GeometryConfiguration configuration = new GeometryConfiguration();
+        configuration.edges().setSingle(state.cableMaterial());
+        BoundGeometryPlan bound = GeometryPlanBinder.bind(plan, configuration);
+        List<PreviewTarget> targets = bound.operations().stream()
+                .map(MatterManipulatorPreviewRenderer::previewTarget)
+                .toList();
+        addTrackedRegionPreview(boxes, List.of(a.position(), pinned), targets, 0.15F, 0.60F, 0.75F);
+        addOperationPreview(boxes, targets, 0.25F, 0.95F, 0.85F);
     }
 
-    private static void addCopyPreview(List<PreviewBox> boxes, ManipulatorState state, int dimension) {
+    private static PreviewTarget previewTarget(BoundGeometryOperation operation) {
+        return new PreviewTarget(operation.operation().location().position(), operation.block());
+    }
+
+    private static void addCopyPreview(List<PreviewBox> boxes, World world, ManipulatorState state, int dimension) {
         ManipulatorLocation a = state.selectionA();
         ManipulatorLocation b = state.selectionB();
         ManipulatorLocation c = state.selectionC();
@@ -287,26 +291,27 @@ public final class MatterManipulatorPreviewRenderer {
         CopyPlan plan = CopyPlanner.plan(a, b, c, new CopyTransform(state.copyTransform(),
                 state.copyRepeatX(), state.copyRepeatY(), state.copyRepeatZ()), maxDetailedVoxels() + 1);
         List<BlockPos> targets = plan.operations().stream().map(operation -> operation.target()).toList();
-        addRegionPreview(boxes, targets, 0.75F, 0.50F, 0.15F, 0.90F);
-        addOperationPreview(boxes, targets, 0.95F,
-                0.35F, 0.20F);
+        List<PreviewTarget> previewTargets = plan.operations().stream()
+                .map(operation -> new PreviewTarget(operation.target(), world.isBlockLoaded(operation.source(), false)
+                        ? BlockSpec.fromState(world.getBlockState(operation.source())).transformed(state.copyTransform())
+                        : null))
+                .toList();
+        addTrackedRegionPreview(boxes, targets, previewTargets, 0.75F, 0.50F, 0.15F);
+        addOperationPreview(boxes, previewTargets, 0.95F, 0.35F, 0.20F);
     }
 
-    private static void addOperationPreview(List<PreviewBox> boxes, List<BlockPos> positions, float red, float green,
+    private static void addOperationPreview(List<PreviewBox> boxes, List<PreviewTarget> targets, float red, float green,
                                             float blue) {
-        if (positions.size() > maxDetailedVoxels()) {
-            boxes.add(new PreviewBox(bounds(positions), red, green, blue, 0.85F, false));
-            return;
-        }
-        for (BlockPos position : positions) {
-            boxes.add(new PreviewBox(new AxisAlignedBB(position), red, green, blue, 0.60F, false));
+        if (targets.size() > maxDetailedVoxels()) return;
+        for (PreviewTarget target : targets) {
+            boxes.add(PreviewBox.operation(target, red, green, blue));
         }
     }
 
     private static void addSelection(List<PreviewBox> boxes, ManipulatorLocation location, int dimension, float red,
                                      float green, float blue) {
         if (location == null || location.dimension() != dimension) return;
-        boxes.add(new PreviewBox(new AxisAlignedBB(location.position()), red, green, blue, 0.24F, true));
+        boxes.add(new PreviewBox(new AxisAlignedBB(location.position()), red, green, blue, 0.24F));
     }
 
     private static void addRegionPreview(List<PreviewBox> boxes, ManipulatorLocation a, ManipulatorLocation b,
@@ -318,7 +323,13 @@ public final class MatterManipulatorPreviewRenderer {
     private static void addRegionPreview(List<PreviewBox> boxes, List<BlockPos> positions, float red, float green,
                                          float blue, float alpha) {
         if (positions.isEmpty()) return;
-        boxes.add(new PreviewBox(bounds(positions), red, green, blue, 0.25F, true));
+        boxes.add(new PreviewBox(bounds(positions), red, green, blue, 0.25F));
+    }
+
+    private static void addTrackedRegionPreview(List<PreviewBox> boxes, List<BlockPos> positions,
+                                                List<PreviewTarget> targets, float red, float green, float blue) {
+        if (positions.isEmpty()) return;
+        boxes.add(PreviewBox.trackedRegion(bounds(positions), targets, red, green, blue));
     }
 
     private static boolean sameDimension(int dimension, ManipulatorLocation... locations) {
@@ -347,6 +358,10 @@ public final class MatterManipulatorPreviewRenderer {
         return new AxisAlignedBB(minX, minY, minZ, maxX + 1D, maxY + 1D, maxZ + 1D);
     }
 
+    private static AxisAlignedBB hintBounds(BlockPos position) {
+        return new AxisAlignedBB(position).grow(-0.25D);
+    }
+
     private static int maxDetailedVoxels() {
         return Math.max(1, MatterManipulatorConfig.maxHints);
     }
@@ -354,9 +369,9 @@ public final class MatterManipulatorPreviewRenderer {
     private record Preview(List<PreviewBox> boxes, List<PreviewBox> transientBoxes,
                            long transientExpiresAtMillis) {
 
-        private List<PreviewBox> visibleBoxes() {
+        private List<PreviewBox> visibleBoxes(long now) {
             if (transientBoxes.isEmpty() || transientExpiresAtMillis == 0L ||
-                    System.currentTimeMillis() < transientExpiresAtMillis) {
+                    now < transientExpiresAtMillis) {
                 if (transientBoxes.isEmpty()) return boxes;
                 List<PreviewBox> visible = new ArrayList<>(boxes.size() + transientBoxes.size());
                 visible.addAll(boxes);
@@ -370,6 +385,8 @@ public final class MatterManipulatorPreviewRenderer {
             return new Preview(List.of(), List.of(), 0L);
         }
     }
+
+    private record PreviewTarget(BlockPos position, BlockSpec expected) {}
 
     private static void drawGhostBox(AxisAlignedBB box, float red, float green, float blue, float alpha) {
         Tessellator tessellator = Tessellator.getInstance();
@@ -402,5 +419,38 @@ public final class MatterManipulatorPreviewRenderer {
         buffer.pos(x4, y4, z4).color(red, green, blue, alpha).endVertex();
     }
 
-    private record PreviewBox(AxisAlignedBB bounds, float red, float green, float blue, float alpha, boolean filled) {}
+    private record PreviewBox(AxisAlignedBB bounds, float red, float green, float blue, float alpha,
+                              PreviewTarget target, List<PreviewTarget> completionGroup) {
+
+        private PreviewBox(AxisAlignedBB bounds, float red, float green, float blue, float alpha) {
+            this(bounds, red, green, blue, alpha, null, null);
+        }
+
+        private static PreviewBox operation(PreviewTarget target, float red, float green, float blue) {
+            return new PreviewBox(hintBounds(target.position()), red, green, blue, 0.60F, target, null);
+        }
+
+        private static PreviewBox trackedRegion(AxisAlignedBB bounds, List<PreviewTarget> targets, float red,
+                                                float green, float blue) {
+            return new PreviewBox(bounds, red, green, blue, 0.25F, null, targets);
+        }
+
+        private PreviewBox withColor(float red, float green, float blue) {
+            return new PreviewBox(bounds, red, green, blue, alpha, target, completionGroup);
+        }
+
+        private boolean isSatisfiedBy(World world) {
+            if (target != null) return isTargetSatisfied(world, target);
+            if (completionGroup == null || completionGroup.isEmpty()) return false;
+            for (PreviewTarget groupedTarget : completionGroup) {
+                if (!isTargetSatisfied(world, groupedTarget)) return false;
+            }
+            return true;
+        }
+
+        private static boolean isTargetSatisfied(World world, PreviewTarget target) {
+            return target.expected() != null && world.isBlockLoaded(target.position(), false) &&
+                    target.expected().matchesWorldState(world.getBlockState(target.position()));
+        }
+    }
 }

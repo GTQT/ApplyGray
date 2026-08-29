@@ -8,6 +8,7 @@ import applygray.mattermanipulator.building.BlockSpec;
 import applygray.mattermanipulator.building.BuildingAdapter;
 import applygray.mattermanipulator.building.BuildingContext;
 import applygray.mattermanipulator.building.BuildingException;
+import applygray.mattermanipulator.building.BuildingEventHooks;
 import applygray.mattermanipulator.building.CapturedBlock;
 import applygray.mattermanipulator.building.CapturedBlockData;
 import applygray.mattermanipulator.building.PreparedBlockChange;
@@ -66,9 +67,10 @@ import net.minecraft.util.NonNullList;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.util.math.Vec3d;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
-import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.capability.IFluidTankProperties;
@@ -1136,7 +1138,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                 }
             }
             IBlockState state = context.world().getBlockState(position);
-            ItemStack pipeStack = state.getBlock().getItem(context.world(), position, state);
+            ItemStack pipeStack = state.getBlock().getPickBlock(state,
+                    new RayTraceResult(Vec3d.ZERO, EnumFacing.UP, position), context.world(), position,
+                    context.player());
             if (pipeStack.isEmpty()) {
                 throw new BuildingException(BuildingException.Reason.UNSUPPORTED_BLOCK, position,
                         "The GregTech pipe has no portable item representation");
@@ -1364,9 +1368,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             snapshot = BlockSnapshot.getBlockSnapshot(context.world(), position);
             clearForReplacement(context, position, originalState);
             install(context, position, data);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), snapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, snapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, position,
                         "A protection handler denied the GregTech placement");
             }
@@ -1474,9 +1476,7 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             targetSnapshot = BlockSnapshot.getBlockSnapshot(context.world(), target);
             clearForReplacement(context, source, sourceState);
             install(context, target, data);
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), targetSnapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, target,
                         "A protection handler denied the target GregTech move");
             }

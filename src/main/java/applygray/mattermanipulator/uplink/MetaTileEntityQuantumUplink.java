@@ -38,6 +38,7 @@ import gregtech.common.blocks.BlockWireCoil;
 import gregtech.common.blocks.MetaBlocks;
 
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
@@ -46,6 +47,7 @@ import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.common.capabilities.Capability;
@@ -82,7 +84,7 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
     public static final MultiblockAbility<MetaTileEntityQuantumUplinkHatch> UPLINK_CONNECTOR =
             MultiblockAbility.ability("matter_manipulator_uplink_connector", MetaTileEntityQuantumUplinkHatch.class);
 
-    public static final long PLASMA_EU_PER_ITEM = 131_072L;
+    public static final long PLASMA_EU_PER_ITEM = UplinkTransferCosts.PLASMA_EU_PER_TRANSFER_UNIT;
     private static final long RUNNING_EUT = GTValues.VA[GTValues.ZPM];
     private static final long POWER_P2P_RESERVE_TICKS = 20L * 5L;
     private static final String ADDRESS_KEY = "UplinkAddress";
@@ -146,13 +148,58 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
     }
 
     @Override
+    public void addInformation(ItemStack stack, @Nullable World world, @NotNull List<String> tooltip,
+                               boolean advanced) {
+        super.addInformation(stack, world, tooltip, advanced);
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.1"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.2"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.3"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.4"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.5",
+                PLASMA_EU_PER_ITEM));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink.tooltip.6"));
+    }
+
+    @Override
     public @NotNull EnumFacing getPreviewFrontFacing() {
         return EnumFacing.SOUTH;
+    }
+
+    /** Keep the source layout's BACK aisles physically behind the controller. */
+    @Override
+    public EnumFacing getFrontFacingForStructure() {
+        return getFrontFacing();
     }
 
     @Override
     protected @NotNull StructureDefinition<?> createStructureDefinition() {
         return STRUCTURE_DEFINITION;
+    }
+
+    @Override
+    protected void addDisplayText(List<ITextComponent> textList) {
+        super.addDisplayText(textList);
+        if (!isStructureFormed()) return;
+
+        if (!workingEnabled) {
+            textList.add(new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink.status.disabled"));
+        } else if (!active) {
+            textList.add(new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink.status.no_power"));
+        } else {
+            textList.add(new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink.status.running"));
+        }
+
+        MetaTileEntityQuantumUplinkHatch connector = connector();
+        textList.add(connector == null
+                ? new TextComponentTranslation(
+                        "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.disconnected")
+                : connector.connectionStatusText());
+        textList.add(new TextComponentTranslation(hasPlasmaEnergy(PLASMA_EU_PER_ITEM)
+                ? "applygray.machine.matter_manipulator.quantum_uplink.status.plasma_ready"
+                : "applygray.machine.matter_manipulator.quantum_uplink.status.no_plasma"));
     }
 
     @Override
@@ -446,13 +493,16 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
         IActionSource actionSource = connector.getActionSource();
         long accepted = insert ? storage.insert(key, amount, Actionable.SIMULATE, actionSource)
                 : storage.extract(key, amount, Actionable.SIMULATE, actionSource);
-        long transferable = Math.min(accepted, availablePlasmaEnergy() / PLASMA_EU_PER_ITEM);
+        long affordableBuckets = availablePlasmaEnergy() / PLASMA_EU_PER_ITEM;
+        long transferable = Math.min(accepted,
+                saturatingMultiply(affordableBuckets, UplinkTransferCosts.FLUID_UNITS_PER_BUCKET));
         if (transferable <= 0L) return 0L;
         if (simulate) return transferable;
         long transferred = insert ? storage.insert(key, transferable, Actionable.MODULATE, actionSource)
                 : storage.extract(key, transferable, Actionable.MODULATE, actionSource);
         if (transferred <= 0L) return 0L;
-        if (consumePlasmaEnergy(saturatingMultiply(transferred, PLASMA_EU_PER_ITEM))) return transferred;
+        long plasmaCost = UplinkTransferCosts.fluidPlasmaCost(transferred);
+        if (consumePlasmaEnergy(plasmaCost)) return transferred;
         long restored = insert ? storage.extract(key, transferred, Actionable.MODULATE, actionSource)
                 : storage.insert(key, transferred, Actionable.MODULATE, actionSource);
         if (restored != transferred) {
@@ -566,8 +616,8 @@ public final class MetaTileEntityQuantumUplink extends MultiblockWithDisplayBase
         if (recipe == null || recipe.getFluidInputs().isEmpty()) return 0L;
 
         GTRecipeInput input = recipe.getFluidInputs().getFirst();
-        if (!input.acceptsFluid(fluid) || input.getAmount() <= 0 || recipe.getEUt() >= 0L) return 0L;
-        return Math.max(1L, saturatingMultiply(-recipe.getEUt(), recipe.getDuration()) / input.getAmount());
+        if (!input.acceptsFluid(fluid)) return 0L;
+        return UplinkTransferCosts.plasmaEnergyPerFluidUnit(recipe.getEUt(), recipe.getDuration(), input.getAmount());
     }
 
     private static long ceilDiv(long dividend, long divisor) {

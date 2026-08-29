@@ -2,7 +2,6 @@ package applygray.mattermanipulator.building;
 
 import applygray.mattermanipulator.inventory.ResourceRequirements;
 
-import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
@@ -12,7 +11,6 @@ import net.minecraft.util.NonNullList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
-import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.event.world.BlockEvent;
 
 /**
@@ -115,9 +113,9 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
         rejectTileEntity(context, source, sourceState);
         rejectTileEntity(context, target, targetState);
         if (isAir(context, source, sourceState)) return new NoOpBlockChange(source);
-        if (sourceState.getBlock().getBlockHardness(sourceState, context.world(), source) < 0.0F ||
+        if (sourceState.getBlockHardness(context.world(), source) < 0.0F ||
                 !isAir(context, target, targetState) &&
-                        targetState.getBlock().getBlockHardness(targetState, context.world(), target) < 0.0F) {
+                        targetState.getBlockHardness(context.world(), target) < 0.0F) {
             throw new BuildingException(BuildingException.Reason.UNBREAKABLE, source,
                     "The move contains an unbreakable block");
         }
@@ -179,14 +177,7 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
     }
 
     private static IBlockState stateFor(BlockSpec specification) {
-        try {
-            ItemStack stack = specification.toStack();
-            Block block = Block.getBlockFromItem(stack.getItem());
-            if (block == Blocks.AIR) return null;
-            return block.getStateFromMeta(stack.getMetadata());
-        } catch (RuntimeException exception) {
-            return null;
-        }
+        return specification.toBlockState();
     }
 
     private static IBlockState stateForOrThrow(BlockSpec specification, BlockPos position) {
@@ -200,8 +191,8 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
 
     private static long energyCost(BuildingContext context, BlockPos position, IBlockState originalState,
                                    IBlockState targetState) {
-        float originalHardness = originalState.getBlock().getBlockHardness(originalState, context.world(), position);
-        float targetHardness = targetState.getBlock().getBlockHardness(targetState, context.world(), position);
+        float originalHardness = originalState.getBlockHardness(context.world(), position);
+        float targetHardness = targetState.getBlockHardness(context.world(), position);
         double hardness = Math.max(0.0D, Math.max(originalHardness, targetHardness));
         double distance = Math.max(1.0D, context.player().getDistance(position.getX(), position.getY(), position.getZ()));
         double usage = EU_PER_BLOCK * (1.0D + Math.sqrt(hardness)) * Math.pow(distance, EU_DISTANCE_EXPONENT);
@@ -344,9 +335,7 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
                         "The placed block created a TileEntity and requires a dedicated adapter");
             }
 
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), snapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, snapshot)) {
                 rollback();
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, position,
                         "A protection handler denied the block placement");
@@ -463,9 +452,7 @@ public final class VanillaBuildingAdapter implements BuildingAdapter {
                         "Minecraft rejected the exchanged source state");
             }
 
-            BlockEvent.PlaceEvent event = ForgeEventFactory.onPlayerBlockPlace(context.player(), targetSnapshot,
-                    EnumFacing.UP, context.hand());
-            if (event.isCanceled()) {
+            if (BuildingEventHooks.isPlayerPlaceCanceled(context, targetSnapshot)) {
                 rollback();
                 throw new BuildingException(BuildingException.Reason.PERMISSION_DENIED, target,
                         "A protection handler denied the move target");

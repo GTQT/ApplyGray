@@ -12,6 +12,7 @@ import java.util.concurrent.Future;
 
 import applygray.ApplyGrayMod;
 import applygray.api.IAEManagedMetaTileEntity;
+import applygray.client.renderer.texture.ApplyGrayTextures;
 import applygray.integration.ae2.ApplyGrayGridNodeSupport;
 import applygray.mattermanipulator.inventory.ResourceRequirements;
 
@@ -24,18 +25,24 @@ import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.common.ConfigHolder;
 import gregtech.common.metatileentities.multi.multiblockpart.MetaTileEntityMultiblockPart;
 
+import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 
 import ae2.api.networking.GridFlags;
 import ae2.api.networking.IGrid;
 import ae2.api.networking.IGridNode;
+import ae2.api.networking.IGridNodeListener;
 import ae2.api.networking.IManagedGridNode;
 import ae2.api.networking.crafting.CalculationStrategy;
 import ae2.api.networking.crafting.ICraftingLink;
@@ -51,9 +58,14 @@ import ae2.api.stacks.AEKey;
 import ae2.api.storage.MEStorage;
 import ae2.api.storage.StorageHelper;
 import ae2.api.util.AECableType;
+import codechicken.lib.render.CCRenderState;
+import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.raytracer.CuboidRayTraceResult;
+import codechicken.lib.vec.Matrix4;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
+import static gregtech.api.capability.GregtechDataCodes.UPDATE_ONLINE_STATUS;
 
 /** The AE2-facing multiblock part used exclusively by a Quantum Uplink controller. */
 public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultiblockPart implements
@@ -67,6 +79,7 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
 
     @Nullable
     private IManagedGridNode mainNode;
+    private ConnectionStatus connectionStatus = ConnectionStatus.DISCONNECTED;
     private boolean allowsExtraConnections;
     private final List<UplinkCraftingRequest> craftingRequests = new ArrayList<>();
 
@@ -77,6 +90,16 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
     @Override
     public MetaTileEntity createMetaTileEntity(IGregTechTileEntity tileEntity) {
         return new MetaTileEntityQuantumUplinkHatch(metaTileEntityId);
+    }
+
+    @Override
+    public void addInformation(ItemStack stack, @Nullable World world, @NotNull List<String> tooltip,
+                               boolean advanced) {
+        super.addInformation(stack, world, tooltip, advanced);
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink_hatch.tooltip.1"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink_hatch.tooltip.2"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink_hatch.tooltip.3"));
+        tooltip.add(I18n.format("applygray.machine.matter_manipulator.quantum_uplink_hatch.tooltip.4"));
     }
 
     @Override
@@ -92,6 +115,49 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
                     .addService(IGridTickable.class, this);
         }
         return mainNode;
+    }
+
+    @Override
+    public void update() {
+        super.update();
+        updateConnectionStatus();
+    }
+
+    @Override
+    public void onMainNodeStateChanged(IGridNodeListener.State state) {
+        updateConnectionStatus();
+    }
+
+    private void updateConnectionStatus() {
+        World world = getWorld();
+        if (world == null || world.isRemote) return;
+
+        ConnectionStatus currentStatus = determineConnectionStatus();
+        if (connectionStatus == currentStatus) return;
+
+        connectionStatus = currentStatus;
+        writeCustomData(UPDATE_ONLINE_STATUS, buffer -> buffer.writeVarInt(currentStatus.ordinal()));
+    }
+
+    @Override
+    public void writeInitialSyncData(PacketBuffer buffer) {
+        super.writeInitialSyncData(buffer);
+        buffer.writeVarInt(connectionStatus.ordinal());
+    }
+
+    @Override
+    public void receiveInitialSyncData(PacketBuffer buffer) {
+        super.receiveInitialSyncData(buffer);
+        connectionStatus = ConnectionStatus.fromOrdinal(buffer.readVarInt());
+    }
+
+    @Override
+    public void receiveCustomData(int dataId, @NotNull PacketBuffer buffer) {
+        super.receiveCustomData(dataId, buffer);
+        if (dataId == UPDATE_ONLINE_STATUS) {
+            connectionStatus = ConnectionStatus.fromOrdinal(buffer.readVarInt());
+            scheduleRenderUpdate();
+        }
     }
 
     @Override
@@ -111,6 +177,18 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
         allowsExtraConnections = !allowsExtraConnections;
         updateConnectableSides();
         if (getWorld() != null && !getWorld().isRemote) markDirty();
+        return true;
+    }
+
+    @Override
+    public boolean onRightClick(EntityPlayer player, EnumHand hand, EnumFacing facing,
+                                CuboidRayTraceResult hitResult) {
+        if (!player.getHeldItem(hand).isEmpty()) return super.onRightClick(player, hand, facing, hitResult);
+        World world = getWorld();
+        if (world != null && !world.isRemote) {
+            connectionStatus = determineConnectionStatus();
+            player.sendStatusMessage(connectionStatusText(), true);
+        }
         return true;
     }
 
@@ -169,7 +247,59 @@ public final class MetaTileEntityQuantumUplinkHatch extends MetaTileEntityMultib
     }
 
     public boolean isOnline() {
-        return getMainNode().isActive();
+        return connectionStatus() == ConnectionStatus.ONLINE;
+    }
+
+    ITextComponent connectionStatusText() {
+        return switch (connectionStatus()) {
+            case ONLINE -> new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.online");
+            case BOOTING -> new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.booting");
+            case MISSING_CHANNEL -> new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.missing_channel");
+            case UNPOWERED -> new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.unpowered");
+            case DISCONNECTED -> new TextComponentTranslation(
+                    "applygray.machine.matter_manipulator.quantum_uplink_hatch.status.disconnected");
+        };
+    }
+
+    private ConnectionStatus connectionStatus() {
+        World world = getWorld();
+        return world != null && !world.isRemote ? determineConnectionStatus() : connectionStatus;
+    }
+
+    private ConnectionStatus determineConnectionStatus() {
+        IGridNode node = getMainNode().getNode();
+        if (node == null || node.getConnections().isEmpty()) return ConnectionStatus.DISCONNECTED;
+        if (!node.isPowered()) return ConnectionStatus.UNPOWERED;
+        if (!node.meetsChannelRequirements()) return ConnectionStatus.MISSING_CHANNEL;
+        if (!node.hasGridBooted()) return ConnectionStatus.BOOTING;
+        return ConnectionStatus.ONLINE;
+    }
+
+    @Override
+    public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
+        super.renderMetaTileEntity(renderState, translation, pipeline);
+        if (!shouldRenderOverlay()) return;
+
+        (isOnline() ? ApplyGrayTextures.ME_INPUT_HATCH_ACTIVE : ApplyGrayTextures.ME_INPUT_HATCH)
+                .renderSided(getFrontFacing(), renderState, translation, pipeline);
+    }
+
+    private enum ConnectionStatus {
+
+        DISCONNECTED,
+        UNPOWERED,
+        MISSING_CHANNEL,
+        BOOTING,
+        ONLINE;
+
+        private static ConnectionStatus fromOrdinal(int ordinal) {
+            ConnectionStatus[] values = values();
+            return ordinal >= 0 && ordinal < values.length ? values[ordinal] : DISCONNECTED;
+        }
     }
 
     @Nullable
