@@ -26,10 +26,12 @@ import gregtech.api.capability.IGhostSlotConfigurable;
 import gregtech.api.capability.IBatch;
 import gregtech.api.capability.IControllable;
 import gregtech.api.capability.IDistinctBusController;
+import gregtech.api.capability.IGenerator;
 import gregtech.api.capability.IMultipleRecipeMaps;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.IObjectHolder;
 import gregtech.api.capability.IRecipeControl;
+import gregtech.api.capability.IThreadHatch;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.capability.impl.ItemHandlerList;
@@ -829,6 +831,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         private final Boolean batchEnabled;
         private final Boolean distinct;
         private final Boolean energyLackWarning;
+        private final Boolean energyOverflow;
+        private final StructureCheckConfiguration structureCheck;
+        private final Integer threadCount;
         private final Integer recipeMapIndex;
         private final IOType longDistanceIoType;
         private final NBTTagCompound meConfiguration;
@@ -839,7 +844,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                                  ItemBusFilterConfiguration itemBusFilter,
                                  FluidHatchConfiguration fluidHatch, BufferConfiguration buffer,
                                  Boolean drumAutoOutput, Boolean batchEnabled, Boolean distinct,
-                                 Boolean energyLackWarning, Integer recipeMapIndex, IOType longDistanceIoType,
+                                 Boolean energyLackWarning, Boolean energyOverflow,
+                                 StructureCheckConfiguration structureCheck, Integer threadCount,
+                                 Integer recipeMapIndex, IOType longDistanceIoType,
                                  NBTTagCompound meConfiguration) {
             this.muffled = muffled;
             this.workingEnabled = workingEnabled;
@@ -852,6 +859,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             this.batchEnabled = batchEnabled;
             this.distinct = distinct;
             this.energyLackWarning = energyLackWarning;
+            this.energyOverflow = energyOverflow;
+            this.structureCheck = structureCheck;
+            this.threadCount = threadCount;
             this.recipeMapIndex = recipeMapIndex;
             this.longDistanceIoType = longDistanceIoType;
             this.meConfiguration = meConfiguration == null ? null : meConfiguration.copy();
@@ -882,12 +892,17 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                 }
                 energyLackWarning = control.isEnergyLackWarningEnabled();
             }
+            Boolean energyOverflow = mte instanceof IGenerator generator ? generator.isEnergyOverFlow() : null;
+            StructureCheckConfiguration structureCheck = mte instanceof MultiblockControllerBase controller
+                    ? StructureCheckConfiguration.capture(controller) : null;
+            Integer threadCount = mte instanceof IThreadHatch hatch
+                    ? Math.min(Math.max(hatch.getCurrentThread(), 1), hatch.getMaxThread()) : null;
             Integer recipeMapIndex = mte instanceof IMultipleRecipeMaps maps ? maps.getRecipeMapIndex() : null;
             IOType ioType = mte instanceof MetaTileEntityLongDistanceEndpoint endpoint ? endpoint.getIoType() : null;
             NBTTagCompound meConfiguration = meConfiguration(mte);
             return new MteConfiguration(mte.isMuffled(), workingEnabled, simpleMachine, itemHandling, itemBusFilter,
-                    fluidHatch, buffer, drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex,
-                    ioType, meConfiguration);
+                    fluidHatch, buffer, drumAutoOutput, batchEnabled, distinct, energyLackWarning, energyOverflow,
+                    structureCheck, threadCount, recipeMapIndex, ioType, meConfiguration);
         }
 
         private void apply(MetaTileEntity mte) {
@@ -954,6 +969,27 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                     incompatible(mte, "energy-warning state");
                 }
             }
+            if (energyOverflow != null) {
+                if (mte instanceof IGenerator generator) {
+                    generator.setEnergyOverFlowMode(energyOverflow);
+                } else {
+                    incompatible(mte, "energy-overflow mode");
+                }
+            }
+            if (structureCheck != null) {
+                if (mte instanceof MultiblockControllerBase controller) {
+                    structureCheck.apply(controller);
+                } else {
+                    incompatible(mte, "structure-check intervals");
+                }
+            }
+            if (threadCount != null) {
+                if (mte instanceof IThreadHatch hatch) {
+                    hatch.setCurrentThread(threadCount);
+                } else {
+                    incompatible(mte, "thread count");
+                }
+            }
             if (recipeMapIndex != null) {
                 if (mte instanceof IMultipleRecipeMaps maps) {
                     maps.setRecipeMapIndex(recipeMapIndex);
@@ -983,8 +1019,8 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
             return new MteConfiguration(muffled, workingEnabled,
                     simpleMachine == null ? null : simpleMachine.transformed(transform), itemHandling, itemBusFilter,
                     fluidHatch, buffer == null ? null : buffer.transformed(transform), drumAutoOutput, batchEnabled,
-                    distinct, energyLackWarning, recipeMapIndex, longDistanceIoType,
-                    meConfiguration == null ? null : meConfiguration.copy());
+                    distinct, energyLackWarning, energyOverflow, structureCheck, threadCount, recipeMapIndex,
+                    longDistanceIoType, meConfiguration == null ? null : meConfiguration.copy());
         }
 
         private List<ItemStack> storedStacks() {
@@ -1020,6 +1056,9 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
                     Objects.equals(drumAutoOutput, config.drumAutoOutput) &&
                     Objects.equals(batchEnabled, config.batchEnabled) && Objects.equals(distinct, config.distinct) &&
                     Objects.equals(energyLackWarning, config.energyLackWarning) &&
+                    Objects.equals(energyOverflow, config.energyOverflow) &&
+                    Objects.equals(structureCheck, config.structureCheck) &&
+                    Objects.equals(threadCount, config.threadCount) &&
                     Objects.equals(recipeMapIndex, config.recipeMapIndex) &&
                     longDistanceIoType == config.longDistanceIoType &&
                     Objects.equals(meConfiguration, config.meConfiguration);
@@ -1028,8 +1067,30 @@ public final class GregTechBuildingAdapter implements BuildingAdapter {
         @Override
         public int hashCode() {
             return Objects.hash(muffled, workingEnabled, simpleMachine, itemHandling, itemBusFilter, fluidHatch, buffer,
-                    drumAutoOutput, batchEnabled, distinct, energyLackWarning, recipeMapIndex, longDistanceIoType,
-                    meConfiguration);
+                    drumAutoOutput, batchEnabled, distinct, energyLackWarning, energyOverflow, structureCheck,
+                    threadCount, recipeMapIndex, longDistanceIoType, meConfiguration);
+        }
+    }
+
+    /**
+     * Structure check pacing on a multiblock controller. The intervals are clamped exactly like the setters clamp them,
+     * so a captured value still compares equal after it has been restored.
+     */
+    private record StructureCheckConfiguration(boolean delayed, int standbyInterval, int workInterval) {
+
+        private static StructureCheckConfiguration capture(MultiblockControllerBase controller) {
+            return new StructureCheckConfiguration(controller.isDelayCheck(),
+                    clamp(controller.getDelayStructureCheckStandby()), clamp(controller.getDelayStructureCheckWork()));
+        }
+
+        private void apply(MultiblockControllerBase controller) {
+            controller.setDelayCheck(delayed);
+            controller.setDelayStructureCheckStandby(standbyInterval);
+            controller.setDelayStructureCheckWork(workInterval);
+        }
+
+        private static int clamp(int interval) {
+            return Math.max(Math.min(1200, interval), 20);
         }
     }
 
