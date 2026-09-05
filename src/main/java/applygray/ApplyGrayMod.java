@@ -1,6 +1,7 @@
 package applygray;
 
 import applygray.api.ApplyGrayAPI;
+import applygray.common.ApplyGrayBlocks;
 import applygray.common.ApplyGrayCommonProxy;
 import applygray.common.ApplyGrayMetaTileEntities;
 import applygray.common.ApplyGrayRecipes;
@@ -47,6 +48,7 @@ public class ApplyGrayMod {
         proxy.preInit(event);
         TheOneProbeIntegration.enqueueIMC();
         ApplyGrayIntegrationBootstrap.init();
+        ApplyGrayBlocks.init();
         ApplyGrayMetaTileEntities.init();
     }
 

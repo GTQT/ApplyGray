@@ -308,9 +308,9 @@ public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblo
     @Override
     public void addInformation(ItemStack stack, @Nullable World player, @NotNull List<String> tooltip,
                                boolean advanced) {
-        tooltip.add(GREEN + I18n.format("gtqt.machine.me_pattern_proxy.tooltip.function"));
-        tooltip.add(I18n.format("gtqt.machine.me_pattern_proxy.tooltip.features"));
-        tooltip.add(I18n.format("gtqt.machine.me_pattern_proxy.tooltip.usage"));
-        tooltip.add(I18n.format("gtqt.machine.me_pattern_proxy.tooltip.requirements"));
+        tooltip.add(GREEN + I18n.format("gregtech.machine.me_pattern_proxy.tooltip.function"));
+        tooltip.add(I18n.format("gregtech.machine.me_pattern_proxy.tooltip.features"));
+        tooltip.add(I18n.format("gregtech.machine.me_pattern_proxy.tooltip.usage"));
+        tooltip.add(I18n.format("gregtech.machine.me_pattern_proxy.tooltip.requirements"));
     }
 }

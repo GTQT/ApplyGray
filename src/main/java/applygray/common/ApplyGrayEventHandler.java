@@ -8,10 +8,14 @@ import applygray.mattermanipulator.item.InstallManipulatorUpgradeRecipe;
 import applygray.mattermanipulator.item.UpgradeManipulatorTierRecipe;
 
 import gregtech.api.GregTechAPI;
+import gregtech.api.block.VariantItemBlock;
 import gregtech.api.metatileentity.registry.MTEManager;
 
+import net.minecraft.block.Block;
 import net.minecraft.item.Item;
 import net.minecraft.item.crafting.IRecipe;
+
+import java.util.Objects;
 import net.minecraftforge.event.RegistryEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
@@ -32,9 +36,18 @@ public final class ApplyGrayEventHandler {
     }
 
     @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void registerBlocks(RegistryEvent.Register<Block> event) {
+        event.getRegistry().register(ApplyGrayBlocks.QUANTUM_STORAGE_UNIT);
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void registerItems(RegistryEvent.Register<Item> event) {
         ApplyGrayMetaItems.init(event.getRegistry());
         MatterManipulatorItems.register(event.getRegistry());
+
+        VariantItemBlock itemBlock = new VariantItemBlock(ApplyGrayBlocks.QUANTUM_STORAGE_UNIT);
+        itemBlock.setRegistryName(Objects.requireNonNull(ApplyGrayBlocks.QUANTUM_STORAGE_UNIT.getRegistryName()));
+        event.getRegistry().register(itemBlock);
     }
 
     @SubscribeEvent(priority = EventPriority.LOWEST)

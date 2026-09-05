@@ -727,8 +727,8 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
                                boolean advanced) {
         super.addInformation(stack, player, tooltip, advanced);
         tooltip.add(I18n.format("gregtech.machine.dual_hatch.import.tooltip"));
-        tooltip.add(I18n.format("gregtech.machine.me.dual_import.tooltip"));
-        tooltip.add(I18n.format("gregtech.machine.me_import_dual_hatch.configs.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.dual_import.tooltip.1"));
+        tooltip.add(I18n.format("gregtech.machine.me.dual_import.tooltip.2"));
         tooltip.add(I18n.format("gregtech.machine.me.copy_paste.tooltip"));
         tooltip.add(I18n.format("gregtech.machine.me.extra_connections.tooltip"));
         tooltip.add(I18n.format("gregtech.universal.enabled"));

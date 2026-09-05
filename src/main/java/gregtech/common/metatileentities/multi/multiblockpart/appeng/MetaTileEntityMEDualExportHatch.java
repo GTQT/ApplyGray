@@ -22,6 +22,7 @@ import gregtech.api.util.KeyUtil;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityAEHostablePart;
 import gregtech.common.mui.widget.ScrollableTextWidget;
 
+import net.minecraft.client.resources.I18n;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
@@ -608,5 +609,17 @@ public class MetaTileEntityMEDualExportHatch extends MetaTileEntityAEHostablePar
         public FluidStack drain(int maxDrain, boolean doDrain) {
             return null;
         }
+    }
+
+    @Override
+    public void addInformation(ItemStack stack, @Nullable World player, @NotNull List<String> tooltip,
+                               boolean advanced) {
+        super.addInformation(stack, player, tooltip, advanced);
+        tooltip.add(I18n.format("gregtech.machine.dual_hatch.export.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.dual_export.tooltip.1"));
+        tooltip.add(I18n.format("gregtech.machine.me.dual_export.tooltip.2"));
+        tooltip.add(I18n.format("gregtech.machine.me.copy_paste.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.extra_connections.tooltip"));
+        tooltip.add(I18n.format("gregtech.universal.enabled"));
     }
 }

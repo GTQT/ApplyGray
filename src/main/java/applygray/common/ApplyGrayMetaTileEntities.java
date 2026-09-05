@@ -2,6 +2,9 @@ package applygray.common;
 
 import applygray.api.ApplyGrayAPI;
 import applygray.ApplyGrayMod;
+import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumAccessHatch;
+import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumFluidStorage;
+import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumItemStorage;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplink;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplinkHatch;
 
@@ -67,9 +70,15 @@ public class ApplyGrayMetaTileEntities {
     public static MetaTileEntityQuantumUplink QUANTUM_UPLINK;
     public static MetaTileEntityQuantumUplinkHatch QUANTUM_UPLINK_ME_HATCH;
 
+    // Quantum Storage (IDs 2960-2962)
+    public static MetaTileEntityQuantumItemStorage QUANTUM_ITEM_STORAGE;
+    public static MetaTileEntityQuantumFluidStorage QUANTUM_FLUID_STORAGE;
+    public static MetaTileEntityQuantumAccessHatch QUANTUM_ACCESS_HATCH;
+
     public static void init() {
         registerMEHatches();
         registerExtendedMEDevices();
+        registerQuantumStorage();
         registerMatterManipulatorUplink();
         ApplyGrayMod.LOGGER.info("Registered {} AE-enabled GregTech machines",
                 15 + ME_PATTERN_PROVIDER.length + PATTERN_MAPPING_SLAVE.length +
@@ -145,6 +154,15 @@ public class ApplyGrayMetaTileEntities {
             ME_GAS_HATCH[i] = new MetaTileEntityMEGasHatch(ApplyGrayAPI.id("me_gas_hatch." + voltageName), tier);
             registerMetaTileEntity(2890 + i, ME_GAS_HATCH[i]);
         }
+    }
+
+    private static void registerQuantumStorage() {
+        QUANTUM_ITEM_STORAGE = registerMetaTileEntity(2960,
+                new MetaTileEntityQuantumItemStorage(ApplyGrayAPI.id("quantum_storage.chest")));
+        QUANTUM_FLUID_STORAGE = registerMetaTileEntity(2961,
+                new MetaTileEntityQuantumFluidStorage(ApplyGrayAPI.id("quantum_storage.tank")));
+        QUANTUM_ACCESS_HATCH = registerMetaTileEntity(2962,
+                new MetaTileEntityQuantumAccessHatch(ApplyGrayAPI.id("quantum_access_hatch")));
     }
 
     private static void registerMatterManipulatorUplink() {

@@ -1,0 +1,55 @@
+{
+  "forge_marker": 1,
+  "defaults": {
+    "model": "minecraft:cube_all"
+  },
+  "variants": {
+    "variant": {
+      "t1": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/luv"
+        }
+      },
+      "t2": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/zpm"
+        }
+      },
+      "t3": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/uv"
+        }
+      },
+      "t4": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/uhv"
+        }
+      },
+      "t5": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/uev"
+        }
+      },
+      "t6": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/uiv"
+        }
+      },
+      "t7": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/uxv"
+        }
+      },
+      "t8": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/opv"
+        }
+      },
+      "t9": {
+        "textures": {
+          "all": "applygray:blocks/casings/storage/max"
+        }
+      }
+    }
+  }
+}

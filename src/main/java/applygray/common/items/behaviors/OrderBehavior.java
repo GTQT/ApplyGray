@@ -6,6 +6,7 @@ import gregtech.api.mui.GTGuiTextures;
 import gregtech.api.mui.GTGuis;
 import gregtech.api.mui.factory.MetaItemGuiFactory;
 
+import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
@@ -69,9 +70,9 @@ public class OrderBehavior implements IItemBehaviour, ItemUIFactory {
 
     @Override
     public void addInformation(ItemStack stack, List<String> lines) {
-        lines.add(TextFormatting.AQUA + "订单名称：" + TextFormatting.RESET + getName(stack));
-        lines.add(TextFormatting.DARK_GRAY + "右键打开界面修改名称");
-        lines.add(TextFormatting.DARK_GRAY + "可以作为AE自动合成的大型机器产物");
-        lines.add(TextFormatting.DARK_GRAY + "当此合成完成时，会自动取消，无需手动取消");
+        lines.add(I18n.format("applygray.item.order.name_label", getName(stack)));
+        lines.add(I18n.format("applygray.item.order.tooltip.edit"));
+        lines.add(I18n.format("applygray.item.order.tooltip.autocraft"));
+        lines.add(I18n.format("applygray.item.order.tooltip.auto_cancel"));
     }
 }
