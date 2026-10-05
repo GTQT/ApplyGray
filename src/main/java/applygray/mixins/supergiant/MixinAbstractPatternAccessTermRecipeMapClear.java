@@ -9,6 +9,7 @@ import ae2.client.gui.Icon;
 import ae2.client.gui.me.patternaccess.AbstractPatternAccessTerm;
 import ae2.client.gui.widgets.SmallSquareButtonRenderer;
 
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.text.TextComponentTranslation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -108,7 +109,7 @@ public abstract class MixinAbstractPatternAccessTermRecipeMapClear {
         int localMouseY = mouseY - applygray$guiTop;
         for (ClearButton button : applygray$clearButtons) {
             if (button.contains(localMouseX, localMouseY)) {
-                ((InvokerAEBaseGui) (Object) this).applygray$drawTooltipLines(mouseX, mouseY,
+                ((InvokerAEBaseGui) (Object) this).applygray$drawTooltipLines(ItemStack.EMPTY, mouseX, mouseY,
                         Collections.singletonList(new TextComponentTranslation(
                                 "applygray.gui.pattern_access.clear_dynamic_patterns").getFormattedText()));
                 ci.cancel();

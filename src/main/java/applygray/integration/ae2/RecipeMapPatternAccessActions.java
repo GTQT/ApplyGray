@@ -9,7 +9,7 @@ import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEnti
 
 import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.container.AEBaseContainer;
-import ae2.container.implementations.PatternAccessSupport;
+import ae2.container.me.patternaccess.PatternAccessSession;
 import ae2.helpers.patternprovider.PatternContainer;
 
 import net.minecraft.util.text.TextComponentTranslation;
@@ -22,11 +22,11 @@ public final class RecipeMapPatternAccessActions {
     private RecipeMapPatternAccessActions() {
     }
 
-    public static void register(AEBaseContainer container, PatternAccessSupport<?> patternAccessSupport) {
+    public static void register(AEBaseContainer container, PatternAccessSession<?> patternAccessSession) {
         ((InvokerAEBaseContainer) container).applygray$registerClientAction(
                 CLEAR_DYNAMIC_PATTERNS,
                 Long.class,
-                inventoryId -> clear(container, patternAccessSupport, inventoryId));
+                inventoryId -> clear(container, patternAccessSession, inventoryId));
     }
 
     public static void send(AEBaseContainer container, long inventoryId) {
@@ -35,9 +35,9 @@ public final class RecipeMapPatternAccessActions {
         ((InvokerAEBaseContainer) container).applygray$sendClientAction(CLEAR_DYNAMIC_PATTERNS, inventoryId);
     }
 
-    private static void clear(AEBaseContainer container, PatternAccessSupport<?> patternAccessSupport,
+    private static void clear(AEBaseContainer container, PatternAccessSession<?> patternAccessSession,
                               long inventoryId) {
-        var providerTrackers = ((AccessorPatternAccessSupport) (Object) patternAccessSupport)
+        var providerTrackers = ((AccessorPatternAccessSupport) (Object) patternAccessSession)
                 .applygray$getProviderTrackers();
         Object tracker = providerTrackers.get(inventoryId);
         if (!(tracker instanceof AccessorPatternAccessSupportContainerTracker trackerAccessor)) {

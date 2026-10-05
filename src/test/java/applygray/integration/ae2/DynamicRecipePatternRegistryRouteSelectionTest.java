@@ -257,10 +257,19 @@ class DynamicRecipePatternRegistryRouteSelectionTest {
     void standalonePreviewUsesItsOwnConfiguredCapacityUntilTheProtocolLimit() {
         assertEquals(4096, DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(PlanningBudget.DEFAULT));
 
+        // The contract is min(AE2's wire-protocol node bound, the configured capacity), so neither side may be
+        // assumed to be the smaller one. AE2 1.0.16 raised CraftingTreeStackRegistry.MAX_TREE_NODES from 8192 to
+        // 32768, which makes a configured 16384 the effective limit instead of the protocol bound.
+        int configuredCapacity = 16_384;
         PlanningBudget.Builder builder = PlanningBudget.builder();
-        builder.maxStandaloneRouteExpansionsPerCalculation(16_384, 0, "test");
-        assertEquals(CraftingTreeStackRegistry.MAX_TREE_NODES,
+        builder.maxStandaloneRouteExpansionsPerCalculation(configuredCapacity, 0, "test");
+        assertEquals(Math.min(CraftingTreeStackRegistry.MAX_TREE_NODES, configuredCapacity),
                 DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(builder.build()));
+
+        PlanningBudget.Builder oversized = PlanningBudget.builder();
+        oversized.maxStandaloneRouteExpansionsPerCalculation(CraftingTreeStackRegistry.MAX_TREE_NODES + 1, 0, "test");
+        assertEquals(CraftingTreeStackRegistry.MAX_TREE_NODES,
+                DynamicRecipePatternRegistry.getPatternGenerationTreeNodeLimit(oversized.build()));
     }
 
     @Test

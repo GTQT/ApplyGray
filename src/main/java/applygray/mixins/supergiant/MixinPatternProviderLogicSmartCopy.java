@@ -12,6 +12,7 @@ import ae2.helpers.patternprovider.PatternProviderLogic;
 import ae2.helpers.patternprovider.PatternProviderLogicHost;
 import ae2.helpers.patternprovider.PseudoPatternDetails;
 import ae2.parts.crafting.PatternProviderPart;
+import it.unimi.dsi.fastutil.objects.ObjectList;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -41,15 +42,20 @@ public abstract class MixinPatternProviderLogicSmartCopy {
         cir.setReturnValue(source == null ? Collections.emptyList() : source.getAvailablePatterns());
     }
 
+    /**
+     * AE2 stores its pattern list in a fastutil {@code ObjectList}, so the redirect must name that owner. Mixin
+     * compares the target owner with a plain string comparison and does not resolve the class hierarchy, which means
+     * a {@code Ljava/util/List;} target never matched and these two acceptances were dead code.
+     */
     @Redirect(method = "pushPattern", at = @At(value = "INVOKE",
-            target = "Ljava/util/List;contains(Ljava/lang/Object;)Z"))
-    private boolean applygray$acceptLinkedSourcePattern(List<?> localPatterns, Object pattern) {
+            target = "Lit/unimi/dsi/fastutil/objects/ObjectList;contains(Ljava/lang/Object;)Z"))
+    private boolean applygray$acceptLinkedSourcePattern(ObjectList<?> localPatterns, Object pattern) {
         return localPatterns.contains(pattern) || applygray$containsLinkedSourcePattern(pattern);
     }
 
     @Redirect(method = "canMergePatternPushBasic", at = @At(value = "INVOKE",
-            target = "Ljava/util/List;contains(Ljava/lang/Object;)Z"))
-    private boolean applygray$acceptLinkedSourceMergePattern(List<?> localPatterns, Object pattern) {
+            target = "Lit/unimi/dsi/fastutil/objects/ObjectList;contains(Ljava/lang/Object;)Z"))
+    private boolean applygray$acceptLinkedSourceMergePattern(ObjectList<?> localPatterns, Object pattern) {
         return localPatterns.contains(pattern) || applygray$containsLinkedSourcePattern(pattern);
     }
 

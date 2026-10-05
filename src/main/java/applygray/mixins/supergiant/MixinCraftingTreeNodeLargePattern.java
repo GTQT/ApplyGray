@@ -11,6 +11,8 @@ import ae2.crafting.CraftingTreeNode;
 import ae2.crafting.CraftingTreeProcess;
 import ae2.crafting.inv.CraftingSimulationState;
 import com.google.common.math.LongMath;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectList;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -37,9 +39,14 @@ public abstract class MixinCraftingTreeNodeLargePattern {
      * This runs after AE2 has removed directly available items from the node request. The remaining amount is the
      * only amount the crafting tree must supply. The candidate redirect below therefore scales only material which
      * AE2 did not already satisfy from network stock.
+     * <p>
+     * AE2 1.0.16 added a second {@code buildChildPatterns()} call at the very start of {@code requestInner}, before
+     * any directly available items are subtracted. Since {@code buildChildPatterns()} only ever builds once, the
+     * unscaled request amount would become the permanent selection basis if the scope opened there. Pin the
+     * injection to the original post-subtraction call site, which is the second match.
      */
     @Inject(method = "requestInner", at = @At(value = "INVOKE",
-            target = "Lae2/crafting/CraftingTreeNode;buildChildPatterns()V", shift = At.Shift.BEFORE))
+            target = "Lae2/crafting/CraftingTreeNode;buildChildPatterns()V", shift = At.Shift.BEFORE, ordinal = 1))
     private void applygray$beginLargePatternSelection(CraftingSimulationState inventory, long requestedAmount,
                                                        KeyCounter containerItems, CallbackInfo ci) {
         DynamicRecipePatternRegistry.beginLargePatternSelection(this, what,
@@ -75,11 +82,16 @@ public abstract class MixinCraftingTreeNodeLargePattern {
      * recursively preflights every candidate it receives.
      */
     @Redirect(method = "buildChildPatterns", at = @At(value = "INVOKE",
-            target = "Lae2/crafting/CraftingCalculation;getCraftingFor(Lae2/api/stacks/AEKey;)Ljava/util/Collection;"))
-    private Collection<IPatternDetails> applygray$expandLargePatternCandidates(CraftingCalculation calculation,
-                                                                                 AEKey target) {
-        return DynamicRecipePatternRegistry.expandLargePatternCandidatesForCurrentSelection(this, target,
-                ((AccessorCraftingCalculation) calculation).applygray$getCraftingFor(target));
+            target = "Lae2/crafting/CraftingCalculation;getCraftingFor(Lae2/api/stacks/AEKey;)Lit/unimi/dsi/fastutil/objects/ObjectList;"))
+    private ObjectList<IPatternDetails> applygray$expandLargePatternCandidates(CraftingCalculation calculation,
+                                                                                AEKey target) {
+        ObjectList<IPatternDetails> candidates =
+                ((AccessorCraftingCalculation) calculation).applygray$getCraftingFor(target);
+        Collection<IPatternDetails> expanded =
+                DynamicRecipePatternRegistry.expandLargePatternCandidatesForCurrentSelection(this, target,
+                        candidates);
+        return expanded instanceof ObjectList<IPatternDetails> objectList ? objectList
+                : new ObjectArrayList<>(expanded);
     }
 
     @Inject(method = "buildChildPatterns", at = @At("RETURN"))

@@ -4,7 +4,7 @@ import gregtech.integration.ae2.GTCircuitHelper;
 
 import net.minecraft.entity.player.EntityPlayer;
 
-import ae2.container.me.items.ContainerPatternEncodingTerm;
+import ae2.container.me.patternencode.ContainerPatternEncodingTerm;
 import ae2.integration.modules.hei.PatternEncodingRecipeTransferHandler;
 import mezz.jei.api.gui.IRecipeLayout;
 import mezz.jei.api.recipe.transfer.IRecipeTransferError;

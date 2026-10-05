@@ -1,15 +1,15 @@
 package applygray.common.metatileentities.multiblock.storage;
 
-import applygray.common.ApplyGrayBlocks;
-import applygray.common.blocks.BlockQuantumStorageUnit;
-import applygray.common.blocks.QuantumStorageUnit;
+import applygray.common.quantum.QuantumStorageElement;
 import applygray.common.quantum.QuantumStorageHandler;
-import applygray.common.quantum.QuantumStorageUnitScanner;
+
+import codechicken.lib.render.CCRenderState;
+import codechicken.lib.render.pipeline.IVertexOperation;
+import codechicken.lib.vec.Matrix4;
 
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IControllable;
 import gregtech.api.capability.impl.FluidTankList;
-import gregtech.api.metatileentity.IVoidable.VoidingMode;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.IMultiblockPart;
@@ -18,12 +18,13 @@ import gregtech.api.metatileentity.multiblock.MultiblockWithDisplayBase;
 import gregtech.api.metatileentity.multiblock.ui.MultiblockUIBuilder;
 import gregtech.api.pattern.FormedStructureView;
 import gregtech.api.pattern.casing.DeclarativePatternBuilder;
+import gregtech.api.pattern.casing.GTStructureChannels;
 import gregtech.api.pattern.element.StructureDefinition;
-import gregtech.api.util.BlockInfo;
 import gregtech.api.util.KeyUtil;
 import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
-import gregtech.common.blocks.BlockMetalCasing;
+import gregtech.common.blocks.BlockComputerCasing;
+import gregtech.common.blocks.BlockGlassCasing;
 import gregtech.common.blocks.MetaBlocks;
 
 import net.minecraft.block.state.IBlockState;
@@ -36,11 +37,11 @@ import net.minecraft.util.text.TextFormatting;
 import net.minecraft.world.World;
 import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.fluids.FluidStack;
-import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
 import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -49,49 +50,79 @@ import java.util.List;
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.EXPORT_FLUIDS;
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.IMPORT_FLUIDS;
 import static gregtech.api.pattern.element.Elements.abilities;
-import static gregtech.api.pattern.element.Elements.air;
 import static gregtech.api.pattern.element.Elements.block;
-import static gregtech.api.pattern.element.Elements.blockPredicate;
 import static gregtech.api.pattern.element.Elements.choice;
+import static gregtech.api.pattern.element.Elements.counted;
+import static gregtech.api.util.RelativeDirection.FRONT;
+import static gregtech.api.util.RelativeDirection.RIGHT;
+import static gregtech.api.util.RelativeDirection.UP;
 
 /**
  * Large Quantum Fluid Storage Array: the fluid counterpart of
- * {@link MetaTileEntityQuantumItemStorage}. Contents live only on this
- * controller and are reachable through the fluid import/export hatches of the
- * structure (or an attached quantum access hatch).
+ * {@link MetaTileEntityQuantumItemStorage}. GT Lite stacks this one vertically,
+ * so the two end shells enclose a heat-vent cap, a fusion-glass core and a
+ * second heat-vent cap. Contents live only on this controller and are reachable
+ * through the fluid import/export hatches of the structure (or an attached
+ * quantum access hatch).
  */
 public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase implements IControllable {
 
     private static final int TICK_SECOND = 20;
     private static final String STORAGE_TAG = "QuantumStorage";
 
-    private static final IBlockState CASING_STATE = MetaBlocks.METAL_CASING
-            .getState(BlockMetalCasing.MetalCasingType.STEEL_SOLID);
+    public static IBlockState getCasingState() {
+        return MetaBlocks.COMPUTER_CASING.getState(BlockComputerCasing.CasingType.COMPUTER_CASING);
+    }
+
+    public static IBlockState getVentState() {
+        return MetaBlocks.COMPUTER_CASING.getState(BlockComputerCasing.CasingType.COMPUTER_HEAT_VENT);
+    }
+
+    public static IBlockState getGlassState() {
+        return MetaBlocks.TRANSPARENT_CASING.getState(BlockGlassCasing.CasingType.FUSION_GLASS);
+    }
+
+    /** Computer-casing count kept from GT Lite's {@code setMinGlobalLimited(12)}. */
+    private static final int MIN_CASING = 12;
+
+    /** Core layer bounds kept from GT Lite's {@code setRepeatable(1, 15)}. */
+    private static final int MIN_CORE_LAYERS = 1;
+    private static final int MAX_CORE_LAYERS = 15;
 
     private static final StructureDefinition<?> STRUCTURE_DEFINITION = StructureDefinition.getOrBuild(
-            "applygray:quantum_fluid_storage", () -> DeclarativePatternBuilder.start()
-                    // front cap, controller in the middle of the face
-                    .aisle("CCCCC", "CCCCC", "CCSCC", "CCCCC", "CCCCC")
-                    // six unit core layers
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    .aisle("CCCCC", "CUUUC", "CUUUC", "CUUUC", "CCCCC")
-                    // back cap
-                    .aisle("CCCCC", "CCCCC", "CCCCC", "CCCCC", "CCCCC")
+            "applygray:quantum_fluid_storage", () -> DeclarativePatternBuilder.start(RIGHT, FRONT, UP)
+                    // bottom shell ring
+                    .piece("bottomShell")
+                    .aisle("     ", " CCC ", " CCC ", " CCC ", "     ")
+                    .end()
+                    // heat-vent cap holding the controller
+                    .piece("controllerCap")
+                    .aisle("HCSCH", "HCCCH", "HCCCH", "HCCCH", "HCCCH")
+                    .end()
+                    // fusion-glass unit core, 1..15 layers
+                    .repeatablePiece("core", MIN_CORE_LAYERS, MAX_CORE_LAYERS)
+                    .aisle("GGGGG", "GUUUG", "GUUUG", "GUUUG", "GGGGG")
+                    .withAisleChannel(GTStructureChannels.STRUCTURE_HEIGHT.getName())
+                    .end()
+                    // heat-vent cap
+                    .piece("backCap")
+                    .aisle("HCCCH", "HCCCH", "HCCCH", "HCCCH", "HCCCH")
+                    .end()
+                    // top shell ring
+                    .piece("topShell")
+                    .aisle("     ", " CCC ", " CCC ", " CCC ", "     ")
+                    .end()
                     .self('S', MetaTileEntityQuantumFluidStorage.class)
+                    .any(' ')
+                    .block('H', getVentState())
+                    .block('G', getGlassState())
                     .where('C', choice(
-                            block(CASING_STATE),
-                            abilities(0, 8, IMPORT_FLUIDS),
-                            abilities(0, 8, EXPORT_FLUIDS),
+                            counted(MIN_CASING, Integer.MAX_VALUE, block(getCasingState())),
+                            abilities(0, -1, 1, IMPORT_FLUIDS),
+                            abilities(0, -1, 1, EXPORT_FLUIDS),
                             abilities(1, 1, MultiblockAbility.MAINTENANCE_HATCH),
-                            abilities(0, 1, MetaTileEntityQuantumAccessHatch.QUANTUM_ACCESS)))
-                    .where('U', choice(
-                            air(),
-                            blockPredicate(state -> state.getBlock() instanceof BlockQuantumStorageUnit,
-                                    MetaTileEntityQuantumFluidStorage::unitCandidates)))
+                            abilities(0, 1, 1, MetaTileEntityQuantumAccessHatch.QUANTUM_ACCESS)))
+                    .where('U', QuantumStorageElement.airOrStorageUnit())
                     .buildStructureDefinition());
 
     private final QuantumStorageHandler<FluidStack> storage = new QuantumStorageHandler<>(0, BigInteger.ZERO,
@@ -114,15 +145,6 @@ public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase
         super(metaTileEntityId);
     }
 
-    private static BlockInfo[] unitCandidates() {
-        QuantumStorageUnit[] units = QuantumStorageUnit.values();
-        BlockInfo[] infos = new BlockInfo[units.length];
-        for (int i = 0; i < units.length; i++) {
-            infos[i] = new BlockInfo(ApplyGrayBlocks.QUANTUM_STORAGE_UNIT.getState(units[i]));
-        }
-        return infos;
-    }
-
     @Override
     public MetaTileEntity createMetaTileEntity(IGregTechTileEntity tileEntity) {
         return new MetaTileEntityQuantumFluidStorage(metaTileEntityId);
@@ -134,13 +156,13 @@ public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase
     }
 
     @Override
-    protected void formStructure(FormedStructureView formed) {
+    protected void formStructure(@NonNull FormedStructureView formed) {
         super.formStructure(formed);
         this.importFluids = new FluidTankList(true, getAbilities(IMPORT_FLUIDS));
         this.exportFluids = new FluidTankList(true, getAbilities(EXPORT_FLUIDS));
-        QuantumStorageUnitScanner.Counts counts = QuantumStorageUnitScanner.scan(
-                getWorld(), getPos(), getFrontFacing(), getUpwardsFacing(), isFlipped());
-        this.storage.rebuild((int) Math.min(counts.distinctSlots, Integer.MAX_VALUE), counts.totalCapacity);
+        // The core is a repeatable piece, so the totals come from the units matched by the pattern itself.
+        QuantumStorageElement.Totals totals = QuantumStorageElement.read(formed);
+        this.storage.rebuild((int) Math.min(totals.distinctSlots(), Integer.MAX_VALUE), totals.totalCapacity());
         this.shouldImport = importFluids.getTanks() > 0;
         this.shouldExport = exportFluids.getTanks() > 0;
     }
@@ -325,13 +347,21 @@ public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase
 
     @Override
     public ICubeRenderer getBaseTexture(IMultiblockPart iMultiblockPart) {
-        return Textures.SOLID_STEEL_CASING;
+        return Textures.COMPUTER_CASING;
     }
 
     @SideOnly(Side.CLIENT)
     @Override
-    protected ICubeRenderer getFrontOverlay() {
-        return Textures.PRIMITIVE_PUMP_OVERLAY;
+    protected @NonNull ICubeRenderer getFrontOverlay() {
+        return Textures.RESEARCH_STATION_OVERLAY;
+    }
+
+    @SideOnly(Side.CLIENT)
+    @Override
+    public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
+        super.renderMetaTileEntity(renderState, translation, pipeline);
+        getFrontOverlay().renderOrientedState(renderState, translation, pipeline, getFrontFacing(), true,
+                isStructureFormed());
     }
 
     @Override

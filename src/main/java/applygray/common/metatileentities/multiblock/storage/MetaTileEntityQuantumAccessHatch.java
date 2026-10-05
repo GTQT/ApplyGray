@@ -1,7 +1,5 @@
 package applygray.common.metatileentities.multiblock.storage;
 
-import applygray.integration.ae2.ApplyGrayGridNodeSupport;
-
 import gregtech.api.GTValues;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
@@ -32,10 +30,13 @@ import ae2.api.stacks.AEKey;
 import ae2.api.stacks.KeyCounter;
 import ae2.api.storage.IStorageMounts;
 import ae2.api.storage.IStorageProvider;
-import ae2.api.storage.MEStorage;
+import ae2.api.storage.MEStorageChangeListener;
+import ae2.api.storage.MEStorageMonitor;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Quantum Access Hatch: a multiblock part that joins a formed quantum item or
@@ -55,6 +56,8 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
     private long lastSyncStamp = -1;
     private MetaTileEntityQuantumItemStorage lastItemController;
     private MetaTileEntityQuantumFluidStorage lastFluidController;
+    private ItemStorageView mountedItemView;
+    private FluidStorageView mountedFluidView;
 
     public MetaTileEntityQuantumAccessHatch(ResourceLocation metaTileEntityId) {
         super(metaTileEntityId, GTValues.LuV, false);
@@ -105,10 +108,18 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
     public void mountInventories(IStorageMounts mounts) {
         MetaTileEntityQuantumItemStorage itemController = resolveItemController();
         MetaTileEntityQuantumFluidStorage fluidController = resolveFluidController();
+        // The mounted monitors are retained so content changes can be pushed as exact deltas instead of
+        // forcing the grid to re-enumerate this provider.
+        mountedItemView = null;
+        mountedFluidView = null;
+        lastItemController = itemController;
+        lastFluidController = fluidController;
         if (itemController != null) {
-            mounts.mount(new ItemStorageView(itemController));
+            mountedItemView = new ItemStorageView(itemController);
+            mounts.mount(mountedItemView);
         } else if (fluidController != null) {
-            mounts.mount(new FluidStorageView(fluidController));
+            mountedFluidView = new FluidStorageView(fluidController);
+            mounts.mount(mountedFluidView);
         }
     }
 
@@ -125,21 +136,31 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
         MetaTileEntityQuantumFluidStorage fluidController = resolveFluidController();
         if (itemController == null && fluidController == null) {
             lastSyncStamp = -1;
+            lastItemController = null;
+            lastFluidController = null;
+            return;
+        }
+        // Only a different controller (formed, reformed or swapped) needs the grid to re-mount this provider.
+        if (lastItemController != itemController || lastFluidController != fluidController) {
+            lastItemController = itemController;
+            lastFluidController = fluidController;
+            lastSyncStamp = -1;
+            IStorageProvider.requestUpdate(getMainNode());
             return;
         }
         long stamp = itemController != null
                 ? controllerStamp(itemController)
                 : controllerStamp(fluidController);
-        if (stamp == lastSyncStamp
-                && lastItemController == itemController
-                && lastFluidController == fluidController) {
+        if (stamp == lastSyncStamp) {
             return;
         }
         lastSyncStamp = stamp;
-        lastItemController = itemController;
-        lastFluidController = fluidController;
-        // Content or controller changed: have the grid re-mount this provider.
-        IStorageProvider.requestUpdate(getMainNode());
+        // Content changed outside the mounted views: publish deltas rather than re-enumerating on the grid.
+        if (mountedItemView != null) {
+            mountedItemView.publishChanges();
+        } else if (mountedFluidView != null) {
+            mountedFluidView.publishChanges();
+        }
     }
 
     private static long controllerStamp(MetaTileEntityQuantumItemStorage controller) {
@@ -178,10 +199,135 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
     }
 
     // ------------------------------------------------------------------
-    // MEStorage views over the two controller flavours.
+    // MEStorageMonitor views over the two controller flavours.
+    //
+    // The grid enumerates a mounted monitor once and then relies on exact signed deltas, so these views keep the
+    // last reported content as a baseline and diff against it whenever the controller changes.
     // ------------------------------------------------------------------
 
-    private static final class ItemStorageView implements MEStorage {
+    private abstract static class ControllerStorageView implements MEStorageMonitor {
+
+        private final List<ListenerRegistration> listeners = new ArrayList<>();
+        private final KeyCounter publishedSnapshot = new KeyCounter();
+        private boolean snapshotInitialized;
+        private boolean publishing;
+        private boolean publishRequested;
+
+        /** Writes the wrapped controller's current content into {@code out}. */
+        abstract void collectAvailableStacks(KeyCounter out);
+
+        @Override
+        public final void addListener(MEStorageChangeListener listener, Object verificationToken) {
+            Objects.requireNonNull(listener, "listener");
+            for (int i = 0; i < listeners.size(); i++) {
+                if (listeners.get(i).listener() == listener) {
+                    throw new IllegalStateException("The storage listener is already registered.");
+                }
+            }
+            listeners.add(new ListenerRegistration(listener, verificationToken));
+        }
+
+        @Override
+        public final void removeListener(MEStorageChangeListener listener) {
+            for (int i = listeners.size() - 1; i >= 0; i--) {
+                if (listeners.get(i).listener() == listener) {
+                    listeners.remove(i);
+                }
+            }
+        }
+
+        @Override
+        public final void getAvailableStacks(KeyCounter out) {
+            KeyCounter current = collect();
+            for (var entry : current) {
+                out.add(entry.getKey(), entry.getLongValue());
+            }
+            // The enumeration defines the baseline: only changes after it are published as deltas.
+            syncSnapshot(current);
+            removeInvalidListeners();
+        }
+
+        /** Publishes one exact signed delta per key that changed since the last reported content. */
+        final void publishChanges() {
+            if (listeners.isEmpty()) {
+                return;
+            }
+            if (publishing) {
+                // A listener changed the controller re-entrantly; re-diff once the current pass finishes.
+                publishRequested = true;
+                return;
+            }
+            publishing = true;
+            try {
+                do {
+                    publishRequested = false;
+                    publishOnce();
+                } while (publishRequested);
+            } finally {
+                publishing = false;
+            }
+        }
+
+        private void publishOnce() {
+            KeyCounter current = collect();
+            if (!snapshotInitialized) {
+                syncSnapshot(current);
+                return;
+            }
+            for (var entry : publishedSnapshot) {
+                long delta = current.get(entry.getKey()) - entry.getLongValue();
+                if (delta != 0) {
+                    notifyStackChange(entry.getKey(), delta);
+                }
+            }
+            for (var entry : current) {
+                if (publishedSnapshot.get(entry.getKey()) == 0 && entry.getLongValue() != 0) {
+                    notifyStackChange(entry.getKey(), entry.getLongValue());
+                }
+            }
+            syncSnapshot(current);
+        }
+
+        private KeyCounter collect() {
+            KeyCounter counter = new KeyCounter();
+            collectAvailableStacks(counter);
+            counter.removeZeros();
+            return counter;
+        }
+
+        private void syncSnapshot(KeyCounter current) {
+            publishedSnapshot.clear();
+            for (var entry : current) {
+                publishedSnapshot.add(entry.getKey(), entry.getLongValue());
+            }
+            snapshotInitialized = true;
+        }
+
+        private void notifyStackChange(AEKey key, long delta) {
+            for (int i = listeners.size() - 1; i >= 0; i--) {
+                ListenerRegistration registration = listeners.get(i);
+                if (!registration.listener().isValid(registration.verificationToken())) {
+                    listeners.remove(i);
+                    continue;
+                }
+                registration.listener().onStackChange(key, delta);
+            }
+        }
+
+        private void removeInvalidListeners() {
+            for (int i = listeners.size() - 1; i >= 0; i--) {
+                ListenerRegistration registration = listeners.get(i);
+                if (!registration.listener().isValid(registration.verificationToken())) {
+                    listeners.remove(i);
+                }
+            }
+        }
+
+        private record ListenerRegistration(MEStorageChangeListener listener, Object verificationToken) {
+        }
+    }
+
+    private static final class ItemStorageView extends ControllerStorageView {
 
         private final MetaTileEntityQuantumItemStorage controller;
 
@@ -201,7 +347,11 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
             }
             BigInteger accepted = controller.insertItemStack(stack, BigInteger.valueOf(amount),
                     action.isSimulate());
-            return clampLong(accepted);
+            long inserted = clampLong(accepted);
+            if (!action.isSimulate() && inserted > 0) {
+                publishChanges();
+            }
+            return inserted;
         }
 
         @Override
@@ -216,11 +366,15 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
             }
             BigInteger removed = controller.extractItemStack(stack, BigInteger.valueOf(amount),
                     action.isSimulate());
-            return clampLong(removed);
+            long extracted = clampLong(removed);
+            if (!action.isSimulate() && extracted > 0) {
+                publishChanges();
+            }
+            return extracted;
         }
 
         @Override
-        public void getAvailableStacks(KeyCounter out) {
+        void collectAvailableStacks(KeyCounter out) {
             for (var entry : controller.itemStorage().entries()) {
                 ItemStack stack = entry.getKey();
                 if (!stack.isEmpty()) {
@@ -235,7 +389,7 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
         }
     }
 
-    private static final class FluidStorageView implements MEStorage {
+    private static final class FluidStorageView extends ControllerStorageView {
 
         private final MetaTileEntityQuantumFluidStorage controller;
 
@@ -255,7 +409,11 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
             }
             BigInteger accepted = controller.insertFluid(fluid, BigInteger.valueOf(amount),
                     action.isSimulate());
-            return clampLong(accepted);
+            long inserted = clampLong(accepted);
+            if (!action.isSimulate() && inserted > 0) {
+                publishChanges();
+            }
+            return inserted;
         }
 
         @Override
@@ -270,11 +428,15 @@ public class MetaTileEntityQuantumAccessHatch extends MetaTileEntityAEHostablePa
             }
             BigInteger removed = controller.extractFluid(fluid, BigInteger.valueOf(amount),
                     action.isSimulate());
-            return clampLong(removed);
+            long extracted = clampLong(removed);
+            if (!action.isSimulate() && extracted > 0) {
+                publishChanges();
+            }
+            return extracted;
         }
 
         @Override
-        public void getAvailableStacks(KeyCounter out) {
+        void collectAvailableStacks(KeyCounter out) {
             for (var entry : controller.fluidStorage().entries()) {
                 var fluid = entry.getKey();
                 if (fluid != null) {

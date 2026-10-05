@@ -3,8 +3,8 @@ package applygray.mixins.supergiant;
 import applygray.integration.ae2.RecipeMapPatternAccessActions;
 
 import ae2.api.storage.IPatternAccessTermContainerHost;
-import ae2.container.implementations.ContainerPatternAccessTerm;
-import ae2.container.implementations.PatternAccessSupport;
+import ae2.container.me.patternaccess.ContainerPatternAccessTerm;
+import ae2.container.me.patternaccess.PatternAccessSession;
 
 import net.minecraft.entity.player.InventoryPlayer;
 import org.spongepowered.asm.mixin.Final;
@@ -18,12 +18,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinContainerPatternAccessTermRecipeMapClear {
 
     @Shadow @Final
-    private PatternAccessSupport<?> patternAccessSupport;
+    private PatternAccessSession<?> patternAccessSession;
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void applygray$registerRecipeMapClearAction(InventoryPlayer playerInventory,
                                                         IPatternAccessTermContainerHost host,
                                                         CallbackInfo ci) {
-        RecipeMapPatternAccessActions.register((ContainerPatternAccessTerm) (Object) this, patternAccessSupport);
+        RecipeMapPatternAccessActions.register((ContainerPatternAccessTerm) (Object) this, patternAccessSession);
     }
 }
