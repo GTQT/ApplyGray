@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import meowmel.structurelib.integration.gregtech.PortableMeConfigurationAccess;
+
 import applygray.client.renderer.texture.ApplyGrayTextures;
 
 import gregtech.api.capability.DualHandler;
@@ -86,7 +88,7 @@ import java.util.List;
 
 public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
         implements IMultiblockAbilityPart<DualHandler>, IControllable, IGhostSlotConfigurable,
-                   IDataStickIntractable {
+                   IDataStickIntractable, PortableMeConfigurationAccess {
 
     public static final int CONFIG_SIZE = 16;
     public static final String WORKING_TAG = "WorkingEnabled";
@@ -697,14 +699,14 @@ public class MetaTileEntityMEDualInputHatch extends MetaTileEntityAEHostablePart
     }
 
     /** Portable configuration boundary used by Matter Manipulator copy/move operations. */
-    public final NBTTagCompound applygray$exportPortableConfiguration() {
+    public final NBTTagCompound exportPortableMeConfiguration() {
         NBTTagCompound tag = writeConfigToTag();
         tag.setBoolean(WORKING_TAG, workingEnabled);
         return tag;
     }
 
     /** Restores ME item/fluid configuration without restoring live network buffers. */
-    public final void applygray$importPortableConfiguration(NBTTagCompound tag) {
+    public final void importPortableMeConfiguration(NBTTagCompound tag) {
         readConfigFromTag(tag);
         if (tag.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) workingEnabled = tag.getBoolean(WORKING_TAG);
     }

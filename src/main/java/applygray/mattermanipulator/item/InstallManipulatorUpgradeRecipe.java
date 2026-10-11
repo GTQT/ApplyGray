@@ -3,8 +3,8 @@ package applygray.mattermanipulator.item;
 import javax.annotation.Nullable;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.mattermanipulator.state.ManipulatorState;
-import applygray.mattermanipulator.state.ManipulatorUpgrade;
+import meowmel.structurelib.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorUpgrade;
 
 import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;

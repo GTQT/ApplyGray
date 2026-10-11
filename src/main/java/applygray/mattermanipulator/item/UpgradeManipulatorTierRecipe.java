@@ -6,7 +6,7 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.mattermanipulator.state.ManipulatorTier;
+import meowmel.structurelib.state.ManipulatorTier;
 
 import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.Item;

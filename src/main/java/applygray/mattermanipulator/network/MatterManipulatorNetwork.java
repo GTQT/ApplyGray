@@ -1,7 +1,7 @@
 package applygray.mattermanipulator.network;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.mattermanipulator.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorState;
 
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.util.EnumHand;

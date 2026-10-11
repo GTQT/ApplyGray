@@ -7,9 +7,9 @@ import java.util.List;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
 import applygray.mattermanipulator.network.ConfigureManipulatorMessage;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
-import applygray.mattermanipulator.state.ManipulatorLocation;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorLocation;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorState;
 
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;

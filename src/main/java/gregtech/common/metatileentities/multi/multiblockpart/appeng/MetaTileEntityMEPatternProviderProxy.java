@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import meowmel.structurelib.integration.gregtech.MteProxyMasterBindable;
+
 import applygray.client.renderer.texture.ApplyGrayTextures;
 
 import gregtech.api.capability.DualHandler;
@@ -46,7 +48,7 @@ import static net.minecraft.util.text.TextFormatting.GREEN;
 
 public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblockNotifiablePart
         implements IMultiblockAbilityPart<IItemHandlerModifiable>,
-                   IDataStickIntractable {
+                   IDataStickIntractable, MteProxyMasterBindable {
 
     private MetaTileEntityMEPatternProvider main;
     private BlockPos mainPos;
@@ -139,6 +141,11 @@ public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblo
     }
 
     /** Sets the CRIB master location for explicit Matter Manipulator proxy placement. */
+    @Override
+    public void bindProxyMaster(BlockPos mainPos) {
+        setMainPosition(mainPos);
+    }
+
     public void setMainPosition(BlockPos mainPos) {
         this.mainPos = mainPos;
         this.checkForMain = true;

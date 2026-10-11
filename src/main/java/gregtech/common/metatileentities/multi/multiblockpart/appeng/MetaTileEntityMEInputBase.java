@@ -1,5 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import meowmel.structurelib.integration.gregtech.PortableMeConfigurationAccess;
+
 import gregtech.api.capability.GregtechDataCodes;
 import gregtech.api.capability.GregtechTileCapabilities;
 import gregtech.api.capability.IControllable;
@@ -54,7 +56,7 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 
 public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostableChannelPart
-        implements IControllable, IGhostSlotConfigurable, IDataStickIntractable {
+        implements IControllable, IGhostSlotConfigurable, IDataStickIntractable, PortableMeConfigurationAccess {
 
     public final static int CONFIG_SIZE = 16;
     public static final String WORKING_TAG = "WorkingEnabled";
@@ -488,7 +490,7 @@ public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostable
     }
 
     /** Portable configuration boundary used by integrations that relocate this ME hatch/bus. */
-    public final NBTTagCompound applygray$exportPortableConfiguration() {
+    public final NBTTagCompound exportPortableMeConfiguration() {
         NBTTagCompound tag = writeConfigToTag();
         tag.setBoolean(WORKING_TAG, workingEnabled);
         tag.setBoolean("PreciseMode", preciseMode);
@@ -496,7 +498,7 @@ public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostable
     }
 
     /** Restores only the user-facing ME configuration, never live network stock. */
-    public final void applygray$importPortableConfiguration(NBTTagCompound tag) {
+    public final void importPortableMeConfiguration(NBTTagCompound tag) {
         readConfigFromTag(tag);
         if (tag.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) workingEnabled = tag.getBoolean(WORKING_TAG);
         if (tag.hasKey("PreciseMode", Constants.NBT.TAG_BYTE)) preciseMode = tag.getBoolean("PreciseMode");

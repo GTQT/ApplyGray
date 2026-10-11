@@ -2,7 +2,7 @@ package applygray.mattermanipulator.network;
 
 import java.util.Objects;
 
-import applygray.mattermanipulator.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorState;
 
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.EnumHand;

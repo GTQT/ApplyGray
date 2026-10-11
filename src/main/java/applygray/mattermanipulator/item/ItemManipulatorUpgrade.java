@@ -1,7 +1,7 @@
 package applygray.mattermanipulator.item;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.mattermanipulator.state.ManipulatorUpgrade;
+import meowmel.structurelib.state.ManipulatorUpgrade;
 
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.item.Item;

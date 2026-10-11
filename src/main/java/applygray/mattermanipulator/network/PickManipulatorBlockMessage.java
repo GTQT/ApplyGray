@@ -1,13 +1,13 @@
 package applygray.mattermanipulator.network;
 
 import applygray.ApplyGrayMod;
-import applygray.mattermanipulator.building.BlockSpec;
+import meowmel.structurelib.building.BlockSpec;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
-import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
-import applygray.mattermanipulator.state.ManipulatorState;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorPickTarget;
-import applygray.mattermanipulator.state.ManipulatorPendingAction;
+import meowmel.structurelib.state.ManipulatorMaterialPicker;
+import meowmel.structurelib.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorPickTarget;
+import meowmel.structurelib.state.ManipulatorPendingAction;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayerMP;

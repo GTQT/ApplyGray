@@ -1,11 +1,14 @@
 /*
  * Project dependencies for the Cleanroom/Unimined build.
  *
- * Place locally built mod jars in libs/. The two mandatory development mods are
- * selected by ae2_supergiant_jar and gregtech_jar in gradle.properties.
+ * Place locally built mod jars in libs/. The mandatory development mods are selected by ae2_supergiant_jar,
+ * gregtech_jar and structurelib_jar in gradle.properties.
  */
 
 repositories {
+    flatDir {
+        dirs('libs')
+    }
     maven {
         name = 'CurseMaven'
         url = 'https://cursemaven.com'
@@ -44,9 +47,11 @@ def requiredLocalJar = { String propertyName ->
 
 def ae2SupergiantJar = requiredLocalJar('ae2_supergiant_jar')
 def gregTechJar = requiredLocalJar('gregtech_jar')
+def structureLibJar = requiredLocalJar('structurelib_jar')
 def localArtifactName = { File jarFile -> jarFile.name.replaceFirst(/\.jar$/, '') }
 def ae2SupergiantArtifact = localArtifactName(ae2SupergiantJar)
 def gregTechArtifact = localArtifactName(gregTechJar)
+def structureLibArtifact = localArtifactName(structureLibJar)
 
 def localJarFingerprint = { File jarFile ->
     def digest = java.security.MessageDigest.getInstance('SHA-256')
@@ -92,9 +97,41 @@ if (previousGregTechFingerprint != gregTechFingerprint) {
     }
 }
 
+// StructureLib is rebuilt far more often than GregTech, so its cached remap output is invalidated the same way.
+// The match is by artifact name, which covers both the flat `-mapped-*.jar` layout and the per-artifact
+// directory layout newer Unimined versions use.
+def structureLibFingerprint = localJarFingerprint(structureLibJar)
+def structureLibFingerprintFile = file(".gradle/applygray/local-mod-cache/${structureLibArtifact}.sha256")
+def previousStructureLibFingerprint = structureLibFingerprintFile.isFile() ?
+        structureLibFingerprintFile.getText('UTF-8').trim() : null
+
+if (previousStructureLibFingerprint != structureLibFingerprint) {
+    def modTransformDirectory = file('.gradle/unimined/local/modTransform')
+    def stale = []
+    if (modTransformDirectory.isDirectory()) {
+        modTransformDirectory.eachFileRecurse { File candidate ->
+            if (candidate.name.toLowerCase().contains(structureLibArtifact.toLowerCase())) stale.add(candidate)
+        }
+    }
+    def invalidated = 0
+    stale.sort { a, b -> b.path.length() <=> a.path.length() }.each { File candidate ->
+        if (candidate.exists() && (candidate.isDirectory() ? candidate.deleteDir() : candidate.delete())) {
+            invalidated++
+        }
+    }
+
+    structureLibFingerprintFile.parentFile.mkdirs()
+    structureLibFingerprintFile.setText("${structureLibFingerprint}${System.lineSeparator()}", 'UTF-8')
+    if (invalidated > 0) {
+        logger.lifecycle("StructureLib jar content changed; invalidated ${invalidated} cached Unimined remap " +
+                "artifact(s).")
+    }
+}
+
 // One line per build makes the selected local artifacts clear without runtime log noise.
 logger.lifecycle("Using Applied Energistics 2 Supergiant dependency: ${ae2SupergiantJar.name}")
 logger.lifecycle("Using GregTech development dependency: ${gregTechJar.name}")
+logger.lifecycle("Using StructureLib development dependency: ${structureLibJar.name}")
 
 dependencies {
     compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
@@ -141,6 +178,12 @@ dependencies {
     // patched Minecraft classes.
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78:core")
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78")
+
+    // StructureLib owns the structure engine (capture, planning, build transactions) and the AE2/GT adapters.
+    // It is consumed exactly like GregTech or AE2: a jar in libs/, selected by structurelib_jar in
+    // gradle.properties. StructureLib's own `gradlew syncDownstreamLibs` refreshes this jar.
+    modCompileOnly(name: structureLibArtifact)
+    modRuntimeOnly(name: structureLibArtifact)
 
     if (project.findProperty('enable_junit_testing')?.toString()?.toBoolean()) {
         testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'

@@ -1,15 +1,22 @@
 package applygray.mattermanipulator.uplink;
 
+import meowmel.structurelib.uplink.UplinkEndpoint;
+import meowmel.structurelib.uplink.UplinkCraftingEndpoint;
+import meowmel.structurelib.uplink.UplinkStatus;
+import meowmel.structurelib.uplink.UplinkCraftingRequestResult;
+import meowmel.structurelib.uplink.MatterManipulatorUplinkRegistry;
+import meowmel.structurelib.uplink.UplinkTransferCosts;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 import applygray.ApplyGrayMod;
 import applygray.client.renderer.texture.ApplyGrayTextures;
-import applygray.mattermanipulator.building.BlockSpec;
-import applygray.mattermanipulator.inventory.ResourceRequirements;
+import meowmel.structurelib.building.BlockSpec;
+import meowmel.structurelib.inventory.ResourceRequirements;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
-import applygray.mattermanipulator.state.ManipulatorCapability;
+import meowmel.structurelib.state.ManipulatorCapability;
 
 import gregtech.api.GTValues;
 import gregtech.api.capability.GregtechDataCodes;

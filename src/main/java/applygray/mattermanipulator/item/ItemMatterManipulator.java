@@ -7,24 +7,25 @@ import applygray.ApplyGrayMod;
 import applygray.api.ApplyGrayAPI;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
 import applygray.mattermanipulator.network.ExecuteManipulatorOperationMessage;
-import applygray.mattermanipulator.state.ManipulatorCapability;
-import applygray.mattermanipulator.state.ManipulatorLocation;
-import applygray.mattermanipulator.state.ManipulatorState;
-import applygray.mattermanipulator.state.ManipulatorPendingAction;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorMaterialPicker;
-import applygray.mattermanipulator.state.ManipulatorRemovalMode;
-import applygray.mattermanipulator.state.ManipulatorSelectionActions;
-import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionOutcome;
-import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionResult;
-import applygray.mattermanipulator.state.ManipulatorSelectionActions.SelectionSlot;
-import applygray.mattermanipulator.state.ManipulatorShape;
-import applygray.mattermanipulator.building.BlockSpec;
-import applygray.mattermanipulator.state.ManipulatorTier;
-import applygray.mattermanipulator.state.ManipulatorUpgrade;
-import applygray.mattermanipulator.uplink.MatterManipulatorUplinkRegistry;
-import applygray.mattermanipulator.uplink.UplinkEndpoint;
-import applygray.mattermanipulator.util.ManipulatorTargeting;
+import meowmel.structurelib.state.ManipulatorCapability;
+import meowmel.structurelib.state.ManipulatorLocation;
+import meowmel.structurelib.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorStateHolder;
+import meowmel.structurelib.state.ManipulatorPendingAction;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorMaterialPicker;
+import meowmel.structurelib.state.ManipulatorRemovalMode;
+import meowmel.structurelib.state.ManipulatorSelectionActions;
+import meowmel.structurelib.state.ManipulatorSelectionActions.SelectionOutcome;
+import meowmel.structurelib.state.ManipulatorSelectionActions.SelectionResult;
+import meowmel.structurelib.state.ManipulatorSelectionActions.SelectionSlot;
+import meowmel.structurelib.state.ManipulatorShape;
+import meowmel.structurelib.building.BlockSpec;
+import meowmel.structurelib.state.ManipulatorTier;
+import meowmel.structurelib.state.ManipulatorUpgrade;
+import meowmel.structurelib.uplink.MatterManipulatorUplinkRegistry;
+import meowmel.structurelib.uplink.UplinkEndpoint;
+import meowmel.structurelib.util.ManipulatorTargeting;
 
 import gregtech.api.capability.GregtechCapabilities;
 import gregtech.api.capability.IElectricItem;
@@ -60,7 +61,7 @@ import net.minecraftforge.common.util.Constants;
  * <p>The item owns selection state, GregTech electric capability, interaction charging, and remote Uplink charging.
  * World mutation is delegated to the server-only bounded transaction executor.</p>
  */
-public final class ItemMatterManipulator extends Item {
+public final class ItemMatterManipulator extends Item implements ManipulatorStateHolder {
 
     private static final String STATE_KEY = "MatterManipulator";
 
@@ -239,12 +240,12 @@ public final class ItemMatterManipulator extends Item {
                                      BlockSpec picked) {
         switch (state.pendingAction()) {
             case EXCH_SET_TARGET -> state.setPickTarget(
-                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
+                    meowmel.structurelib.state.ManipulatorPickTarget.EXCHANGE_REPLACEMENT);
             case EXCH_SET_REPLACE -> state.setPickTarget(
-                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
+                    meowmel.structurelib.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_SET);
             case EXCH_ADD_REPLACE -> state.setPickTarget(
-                    applygray.mattermanipulator.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
-            case PICK_CABLE -> state.setPickTarget(applygray.mattermanipulator.state.ManipulatorPickTarget.CABLE);
+                    meowmel.structurelib.state.ManipulatorPickTarget.EXCHANGE_WHITELIST_ADD);
+            case PICK_CABLE -> state.setPickTarget(meowmel.structurelib.state.ManipulatorPickTarget.CABLE);
             default -> { }
         }
         ManipulatorMaterialPicker.Result result = ManipulatorMaterialPicker.apply(state, picked,
@@ -417,13 +418,13 @@ public final class ItemMatterManipulator extends Item {
                         " (" + location.dimension() + ")";
     }
 
-    private static String display(applygray.mattermanipulator.building.BlockSpec specification) {
+    private static String display(meowmel.structurelib.building.BlockSpec specification) {
         if (specification.isAir()) return translate("applygray.matter_manipulator.tooltip.none");
         return specification.isFluid() ? specification.fluidStack().getLocalizedName()
                 : specification.toStack().getDisplayName();
     }
 
-    private static String materials(applygray.mattermanipulator.building.WeightedBlockList list) {
+    private static String materials(meowmel.structurelib.building.WeightedBlockList list) {
         if (list.entries().isEmpty()) return translate("applygray.matter_manipulator.tooltip.none");
         StringJoiner joiner = new StringJoiner(", ");
         list.entries().forEach(entry -> joiner.add(display(entry.spec()) + (entry.weight() == 1 ? "" : " x" + entry.weight())));

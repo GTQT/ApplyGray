@@ -7,6 +7,10 @@ import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantu
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumItemStorage;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplink;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplinkHatch;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
+import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
+import meowmel.structurelib.integration.gregtech.CribProxyProviders;
+import net.minecraft.item.ItemStack;
 
 import gregtech.api.GTValues;
 import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEDualExportHatch;
@@ -155,5 +159,13 @@ public class ApplyGrayMetaTileEntities {
                 new MetaTileEntityQuantumUplink(ApplyGrayAPI.id("matter_manipulator.quantum_uplink")));
         QUANTUM_UPLINK_ME_HATCH = registerMetaTileEntity(104,
                 new MetaTileEntityQuantumUplinkHatch(ApplyGrayAPI.id("matter_manipulator.quantum_uplink_hatch")));
+
+        // StructureLib asks this when a copy is made with "replace CRIBs with proxies" enabled: a plain ME pattern
+        // provider is captured as this mod's proxy instead, so a pasted structure links back to its master.
+        CribProxyProviders.register(mte -> mte instanceof MetaTileEntityMEPatternProvider
+                && !(mte instanceof MetaTileEntityMEPatternProviderProxy)
+                && ME_PATTERN_PROVIDER_PROXY != null
+                        ? ME_PATTERN_PROVIDER_PROXY.getStackForm()
+                        : ItemStack.EMPTY);
     }
 }

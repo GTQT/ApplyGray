@@ -1,6 +1,6 @@
 package applygray.mattermanipulator.network;
 
-import applygray.mattermanipulator.server.MatterManipulatorBuildManager;
+import meowmel.structurelib.server.MatterManipulatorBuildManager;
 
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.util.EnumHand;

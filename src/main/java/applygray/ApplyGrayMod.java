@@ -9,7 +9,7 @@ import applygray.integration.ApplyGrayIntegrationBootstrap;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.integration.theoneprobe.TheOneProbeIntegration;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
-import applygray.mattermanipulator.config.MatterManipulatorConfig;
+import meowmel.structurelib.config.MatterManipulatorConfig;
 
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;

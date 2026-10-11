@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Future;
 
-import applygray.mattermanipulator.inventory.ResourceRequirements;
+import meowmel.structurelib.inventory.ResourceRequirements;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;

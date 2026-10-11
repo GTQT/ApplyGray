@@ -4,10 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import applygray.common.items.ApplyGrayMetaItems;
-import applygray.mattermanipulator.building.BlockSpec;
-import applygray.mattermanipulator.inventory.FluidRequirement;
-import applygray.mattermanipulator.inventory.ResourceRequirement;
-import applygray.mattermanipulator.inventory.ResourceRequirements;
+import meowmel.structurelib.building.BlockSpec;
+import meowmel.structurelib.inventory.FluidRequirement;
+import meowmel.structurelib.inventory.ResourceRequirement;
+import meowmel.structurelib.inventory.ResourceRequirements;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;

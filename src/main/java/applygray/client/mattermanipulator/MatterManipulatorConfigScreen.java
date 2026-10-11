@@ -7,11 +7,11 @@ import java.util.List;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
 import applygray.mattermanipulator.network.ConfigureManipulatorMessage;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
-import applygray.mattermanipulator.state.ManipulatorCapability;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorRemovalMode;
-import applygray.mattermanipulator.state.ManipulatorShape;
-import applygray.mattermanipulator.state.ManipulatorState;
+import meowmel.structurelib.state.ManipulatorCapability;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorRemovalMode;
+import meowmel.structurelib.state.ManipulatorShape;
+import meowmel.structurelib.state.ManipulatorState;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
@@ -102,7 +102,7 @@ public final class MatterManipulatorConfigScreen extends GuiScreen {
         addMode(modes, manipulator, stack, ManipulatorPlaceMode.COPYING, ManipulatorCapability.COPYING);
         addMode(modes, manipulator, stack, ManipulatorPlaceMode.EXCHANGING, ManipulatorCapability.EXCHANGING);
         addMode(modes, manipulator, stack, ManipulatorPlaceMode.CABLES, ManipulatorCapability.CABLES);
-        if (manipulator.tier() == applygray.mattermanipulator.state.ManipulatorTier.MK0) {
+        if (manipulator.tier() == meowmel.structurelib.state.ManipulatorTier.MK0) {
             if (has(manipulator, stack, ManipulatorCapability.REMOVAL)) root.add(removalBranch());
         } else {
             root.add(branch("applygray.matter_manipulator.radial.set_mode", modes));

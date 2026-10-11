@@ -1,5 +1,7 @@
 package applygray.mattermanipulator.uplink;
 
+import meowmel.structurelib.uplink.UplinkCraftingRequestResult;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -14,7 +16,7 @@ import applygray.ApplyGrayMod;
 import applygray.api.IAEManagedMetaTileEntity;
 import applygray.client.renderer.texture.ApplyGrayTextures;
 import applygray.integration.ae2.ApplyGrayGridNodeSupport;
-import applygray.mattermanipulator.inventory.ResourceRequirements;
+import meowmel.structurelib.inventory.ResourceRequirements;
 
 import gregtech.api.GTValues;
 import gregtech.api.metatileentity.MetaTileEntity;

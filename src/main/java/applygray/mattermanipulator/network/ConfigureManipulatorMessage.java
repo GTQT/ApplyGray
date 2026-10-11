@@ -1,17 +1,17 @@
 package applygray.mattermanipulator.network;
 
-import applygray.mattermanipulator.building.BlockSpec;
+import meowmel.structurelib.building.BlockSpec;
 import applygray.mattermanipulator.item.ItemMatterManipulator;
-import applygray.mattermanipulator.server.MatterManipulatorBuildManager;
-import applygray.mattermanipulator.state.ManipulatorCapability;
-import applygray.mattermanipulator.state.ManipulatorLocation;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorPickTarget;
-import applygray.mattermanipulator.state.ManipulatorPendingAction;
-import applygray.mattermanipulator.state.ManipulatorRemovalMode;
-import applygray.mattermanipulator.state.ManipulatorSelectionActions;
-import applygray.mattermanipulator.state.ManipulatorShape;
-import applygray.mattermanipulator.state.ManipulatorState;
+import meowmel.structurelib.server.MatterManipulatorBuildManager;
+import meowmel.structurelib.state.ManipulatorCapability;
+import meowmel.structurelib.state.ManipulatorLocation;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorPickTarget;
+import meowmel.structurelib.state.ManipulatorPendingAction;
+import meowmel.structurelib.state.ManipulatorRemovalMode;
+import meowmel.structurelib.state.ManipulatorSelectionActions;
+import meowmel.structurelib.state.ManipulatorShape;
+import meowmel.structurelib.state.ManipulatorState;
 
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
@@ -288,7 +288,7 @@ public final class ConfigureManipulatorMessage implements IMessage {
                 case COPYING, MOVING -> state.pickTarget();
             });
             state.clearSelections();
-            if (applygray.mattermanipulator.config.MatterManipulatorConfig.clearTransformWithSelections) {
+            if (meowmel.structurelib.config.MatterManipulatorConfig.clearTransformWithSelections) {
                 ManipulatorSelectionActions.resetTransform(state);
             }
         }

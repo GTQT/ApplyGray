@@ -6,9 +6,9 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-import applygray.mattermanipulator.state.ManipulatorTier;
-import applygray.mattermanipulator.state.ManipulatorUpgrade;
-import applygray.mattermanipulator.integration.ae2.Ae2ManipulatorLinkHandler;
+import meowmel.structurelib.state.ManipulatorTier;
+import meowmel.structurelib.state.ManipulatorUpgrade;
+import meowmel.structurelib.integration.ae2.Ae2ManipulatorLinkHandler;
 
 import net.minecraft.item.Item;
 import net.minecraftforge.registries.IForgeRegistry;
