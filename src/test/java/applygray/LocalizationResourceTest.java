@@ -21,12 +21,11 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 import applygray.mattermanipulator.item.ManipulatorComponent;
-import applygray.mattermanipulator.state.ManipulatorPendingAction;
-import applygray.mattermanipulator.state.ManipulatorPlaceMode;
-import applygray.mattermanipulator.state.ManipulatorRemovalMode;
-import applygray.mattermanipulator.state.ManipulatorShape;
-import applygray.mattermanipulator.state.ManipulatorTier;
-import applygray.mattermanipulator.state.ManipulatorUpgrade;
+import meowmel.structurelib.state.ManipulatorPendingAction;
+import meowmel.structurelib.state.ManipulatorPlaceMode;
+import meowmel.structurelib.state.ManipulatorRemovalMode;
+import meowmel.structurelib.state.ManipulatorShape;
+import meowmel.structurelib.state.ManipulatorTier;
 
 class LocalizationResourceTest {
 
@@ -88,9 +87,8 @@ class LocalizationResourceTest {
         for (ManipulatorComponent component : ManipulatorComponent.values()) {
             keys.add("item.applygray." + component.registryPath() + ".name");
         }
-        for (ManipulatorUpgrade upgrade : ManipulatorUpgrade.values()) {
-            keys.add(upgrade.translationKey());
-        }
+        // The manipulator upgrades belong to StructureLib now: their keys are structurelib.* and live in the
+        // library's own language files, so they are not this mod's responsibility.
         return keys;
     }
 
