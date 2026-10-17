@@ -476,25 +476,16 @@ public final class MatterManipulatorPreviewRenderer {
 
     private record PreviewTarget(BlockPos position, BlockSpec expected) {}
 
+    /**
+     * 区域/操作预览的实心盒：改走前置的 {@link meowmel.structurelib.preview.render.BoxGhostRenderer}。
+     *
+     * <p>这类"6 个面 + 半透明"的盒子代码以前在本 mod、前置、蓝图侧各写一份；
+     * 现在只有前置一处实现，颜色/透明度的用法也随之统一。</p>
+     */
     private static void drawGhostBox(AxisAlignedBB box, float red, float green, float blue, float alpha) {
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder buffer = tessellator.getBuffer();
-        buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
-        face(buffer, box.minX, box.minY, box.minZ, box.maxX, box.minY, box.minZ,
-                box.maxX, box.minY, box.maxZ, box.minX, box.minY, box.maxZ, red, green, blue, alpha);
-        face(buffer, box.minX, box.maxY, box.maxZ, box.maxX, box.maxY, box.maxZ,
-                box.maxX, box.maxY, box.minZ, box.minX, box.maxY, box.minZ, red, green, blue, alpha);
-        face(buffer, box.minX, box.minY, box.maxZ, box.minX, box.minY, box.minZ,
-                box.minX, box.maxY, box.minZ, box.minX, box.maxY, box.maxZ, red, green, blue, alpha);
-        face(buffer, box.maxX, box.minY, box.minZ, box.maxX, box.minY, box.maxZ,
-                box.maxX, box.maxY, box.maxZ, box.maxX, box.maxY, box.minZ, red, green, blue, alpha);
-        face(buffer, box.minX, box.minY, box.minZ, box.minX, box.maxY, box.minZ,
-                box.maxX, box.maxY, box.minZ, box.maxX, box.minY, box.minZ, red, green, blue, alpha);
-        face(buffer, box.maxX, box.minY, box.maxZ, box.maxX, box.maxY, box.maxZ,
-                box.minX, box.maxY, box.maxZ, box.minX, box.minY, box.maxZ, red, green, blue, alpha);
-        tessellator.draw();
+        meowmel.structurelib.preview.render.BoxGhostRenderer.drawFilledRegionWorld(box,
+                new float[] { red, green, blue }, alpha);
     }
-
     private static void face(BufferBuilder buffer,
                              double x1, double y1, double z1,
                              double x2, double y2, double z2,
