@@ -20,6 +20,7 @@ import gregtech.api.pattern.FormedStructureView;
 import gregtech.api.pattern.casing.DeclarativePatternBuilder;
 import gregtech.api.pattern.casing.GTStructureChannels;
 import gregtech.api.pattern.element.StructureDefinition;
+import gregtech.api.util.ItemStackHashStrategy;
 import gregtech.api.util.KeyUtil;
 import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
@@ -43,8 +44,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.EXPORT_ITEMS;
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.IMPORT_ITEMS;
@@ -114,7 +115,9 @@ public class MetaTileEntityQuantumItemStorage extends MultiblockWithDisplayBase 
                     .buildStructureDefinition());
 
     private final QuantumStorageHandler<ItemStack> storage = new QuantumStorageHandler<>(0, BigInteger.ZERO,
-            (a, b) -> a.isItemEqual(b) && ItemStack.areItemStackTagsEqual(a, b),
+            // Same identity as the old (isItemEqual && areItemStackTagsEqual) predicate, but O(1) instead of a scan.
+            ItemStackHashStrategy.comparingAllButCount(),
+            ItemStack::copy,
             (tag, stack) -> tag.setTag("item", stack.writeToNBT(new NBTTagCompound())),
             tag -> {
                 ItemStack stack = new ItemStack(tag.getCompoundTag("item"));
@@ -229,12 +232,10 @@ public class MetaTileEntityQuantumItemStorage extends MultiblockWithDisplayBase 
     }
 
     private void exportItems() {
-        List<ItemStack> types = new ArrayList<>();
-        for (var entry : storage.entries()) {
-            types.add(entry.getKey());
-        }
-        for (ItemStack type : types) {
-            BigInteger available = storage.currentAmount(type);
+        // entries() hands out copies, so the store can be drained from the snapshot without aliasing its keys.
+        for (Map.Entry<ItemStack, BigInteger> entry : storage.entries()) {
+            ItemStack type = entry.getKey();
+            BigInteger available = entry.getValue();
             if (available.signum() <= 0) {
                 continue;
             }

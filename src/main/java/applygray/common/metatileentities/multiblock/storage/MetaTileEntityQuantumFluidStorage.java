@@ -20,6 +20,7 @@ import gregtech.api.pattern.FormedStructureView;
 import gregtech.api.pattern.casing.DeclarativePatternBuilder;
 import gregtech.api.pattern.casing.GTStructureChannels;
 import gregtech.api.pattern.element.StructureDefinition;
+import gregtech.api.util.FluidStackHashStrategy;
 import gregtech.api.util.KeyUtil;
 import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
@@ -44,8 +45,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.EXPORT_FLUIDS;
 import static gregtech.api.metatileentity.multiblock.MultiblockAbility.IMPORT_FLUIDS;
@@ -126,10 +127,15 @@ public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase
                     .buildStructureDefinition());
 
     private final QuantumStorageHandler<FluidStack> storage = new QuantumStorageHandler<>(0, BigInteger.ZERO,
-            FluidStack::isFluidEqual,
+            // Same identity as the old FluidStack::isFluidEqual predicate, but O(1) instead of a scan.
+            FluidStackHashStrategy.comparingAllButAmount(),
+            fluid -> new FluidStack(fluid.getFluid(), fluid.amount, fluid.tag == null ? null : fluid.tag.copy()),
             (tag, fluid) -> tag.setTag("fluid", fluid.writeToNBT(new NBTTagCompound())),
             tag -> {
                 FluidStack fluid = FluidStack.loadFluidStackFromNBT(tag.getCompoundTag("fluid"));
+                if (fluid == null) {
+                    return null;
+                }
                 fluid.amount = 1;
                 return fluid;
             });
@@ -242,12 +248,10 @@ public class MetaTileEntityQuantumFluidStorage extends MultiblockWithDisplayBase
     }
 
     private void exportFluids() {
-        List<FluidStack> types = new ArrayList<>();
-        for (var entry : storage.entries()) {
-            types.add(entry.getKey());
-        }
-        for (FluidStack type : types) {
-            BigInteger available = storage.currentAmount(type);
+        // entries() hands out copies, so the store can be drained from the snapshot without aliasing its keys.
+        for (Map.Entry<FluidStack, BigInteger> entry : storage.entries()) {
+            FluidStack type = entry.getKey();
+            BigInteger available = entry.getValue();
             if (available.signum() <= 0) {
                 continue;
             }
