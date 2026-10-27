@@ -371,6 +371,23 @@ applygray.item.order.name_label=Order Name: %s
 applygray.item.order.tooltip.edit=Right-click to open interface and edit name
 applygray.item.order.tooltip.autocraft=Can be used as output for large machines in AE auto-crafting
 applygray.item.order.tooltip.auto_cancel=This order will automatically cancel itself upon completion, no manual cancellation required
+
+metaitem.ae_multiblock_builder.name=AE Multiblock Builder
+applygray.ae_builder.tooltip.build=§7Shift-right-click a controller: auto-build from inventory and AE
+applygray.ae_builder.tooltip.diagnose=§7Right-click a controller: inspect structure and AE link
+applygray.ae_builder.tooltip.configure=§7Right-click air: open channel configuration
+applygray.ae_builder.tooltip.channels=§eChannels configured: %s
+applygray.ae_builder.gui.title=AE Multiblock Builder
+applygray.ae_builder.gui.source_hint=§8Source order: inventory → AE wireless terminal
+applygray.ae_builder.invalid_piece=§cInvalid structure piece: %s
+applygray.ae_builder.handled_by_controller=§aThe controller handled the build itself
+applygray.ae_builder.not_attempted=§eNothing to build (already formed or unsupported)
+applygray.ae_builder.result=§aPlaced %s blocks, consumed %s items, %s cells had no candidate
+applygray.ae_builder.missing_header=§cMissing %s item types:
+applygray.ae_builder.missing_more=§7...and %s more not listed
+applygray.ae_builder.ae_linked=§aAE link: connected
+applygray.ae_builder.ae_unlinked=§eAE link: not connected (no linked wireless terminal found)
+applygray.ae_builder.ae_unlinked_hint=§7No linked AE wireless terminal: only inventory materials were used
 # ========== UI ==========
 applygray.gui.generate_optimal_route_patterns=Generate Optimal Route Patterns
 applygray.gui.pattern_generation.title=Pattern Generation Tree

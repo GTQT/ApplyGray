@@ -35,6 +35,15 @@ public final class AE2StructureItemSource implements StructureItemSource {
         }
     }
 
+    /**
+     * 玩家身上是否有已连接、可用的无线终端。
+     *
+     * <p>供构建器在诊断与建造成败反馈里区分“AE 里没有”和“根本没连上 AE”。
+     */
+    public static boolean isLinked(@NotNull EntityPlayer player) {
+        return findConnectedTerminal(player) != null;
+    }
+
     private static WirelessTerminalGuiHost<?> findConnectedTerminal(EntityPlayer player) {
         for (int slot = 0; slot < player.inventory.getSizeInventory(); slot++) {
             WirelessTerminalGuiHost<?> host = GuiHostLocators.forInventorySlot(slot)

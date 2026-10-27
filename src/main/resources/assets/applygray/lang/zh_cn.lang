@@ -364,6 +364,23 @@ applygray.item.order.name_label=订单名称：%s
 applygray.item.order.tooltip.edit=右键打开界面修改名称
 applygray.item.order.tooltip.autocraft=可以作为AE自动合成的大型机器产物
 applygray.item.order.tooltip.auto_cancel=当此合成完成时，会自动取消，无需手动取消
+
+metaitem.ae_multiblock_builder.name=AE 多方块构建器
+applygray.ae_builder.tooltip.build=§7潜行右键多方块控制器：从背包与 AE 网络取料自动建造
+applygray.ae_builder.tooltip.diagnose=§7右键控制器：检查结构并显示 AE 链路状态
+applygray.ae_builder.tooltip.configure=§7右键空气：打开通道配置面板
+applygray.ae_builder.tooltip.channels=§e已配置通道：%s 个
+applygray.ae_builder.gui.title=AE 多方块构建器
+applygray.ae_builder.gui.source_hint=§8取料顺序：背包 → AE 无线终端
+applygray.ae_builder.invalid_piece=§c无效的结构分段：%s
+applygray.ae_builder.handled_by_controller=§a结构已由控制器自身的建造流程处理
+applygray.ae_builder.not_attempted=§e没有可建造的内容（结构已成型或该结构不支持自动建造）
+applygray.ae_builder.result=§a已放置 %s 个方块，消耗 %s 个材料，%s 个位置没有可用方块
+applygray.ae_builder.missing_header=§c缺少 %s 种材料：
+applygray.ae_builder.missing_more=§7……另有 %s 种未列出
+applygray.ae_builder.ae_linked=§aAE 链路：已连接
+applygray.ae_builder.ae_unlinked=§eAE 链路：未连接（快捷栏/背包里没有已连接的无线终端）
+applygray.ae_builder.ae_unlinked_hint=§7没有检测到已连接的 AE 无线终端，本次只能使用背包材料
 # ========== UI ==========
 applygray.gui.generate_optimal_route_patterns=生成最优路线样板
 applygray.gui.pattern_generation.title=样板生成树

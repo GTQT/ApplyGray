@@ -1,18 +1,24 @@
 package applygray.common.items;
 
 import applygray.api.ApplyGrayAPI;
+import applygray.common.items.behaviors.AEMultiblockBuilderBehavior;
 import applygray.common.items.behaviors.OrderBehavior;
 
 import gregtech.api.items.metaitem.MetaItem;
 import gregtech.api.items.metaitem.StandardMetaItem;
+import gregtech.common.creativetab.GTCreativeTabs;
 
 import net.minecraft.item.Item;
 import net.minecraftforge.registries.IForgeRegistry;
 
 public final class ApplyGrayMetaItems {
 
+    /** AE 多方块构建器的 meta 值，客户端注册模型时也要用。 */
+    public static final int AE_BUILDER_META = 1;
+
     public static ApplyGrayMetaItem META_ITEM;
     public static MetaItem<?>.MetaValueItem ORDER;
+    public static MetaItem<?>.MetaValueItem AE_BUILDER;
 
     private ApplyGrayMetaItems() {}
 
@@ -28,6 +34,10 @@ public final class ApplyGrayMetaItems {
         @Override
         public void registerSubItems() {
             ORDER = addItem(0, "order").addComponents(new OrderBehavior());
+            AE_BUILDER = addItem(AE_BUILDER_META, "ae_multiblock_builder")
+                    .addComponents(new AEMultiblockBuilderBehavior())
+                    .setMaxStackSize(1)
+                    .setCreativeTabs(GTCreativeTabs.TAB_GREGTECH_TOOLS);
         }
     }
 }
