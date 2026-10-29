@@ -132,7 +132,7 @@ configurations.named('testRuntimeOnly').configure {
 }
 
 String remapTaskName = enableShadow ? 'remapShadowJar' : 'remapJar'
-def cclMcpMappingsSource = layout.projectDirectory.file('.gradle/unimined/local/mappings/srg2mcp.tsrg')
+def cclMcpMappingsSource = layout.projectDirectory.file('.gradle/unimined/local/mappings/srg2mcp.jar')
 def cclLegacyMappingsDir = layout.buildDirectory.dir('generated/ccl-legacy-mappings')
 
 unimined.minecraft {
@@ -150,6 +150,7 @@ unimined.minecraft {
             systemProperty('mixin.debug.export', 'true')
             // CodeChickenLib reads these after FML coremods initialize. Passing its
             // legacy ForgeGradle keys directly activates Unimined's agent too early.
+            // CCL 3.x checks this legacy path for existence and reads names from the two CSVs.
             systemProperty('applygray.ccl.notchSrg', cclMcpMappingsSource.asFile.absolutePath)
             systemProperty('applygray.ccl.csvDir', cclLegacyMappingsDir.get().asFile.absolutePath)
             if (isCoremod) {
@@ -201,27 +202,18 @@ def generateCclLegacyMappings = tasks.register('generateCclLegacyMappings') {
             throw new GradleException("Missing Unimined MCP mappings required by CodeChickenLib: ${source}")
         }
 
-        List<String> fields = ['searge,name,side,desc']
-        List<String> methods = ['searge,name,side,desc']
-        source.eachLine('UTF-8') { String line ->
-            if (!line.startsWith('\t')) return
-
-            String[] columns = line.trim().split('\\s+', 3)
-            if (columns.length == 2 && columns[0].startsWith('field_')) {
-                fields.add("${columns[0]},${columns[1]},0,")
-            } else if (columns.length == 3 && columns[0].startsWith('func_')) {
-                methods.add("${columns[0]},${columns[2]},0,")
-            }
-        }
-
-        if (fields.size() == 1 || methods.size() == 1) {
-            throw new GradleException("Unimined MCP mappings did not contain CodeChickenLib field and method names: ${source}")
-        }
-
         File outputDirectory = cclLegacyMappingsDir.get().asFile
         outputDirectory.mkdirs()
-        new File(outputDirectory, 'fields.csv').setText(fields.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
-        new File(outputDirectory, 'methods.csv').setText(methods.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
+        // The original MCP CSV archive is available before launch, when the generated TSRG may not exist yet.
+        new java.util.zip.ZipFile(source).withCloseable { archive ->
+            ['fields.csv', 'methods.csv'].each { name ->
+                def entry = archive.getEntry(name)
+                if (entry == null) throw new GradleException("Missing ${name} in MCP mappings: ${source}")
+                archive.getInputStream(entry).withCloseable { input ->
+                    new File(outputDirectory, name).withOutputStream { output -> output << input }
+                }
+            }
+        }
     }
 }
 
