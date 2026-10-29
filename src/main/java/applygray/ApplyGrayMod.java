@@ -1,5 +1,7 @@
 package applygray;
 
+import applygray.common.eco.EcoHardwareRegistry;
+import applygray.common.eco.gui.EcoGuiHandler;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.ApplyGrayBlocks;
 import applygray.common.ApplyGrayCommonProxy;
@@ -50,6 +52,8 @@ public class ApplyGrayMod {
         ApplyGrayIntegrationBootstrap.init();
         ApplyGrayBlocks.init();
         ApplyGrayMetaTileEntities.init();
+        EcoHardwareRegistry.init();
+        EcoGuiHandler.initialize();
     }
 
     @Mod.EventHandler

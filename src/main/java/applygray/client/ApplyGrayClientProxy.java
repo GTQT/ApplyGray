@@ -1,5 +1,8 @@
 package applygray.client;
 
+import applygray.client.gui.EcoGui;
+import applygray.common.eco.gui.EcoContainer;
+import net.minecraft.entity.player.InventoryPlayer;
 import applygray.client.mattermanipulator.MatterManipulatorClientInput;
 import applygray.client.mattermanipulator.MatterManipulatorPreviewRenderer;
 import applygray.common.ApplyGrayCommonProxy;
@@ -11,6 +14,12 @@ import net.minecraft.util.EnumHand;
 
 /** Client lifecycle hook kept separate so a dedicated server never loads GUI or input classes. */
 public final class ApplyGrayClientProxy extends ApplyGrayCommonProxy {
+
+    @Override
+    public Object createEcoScreen(EcoContainer container,
+                                  InventoryPlayer inventory) {
+        return new EcoGui(container, inventory);
+    }
 
     @Override
     public void preInit(FMLPreInitializationEvent event) {

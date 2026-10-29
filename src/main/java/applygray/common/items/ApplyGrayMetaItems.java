@@ -1,5 +1,12 @@
 package applygray.common.items;
 
+import applygray.common.eco.EcoItems;
+import applygray.common.eco.EcoTiers;
+import java.util.List;
+import net.minecraft.client.resources.I18n;
+import net.minecraft.client.util.ITooltipFlag;
+import net.minecraft.item.ItemStack;
+import net.minecraft.world.World;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.items.behaviors.AEMultiblockBuilderBehavior;
 import applygray.common.items.behaviors.OrderBehavior;
@@ -27,12 +34,24 @@ public final class ApplyGrayMetaItems {
         META_ITEM.setRegistryName(ApplyGrayAPI.MODID, "meta_item");
         registry.register(META_ITEM);
         META_ITEM.registerSubItems();
+        EcoItems.registerCells(registry);
     }
 
     public static final class ApplyGrayMetaItem extends StandardMetaItem {
 
+        @net.minecraftforge.fml.relauncher.SideOnly(net.minecraftforge.fml.relauncher.Side.CLIENT)
+        @Override
+        public void addInformation(ItemStack stack, World world,
+                                   List<String> tooltip, ITooltipFlag flag) {
+            super.addInformation(stack, world, tooltip, flag);
+            int tier = EcoItems.memoryTier(stack);
+            if (tier > 0) tooltip.add(I18n.format("applygray.eco.tooltip.memory",
+                    EcoTiers.memory(tier)));
+        }
+
         @Override
         public void registerSubItems() {
+            EcoItems.registerMemory(this);
             ORDER = addItem(0, "order").addComponents(new OrderBehavior());
             AE_BUILDER = addItem(AE_BUILDER_META, "ae_multiblock_builder")
                     .addComponents(new AEMultiblockBuilderBehavior())
