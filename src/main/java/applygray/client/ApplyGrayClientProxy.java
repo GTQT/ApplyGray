@@ -1,7 +1,7 @@
 package applygray.client;
 
 import applygray.client.gui.EcoGui;
-import applygray.common.eco.gui.EcoContainer;
+import applygray.common.metatileentities.multi.electric.eco.gui.EcoContainer;
 import net.minecraft.entity.player.InventoryPlayer;
 import applygray.client.mattermanipulator.MatterManipulatorClientInput;
 import applygray.client.mattermanipulator.MatterManipulatorPreviewRenderer;

@@ -2,6 +2,21 @@ package applygray.common;
 
 import applygray.api.ApplyGrayAPI;
 import applygray.ApplyGrayMod;
+import applygray.common.metatileentities.multi.electric.eco.EcoControllerType;
+import applygray.common.metatileentities.multi.electric.eco.EcoTiers;
+import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoComputer;
+import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoEnergyStorage;
+import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoMolecularAssembler;
+import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoStorage;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoDrivePart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoEnergyPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoHyperThreadPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoMemoryPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoNetworkPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoParallelPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoPatternBusPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoThreadPart;
+import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoWorkerPart;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumAccessHatch;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumFluidStorage;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumItemStorage;
@@ -35,7 +50,6 @@ import static gregtech.api.GTValues.VN;
 import static gregtech.common.metatileentities.MetaTileEntities.registerMetaTileEntity;
 
 /**
- * Registers all ME (Applied Energistics 2) MetaTileEntities for ApplyGray.
  * These are registered through GregTech's current MetaTileEntities API.
  * The same IDs and ResourceLocations are used for backward compatibility with existing worlds.
  */
@@ -79,11 +93,36 @@ public class ApplyGrayMetaTileEntities {
     public static MetaTileEntityQuantumFluidStorage QUANTUM_FLUID_STORAGE;
     public static MetaTileEntityQuantumAccessHatch QUANTUM_ACCESS_HATCH;
 
-    public static void init() {
-        registerMEHatches();
-    }
+    // ## ECO Multiblocks (one class per machine, GT-style)
+    public static MetaTileEntityEcoComputer ECO_COMPUTER;
+    public static MetaTileEntityEcoStorage ECO_STORAGE;
+    public static MetaTileEntityEcoMolecularAssembler ECO_MOLECULAR_ASSEMBLER;
+    public static MetaTileEntityEcoEnergyStorage ECO_ENERGY_STORAGE;
 
-    private static void registerMEHatches() {
+    // ## ECO ME Interfaces
+    public static MetaTileEntityEcoNetworkPart ECO_COMPUTER_INTERFACE;
+    public static MetaTileEntityEcoNetworkPart ECO_STORAGE_INTERFACE;
+    public static MetaTileEntityEcoNetworkPart ECO_MOLECULAR_ASSEMBLER_INTERFACE;
+    public static MetaTileEntityEcoNetworkPart ECO_ENERGY_STORAGE_INTERFACE;
+
+    // ## ECO Hardware (tier 1..5)
+    public static final MetaTileEntityEcoMemoryPart[] ECO_MEMORY =
+            new MetaTileEntityEcoMemoryPart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoThreadPart[] ECO_THREAD =
+            new MetaTileEntityEcoThreadPart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoHyperThreadPart[] ECO_HYPER_THREAD =
+            new MetaTileEntityEcoHyperThreadPart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoParallelPart[] ECO_PARALLEL =
+            new MetaTileEntityEcoParallelPart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoDrivePart[] ECO_DRIVE =
+            new MetaTileEntityEcoDrivePart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoEnergyPart[] ECO_ENERGY =
+            new MetaTileEntityEcoEnergyPart[EcoTiers.COUNT];
+    public static final MetaTileEntityEcoWorkerPart[] ECO_WORKER =
+            new MetaTileEntityEcoWorkerPart[EcoTiers.COUNT];
+    public static MetaTileEntityEcoPatternBusPart ECO_PATTERN_BUS;
+
+    public static void init() {
         // ME Hatches, IDs 0-
         FLUID_EXPORT_HATCH_ME = registerMetaTileEntity(0,
                 new MetaTileEntityMEOutputHatch(ApplyGrayAPI.id("me_export_fluid_hatch")));
@@ -167,5 +206,66 @@ public class ApplyGrayMetaTileEntities {
                 && ME_PATTERN_PROVIDER_PROXY != null
                         ? ME_PATTERN_PROVIDER_PROXY.getStackForm()
                         : ItemStack.EMPTY);
+
+        // Controllers and their ME interfaces, IDs 200-207
+        ECO_COMPUTER = registerMetaTileEntity(200,
+                new MetaTileEntityEcoComputer(ApplyGrayAPI.id("eco.computer")));
+        ECO_STORAGE = registerMetaTileEntity(201,
+                new MetaTileEntityEcoStorage(ApplyGrayAPI.id("eco.storage")));
+        ECO_MOLECULAR_ASSEMBLER = registerMetaTileEntity(202,
+                new MetaTileEntityEcoMolecularAssembler(ApplyGrayAPI.id("eco.molecular_assembler")));
+        ECO_COMPUTER_INTERFACE = registerMetaTileEntity(203,
+                new MetaTileEntityEcoNetworkPart(ApplyGrayAPI.id("eco.computer.interface"),
+                        EcoControllerType.COMPUTER));
+        ECO_STORAGE_INTERFACE = registerMetaTileEntity(204,
+                new MetaTileEntityEcoNetworkPart(ApplyGrayAPI.id("eco.storage.interface"),
+                        EcoControllerType.STORAGE));
+        ECO_MOLECULAR_ASSEMBLER_INTERFACE = registerMetaTileEntity(205,
+                new MetaTileEntityEcoNetworkPart(ApplyGrayAPI.id("eco.molecular_assembler.interface"),
+                        EcoControllerType.ASSEMBLER));
+        ECO_ENERGY_STORAGE = registerMetaTileEntity(206,
+                new MetaTileEntityEcoEnergyStorage(ApplyGrayAPI.id("eco.battery")));
+        ECO_ENERGY_STORAGE_INTERFACE = registerMetaTileEntity(207,
+                new MetaTileEntityEcoNetworkPart(ApplyGrayAPI.id("eco.battery.interface"),
+                        EcoControllerType.BATTERY));
+
+        // Hardware, IDs 210-245: each kind owns EcoTiers.COUNT consecutive IDs
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_MEMORY[i] = registerMetaTileEntity(210 + i,
+                    new MetaTileEntityEcoMemoryPart(ApplyGrayAPI.id("eco.memory." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_THREAD[i] = registerMetaTileEntity(215 + i,
+                    new MetaTileEntityEcoThreadPart(ApplyGrayAPI.id("eco.thread." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_HYPER_THREAD[i] = registerMetaTileEntity(220 + i,
+                    new MetaTileEntityEcoHyperThreadPart(ApplyGrayAPI.id("eco.hyper_thread." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_PARALLEL[i] = registerMetaTileEntity(225 + i,
+                    new MetaTileEntityEcoParallelPart(ApplyGrayAPI.id("eco.parallel." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_DRIVE[i] = registerMetaTileEntity(230 + i,
+                    new MetaTileEntityEcoDrivePart(ApplyGrayAPI.id("eco.drive." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_ENERGY[i] = registerMetaTileEntity(235 + i,
+                    new MetaTileEntityEcoEnergyPart(ApplyGrayAPI.id("eco.energy." + tier), tier));
+        }
+        for (int i = 0; i < EcoTiers.COUNT; i++) {
+            int tier = i + 1;
+            ECO_WORKER[i] = registerMetaTileEntity(240 + i,
+                    new MetaTileEntityEcoWorkerPart(ApplyGrayAPI.id("eco.worker." + tier), tier));
+        }
+        ECO_PATTERN_BUS = registerMetaTileEntity(245,
+                new MetaTileEntityEcoPatternBusPart(ApplyGrayAPI.id("eco.pattern_bus.1")));
     }
 }

@@ -179,6 +179,7 @@ dependencies {
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78:core")
     modCompileOnly("com.enderio.core:EnderCore:1.12.2-0.5.78")
 
+    modRuntimeOnly 'curse.maven:ctm-267602:2915363'
     // StructureLib owns the structure engine (capture, planning, build transactions) and the AE2/GT adapters.
     // It is consumed exactly like GregTech or AE2: a jar in libs/, selected by structurelib_jar in
     // gradle.properties. StructureLib's own `gradlew syncDownstreamLibs` refreshes this jar.

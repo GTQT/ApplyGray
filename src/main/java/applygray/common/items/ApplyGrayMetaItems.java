@@ -1,90 +1,82 @@
 package applygray.common.items;
 
-import applygray.common.eco.EcoCellItem;
-import applygray.common.eco.EcoTiers;
-import java.util.List;
-import net.minecraft.client.resources.I18n;
-import net.minecraft.client.util.ITooltipFlag;
-import net.minecraft.item.ItemStack;
-import net.minecraft.world.World;
-import applygray.api.ApplyGrayAPI;
-import applygray.common.items.behaviors.AEMultiblockBuilderBehavior;
-import applygray.common.items.behaviors.OrderBehavior;
+import applygray.common.items.eco.EcoCellItem;
+import applygray.common.items.eco.EcoMemoryItem;
 
 import gregtech.api.items.metaitem.MetaItem;
 import gregtech.api.items.metaitem.StandardMetaItem;
-import gregtech.common.creativetab.GTCreativeTabs;
 
 import net.minecraft.item.Item;
 import net.minecraftforge.registries.IForgeRegistry;
 
+/**
+ * ApplyGray meta 物品持有类。
+ * <p>
+ * 这里只放字段与注册入口；{@code addItem} 清单写在各自的 MetaItem 子类
+ * （{@link ApplyGrayMetaItem}、{@link EcoMemoryItem}、{@link EcoCellItem}）里。每个物品一个字段、一行注册，
+ * 禁止用数组/集合/循环批量生成：注册名、meta ID 与字段顺序都要能被单独审阅，发布后不得挪动。
+ * <p>
+ * 模型不写路径：GT 的 {@code MetaItem} 默认按 {@code metaitems/<unlocalizedName>} 取模型，对应文件放在
+ * {@code assets/gregtech/models/item/metaitems/} 下（与 GTQT 一致）。
+ */
 public final class ApplyGrayMetaItems {
 
-    /** AE 多方块构建器的 meta 值，客户端注册模型时也要用。 */
+    /** AE 多方块构建器的 meta 值；字段注释里引用它，避免同一个数字写两遍。 */
     public static final int AE_BUILDER_META = 1;
 
     public static ApplyGrayMetaItem META_ITEM;
-    public static MetaItem<?>.MetaValueItem ORDER;
-    public static MetaItem<?>.MetaValueItem AE_BUILDER;
-    public static final int ECO_MEMORY_META = 100;
-    public static final MetaItem<?>.MetaValueItem[] ECO_MEMORY = new MetaItem<?>.MetaValueItem[EcoTiers.COUNT];
+    public static MetaItem<?>.MetaValueItem ORDER; // meta 0
+    public static MetaItem<?>.MetaValueItem AE_BUILDER; // meta AE_BUILDER_META
+
+    // Eco 内存芯片：每个等级一个独立 MetaItem，等级存在物品上
+    public static EcoMemoryItem ECO_MEMORY_T1;
+    public static EcoMemoryItem ECO_MEMORY_T2;
+    public static EcoMemoryItem ECO_MEMORY_T3;
+    public static EcoMemoryItem ECO_MEMORY_T4;
+    public static EcoMemoryItem ECO_MEMORY_T5;
+
+    // Eco 存储元件：每个 tier、每种类型各注册一个独立 MetaItem
+    public static EcoCellItem ECO_ITEM_CELL_1;
+    public static EcoCellItem ECO_ITEM_CELL_2;
+    public static EcoCellItem ECO_ITEM_CELL_3;
+    public static EcoCellItem ECO_ITEM_CELL_4;
+    public static EcoCellItem ECO_ITEM_CELL_5;
+
+    public static EcoCellItem ECO_FLUID_CELL_1;
+    public static EcoCellItem ECO_FLUID_CELL_2;
+    public static EcoCellItem ECO_FLUID_CELL_3;
+    public static EcoCellItem ECO_FLUID_CELL_4;
+    public static EcoCellItem ECO_FLUID_CELL_5;
 
     private ApplyGrayMetaItems() {}
 
-    public static void init(IForgeRegistry<Item> registry) {
-        META_ITEM = new ApplyGrayMetaItem();
-        META_ITEM.setRegistryName(ApplyGrayAPI.MODID, "meta_item");
-        registry.register(META_ITEM);
-        META_ITEM.registerSubItems();
-        for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
-            for (boolean fluid : new boolean[]{false, true}) {
-                EcoCellItem item = new EcoCellItem(tier, fluid);
-                item.setRegistryName(ApplyGrayAPI.MODID, "eco_" + (fluid ? "fluid" : "item") + "_cell_" + tier);
-                registry.register(item);
-                item.registerSubItems();
-            }
-        }
+    /** 物品注册入口：一个物品一行，构造 → 交给 Forge → 展开子项。 */
+    public static void register(IForgeRegistry<Item> registry) {
+        META_ITEM = register(registry, new ApplyGrayMetaItem());
+
+        ECO_MEMORY_T1 = register(registry, new EcoMemoryItem(1));
+        ECO_MEMORY_T2 = register(registry, new EcoMemoryItem(2));
+        ECO_MEMORY_T3 = register(registry, new EcoMemoryItem(3));
+        ECO_MEMORY_T4 = register(registry, new EcoMemoryItem(4));
+        ECO_MEMORY_T5 = register(registry, new EcoMemoryItem(5));
+
+        ECO_ITEM_CELL_1 = register(registry, new EcoCellItem(1, false));
+        ECO_ITEM_CELL_2 = register(registry, new EcoCellItem(2, false));
+        ECO_ITEM_CELL_3 = register(registry, new EcoCellItem(3, false));
+        ECO_ITEM_CELL_4 = register(registry, new EcoCellItem(4, false));
+        ECO_ITEM_CELL_5 = register(registry, new EcoCellItem(5, false));
+
+        ECO_FLUID_CELL_1 = register(registry, new EcoCellItem(1, true));
+        ECO_FLUID_CELL_2 = register(registry, new EcoCellItem(2, true));
+        ECO_FLUID_CELL_3 = register(registry, new EcoCellItem(3, true));
+        ECO_FLUID_CELL_4 = register(registry, new EcoCellItem(4, true));
+        ECO_FLUID_CELL_5 = register(registry, new EcoCellItem(5, true));
     }
 
-    public static int memoryTier(ItemStack stack) {
-        if (stack.isEmpty()) return 0;
-        for (int i = 0; i < ECO_MEMORY.length; i++) {
-            if (ECO_MEMORY[i] != null && ECO_MEMORY[i].isItemEqual(stack)) return i + 1;
-        }
-        return 0;
-    }
-
-    public static final class ApplyGrayMetaItem extends StandardMetaItem {
-
-        @Override
-        public net.minecraft.util.ResourceLocation createItemModelPath(MetaItem<?>.MetaValueItem item, String postfix) {
-            for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
-                if (ECO_MEMORY[tier - 1] == item)
-                    return ApplyGrayAPI.id("metaitems/eco_memory_cell_" + tier + postfix);
-            }
-            return super.createItemModelPath(item, postfix);
-        }
-
-        @net.minecraftforge.fml.relauncher.SideOnly(net.minecraftforge.fml.relauncher.Side.CLIENT)
-        @Override
-        public void addInformation(ItemStack stack, World world,
-                                   List<String> tooltip, ITooltipFlag flag) {
-            super.addInformation(stack, world, tooltip, flag);
-            int tier = memoryTier(stack);
-            if (tier > 0) tooltip.add(I18n.format("applygray.eco.tooltip.memory",
-                    EcoTiers.memory(tier)));
-        }
-
-        @Override
-        public void registerSubItems() {
-            for (int i = 0; i < EcoTiers.COUNT; i++) {
-                ECO_MEMORY[i] = addItem(ECO_MEMORY_META + i, "eco.memory_cell." + (i + 1)).setMaxStackSize(1);
-            }
-            ORDER = addItem(0, "order").addComponents(new OrderBehavior());
-            AE_BUILDER = addItem(AE_BUILDER_META, "ae_multiblock_builder")
-                    .addComponents(new AEMultiblockBuilderBehavior())
-                    .setMaxStackSize(1)
-                    .setCreativeTabs(GTCreativeTabs.TAB_GREGTECH_TOOLS);
-        }
+    /** 注册名已在构造器绑定；顺序固定为先进注册表、再展开该物品的 meta 子项。 */
+    private static <T extends StandardMetaItem> T register(IForgeRegistry<Item> registry, T item) {
+        registry.register(item);
+        item.registerSubItems();
+        return item;
     }
 }

@@ -9,6 +9,11 @@ native ME access.
 > **Notice**: some code in this repository comes from
 > [GTLite Core](https://github.com/GregTechLite/GregTech-Lite-Core), licensed under the
 > [Apache License 2.0](https://github.com/GregTechLite/GregTech-Lite-Core/blob/main/LICENSE).
+>
+> The ECO structure layout, GUI art and item textures are ported from
+> `NeoECOAEExtension` (GPL-3.0). Those ported assets remain under GPL-3.0; see
+> `docs/ECO-实现路线图.md` for the exact list and attribution. Block casings and
+> hatch overlays use GregTech's existing assets.
 
 ## Requirements
 

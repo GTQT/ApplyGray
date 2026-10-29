@@ -11,6 +11,7 @@ public final class ApplyGrayTheOneProbeIntegration implements Function<ITheOnePr
     @Override
     public Void apply(ITheOneProbe oneProbe) {
         oneProbe.registerProvider(new RecipeMapPatternProviderInfoProvider());
+        oneProbe.registerProvider(new EcoInfoProvider());
         return null;
     }
 }

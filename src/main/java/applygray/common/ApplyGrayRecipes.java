@@ -2,6 +2,7 @@ package applygray.common;
 
 import applygray.mattermanipulator.item.MatterManipulatorItems;
 import applygray.mattermanipulator.item.ManipulatorComponent;
+import applygray.common.metatileentities.multi.electric.eco.EcoRecipes;
 
 import gregtech.api.GTValues;
 import gregtech.api.recipes.ModHandler;
@@ -43,6 +44,7 @@ public class ApplyGrayRecipes {
         registerMEAssemblerRecipes();
         registerMEDualHatchRecipes();
         registerMatterManipulatorRecipes();
+        EcoRecipes.register();
     }
 
     private static void registerMEDualHatchRecipes() {
