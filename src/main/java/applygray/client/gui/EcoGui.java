@@ -16,8 +16,14 @@ import java.io.IOException;
 import java.text.NumberFormat;
 import java.util.List;
 
-/** Native AE2 dashboard with narrow tool tabs and a compact, high-contrast status surface. */
+/** AE2 dashboard with a consistent light gray and muted purple control palette. */
 public final class EcoGui extends AEBaseGui<EcoContainer> {
+    private static final int PANEL = 0xFFC7C7CB;
+    private static final int EDGE = 0xFF73717C;
+    private static final int LIGHT = 0xFFEEEEF1;
+    private static final int TEXT = 0xFF494650;
+    private static final int ACCENT = 0xFF8E71B2;
+
     private GuiTextField search;
     private int searchDelay;
     private int selected = -1;
@@ -42,13 +48,16 @@ public final class EcoGui extends AEBaseGui<EcoContainer> {
     @Override public void initGui() {
         String oldSearch = search == null ? "" : search.getText();
         super.initGui();
-        search = new GuiTextField(100, fontRenderer, guiLeft + 40, guiTop + 26, 205, 14);
+        search = new GuiTextField(100, fontRenderer, guiLeft + 44, guiTop + 29, 197, 10);
+        search.setEnableBackgroundDrawing(false);
+        search.setTextColor(TEXT);
+        search.setDisabledTextColour(0xFF858591);
         search.setMaxStringLength(96);
         search.setText(oldSearch);
-        previous = addButton(new GuiButton(1, guiLeft + 255, guiTop + 25, 20, 16, "<"));
-        next = addButton(new GuiButton(2, guiLeft + 306, guiTop + 25, 20, 16, ">"));
-        toggle = addButton(new GuiButton(3, guiLeft + 218, guiTop + 183, 108, 20, ""));
-        cancel = addButton(new GuiButton(4, guiLeft + 218, guiTop + 208, 108, 20,
+        previous = addButton(new EcoButton(1, guiLeft + 255, guiTop + 25, 20, 16, "<"));
+        next = addButton(new EcoButton(2, guiLeft + 306, guiTop + 25, 20, 16, ">"));
+        toggle = addButton(new EcoButton(3, guiLeft + 218, guiTop + 183, 108, 20, ""));
+        cancel = addButton(new EcoButton(4, guiLeft + 218, guiTop + 208, 108, 20,
                 I18n.format("applygray.eco.ui.cancel")));
         cancel.enabled = false;
     }
@@ -85,35 +94,35 @@ public final class EcoGui extends AEBaseGui<EcoContainer> {
         super.mouseClicked(x, y, button);
     }
     @Override public void drawBG(int x, int y, int mouseX, int mouseY, float partial) {
-        drawRect(x, y, x + xSize, y + ySize, 0xFF3B3B43);
-        drawRect(x + 1, y + 1, x + xSize - 1, y + ySize - 1, 0xFFC7C7CB);
-        drawRect(x + 1, y + 1, x + xSize - 1, y + 20, 0xFF42424C);
-        drawRect(x + 1, y + 20, x + xSize - 1, y + 22, 0xFF9D79CE);
-        drawRect(x + 33, y + 23, x + 330, y + 166, 0xFF272932);
+        drawFrame(x, y, xSize, ySize, PANEL, false);
+
+        drawRect(x + 1, y + 1, x + xSize - 1, y + 20, 0xFFB6B3C1);
+        drawRect(x + 1, y + 20, x + xSize - 1, y + 22, ACCENT);
+        drawFrame(x + 33, y + 23, 297, 143, 0xFFB8B7BF, true);
+        drawFrame(x + 39, y + 25, 207, 16, 0xFFE1E0E5, true);
         drawRect(x + 34, y + 168, x + 330, y + 170, 0xFF8E71B2);
         if (!(container.host instanceof EcoPart part && part.inventory.getSlots() > 0)) {
-            drawRect(x + 40, y + 47, x + 324, y + 66, 0xFF363945);
+            drawRect(x + 40, y + 47, x + 324, y + 66, 0xFFCDCCD4);
             double fraction = container.capacity == 0 ? 0 : Math.clamp((double) container.used / container.capacity, 0, 1);
-            drawRect(x + 41, y + 63, x + 41 + (int) (282 * fraction), y + 65, 0xFFB18AE1);
+            drawRect(x + 41, y + 63, x + 41 + (int) (282 * fraction), y + 65, ACCENT);
             fontRenderer.drawString(I18n.format("applygray.eco.ui.capacity") + " " + compact(container.used) + " / "
-                    + compact(container.capacity), x + 44, y + 49, 0xFFE0E2EB);
-            fontRenderer.drawString(container.active + " / " + container.total, x + 250, y + 49, 0xFFBBA0DC);
-            String[] rows = localized(container.rows).split("\n");
+                    + compact(container.capacity), x + 44, y + 49, TEXT);
+            fontRenderer.drawString(container.active + " / " + container.total, x + 250, y + 49, 0xFF655076);
+            String[] rows = container.rows.isEmpty() ? new String[0] : localized(container.rows).split("\n");
             for (int row = 0; row < Math.min(EcoContainer.ROWS, rows.length); row++) {
                 int top = y + 72 + row * 13;
-                drawRect(x + 38, top, x + 326, top + 12, row == selected ? 0xFF655076 : (row % 2 == 0 ? 0xFF30333D : 0xFF292C35));
-                fontRenderer.drawString(fontRenderer.trimStringToWidth(rows[row], 280), x + 42, top + 2, 0xFFD1D6DF);
+                drawRect(x + 38, top, x + 326, top + 12, row == selected ? 0xFFC4B2DC : (row % 2 == 0 ? 0xFFCFCDD6 : 0xFFC2C0CA));
+                fontRenderer.drawString(fontRenderer.trimStringToWidth(rows[row], 280), x + 42, top + 2, TEXT);
             }
         }
         for (var slot : container.inventorySlots) {
             int sx = x + slot.xPos, sy = y + slot.yPos;
-            drawRect(sx - 1, sy - 1, sx + 17, sy + 17, 0xFF73717C);
-            drawRect(sx, sy, sx + 16, sy + 16, 0xFFA8A7AE);
+            drawFrame(sx - 1, sy - 1, 18, 18, 0xFFA8A7AE, true);
         }
         fontRenderer.drawString(fontRenderer.trimStringToWidth(container.getGuiTitle().getUnformattedText(), 285),
-                x + 9, y + 7, 0xFFEEEAF5);
+                x + 9, y + 7, TEXT);
         drawRect(x + 319, y + 7, x + 325, y + 13, container.online ? 0xFF7CCB95 : 0xFFDD946C);
-        fontRenderer.drawString((container.page + 1) + "/" + container.pageCount, x + 280, y + 29, 0xFFE1D2EF);
+        fontRenderer.drawString((container.page + 1) + "/" + container.pageCount, x + 280, y + 29, TEXT);
         fontRenderer.drawString(I18n.format("container.inventory"), x + 38, y + 169, 0xFF494650);
         fontRenderer.drawString(I18n.format(container.online ? "applygray.eco.ui.online" : "applygray.eco.ui.offline"),
                 x + 219, y + 236, 0xFF494650);
@@ -130,12 +139,35 @@ public final class EcoGui extends AEBaseGui<EcoContainer> {
                     I18n.format("applygray.eco.ui.energy") + ": " + container.energyStored + " / " + container.energyCapacity),
                     mouseX - guiLeft, mouseY - guiTop);
         } else if (mouseX >= guiLeft + 38 && mouseX < guiLeft + 327 && mouseY >= guiTop + 72 && mouseY < guiTop + 163) {
-            String[] rows = localized(container.rows).split("\n");
+            String[] rows = container.rows.isEmpty() ? new String[0] : localized(container.rows).split("\n");
             int index = (mouseY - guiTop - 72) / 13;
             if (index < rows.length && !rows[index].isEmpty())
                 drawHoveringText(fontRenderer.listFormattedStringToWidth(rows[index], 250), mouseX - guiLeft, mouseY - guiTop);
         }
     }
+    private static void drawFrame(int x, int y, int width, int height, int fill, boolean inset) {
+        drawRect(x, y, x + width, y + height, inset ? LIGHT : EDGE);
+        drawRect(x, y, x + width - 1, y + height - 1, inset ? EDGE : LIGHT);
+        drawRect(x + 1, y + 1, x + width - 1, y + height - 1, fill);
+    }
+
+    /** Keep vanilla button interaction, with the same bevel and colors as the AE2 panel. */
+    private static final class EcoButton extends GuiButton {
+        private EcoButton(int id, int x, int y, int width, int height, String label) {
+            super(id, x, y, width, height, label);
+        }
+
+        @Override
+        public void drawButton(net.minecraft.client.Minecraft mc, int mouseX, int mouseY, float partialTicks) {
+            if (!visible) return;
+            hovered = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
+            drawFrame(x, y, width, height, !enabled ? 0xFFB8B7BF : hovered ? 0xFFC4B2DC : PANEL, false);
+            mc.fontRenderer.drawString(displayString, x + (width - mc.fontRenderer.getStringWidth(displayString)) / 2,
+                    y + (height - 8) / 2, enabled ? TEXT : 0xFF85818E);
+            mouseDragged(mc, mouseX, mouseY);
+        }
+    }
+
     private static String compact(long value) {
         double number = value; String[] units = {"", "K", "M", "G", "T", "P"}; int unit = 0;
         while (number >= 1024 && unit < units.length - 1) { number /= 1024; unit++; }

@@ -1,4 +1,5 @@
 package applygray.common.eco;
+import applygray.common.items.ApplyGrayMetaItems;
 
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
@@ -65,7 +66,10 @@ public final class EcoPart extends MetaTileEntityMultiblockPart implements IMult
             @Override public boolean isItemValid(int slot, ItemStack stack) {
                 if (stack.isEmpty()) return false;
                 return switch (role) {
-                    case MEMORY -> EcoItems.memoryTier(stack) > 0 && EcoItems.memoryTier(stack) <= hardwareTier;
+                    case MEMORY -> {
+                        int tier = ApplyGrayMetaItems.memoryTier(stack);
+                        yield tier > 0 && tier <= hardwareTier;
+                    }
                     case DRIVE -> stack.getItem() instanceof EcoCellItem item && item.ecoTier() <= hardwareTier;
                     case PATTERN_BUS -> EcoAssemblerLane.isAssemblerPattern(stack, getWorld());
                     default -> false;

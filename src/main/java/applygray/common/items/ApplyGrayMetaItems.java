@@ -1,6 +1,6 @@
 package applygray.common.items;
 
-import applygray.common.eco.EcoItems;
+import applygray.common.eco.EcoCellItem;
 import applygray.common.eco.EcoTiers;
 import java.util.List;
 import net.minecraft.client.resources.I18n;
@@ -26,6 +26,8 @@ public final class ApplyGrayMetaItems {
     public static ApplyGrayMetaItem META_ITEM;
     public static MetaItem<?>.MetaValueItem ORDER;
     public static MetaItem<?>.MetaValueItem AE_BUILDER;
+    public static final int ECO_MEMORY_META = 100;
+    public static final MetaItem<?>.MetaValueItem[] ECO_MEMORY = new MetaItem<?>.MetaValueItem[EcoTiers.COUNT];
 
     private ApplyGrayMetaItems() {}
 
@@ -34,7 +36,22 @@ public final class ApplyGrayMetaItems {
         META_ITEM.setRegistryName(ApplyGrayAPI.MODID, "meta_item");
         registry.register(META_ITEM);
         META_ITEM.registerSubItems();
-        EcoItems.registerCells(registry);
+        for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
+            for (boolean fluid : new boolean[]{false, true}) {
+                EcoCellItem item = new EcoCellItem(tier, fluid);
+                item.setRegistryName(ApplyGrayAPI.MODID, "eco_" + (fluid ? "fluid" : "item") + "_cell_" + tier);
+                registry.register(item);
+                item.registerSubItems();
+            }
+        }
+    }
+
+    public static int memoryTier(ItemStack stack) {
+        if (stack.isEmpty()) return 0;
+        for (int i = 0; i < ECO_MEMORY.length; i++) {
+            if (ECO_MEMORY[i] != null && ECO_MEMORY[i].isItemEqual(stack)) return i + 1;
+        }
+        return 0;
     }
 
     public static final class ApplyGrayMetaItem extends StandardMetaItem {
@@ -42,7 +59,7 @@ public final class ApplyGrayMetaItems {
         @Override
         public net.minecraft.util.ResourceLocation createItemModelPath(MetaItem<?>.MetaValueItem item, String postfix) {
             for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
-                if (EcoItems.MEMORY[tier - 1] == item)
+                if (ECO_MEMORY[tier - 1] == item)
                     return ApplyGrayAPI.id("metaitems/eco_memory_cell_" + tier + postfix);
             }
             return super.createItemModelPath(item, postfix);
@@ -53,14 +70,16 @@ public final class ApplyGrayMetaItems {
         public void addInformation(ItemStack stack, World world,
                                    List<String> tooltip, ITooltipFlag flag) {
             super.addInformation(stack, world, tooltip, flag);
-            int tier = EcoItems.memoryTier(stack);
+            int tier = memoryTier(stack);
             if (tier > 0) tooltip.add(I18n.format("applygray.eco.tooltip.memory",
                     EcoTiers.memory(tier)));
         }
 
         @Override
         public void registerSubItems() {
-            EcoItems.registerMemory(this);
+            for (int i = 0; i < EcoTiers.COUNT; i++) {
+                ECO_MEMORY[i] = addItem(ECO_MEMORY_META + i, "eco.memory_cell." + (i + 1)).setMaxStackSize(1);
+            }
             ORDER = addItem(0, "order").addComponents(new OrderBehavior());
             AE_BUILDER = addItem(AE_BUILDER_META, "ae_multiblock_builder")
                     .addComponents(new AEMultiblockBuilderBehavior())

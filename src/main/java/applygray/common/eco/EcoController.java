@@ -1,4 +1,5 @@
 package applygray.common.eco;
+import applygray.common.items.ApplyGrayMetaItems;
 
 import gregtech.api.util.RelativeDirection;
 import net.minecraft.client.resources.I18n;
@@ -171,7 +172,7 @@ public final class EcoController extends MultiblockWithDisplayBase {
             restoreCpus();
             long bytes = 0;
             for (EcoPart part : parts(EcoPart.Role.MEMORY)) {
-                int tier = EcoItems.memoryTier(part.inventory.getStackInSlot(0));
+                int tier = ApplyGrayMetaItems.memoryTier(part.inventory.getStackInSlot(0));
                 if (tier > 0) bytes = Math.addExact(bytes, EcoTiers.memory(tier));
             }
             memory.setCapacity(bytes);
