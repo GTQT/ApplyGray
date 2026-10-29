@@ -1,8 +1,5 @@
 package applygray.client;
 
-import ae2.api.stacks.AEKeyType;
-import applygray.common.eco.EcoItems;
-import applygray.common.eco.EcoTiers;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.items.ApplyGrayMetaItems;
 
@@ -32,14 +29,5 @@ public final class ApplyGrayMetaItemModels {
         ModelLoader.setCustomModelResourceLocation(item, ApplyGrayMetaItems.AE_BUILDER_META,
                 new ModelResourceLocation(ApplyGrayAPI.MODID + ":metaitems/ae_multiblock_builder",
                         "inventory"));
-        for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
-            ModelLoader.setCustomModelResourceLocation(item, EcoItems.MEMORY_META + tier - 1,
-                    new ModelResourceLocation(ApplyGrayAPI.MODID + ":metaitems/eco_memory_cell_" + tier, "inventory"));
-        }
-        for (var cell : EcoItems.CELLS) {
-            String family = cell.getKeyType() == AEKeyType.fluids() ? "fluid" : "item";
-            ModelLoader.setCustomModelResourceLocation(cell, 0,
-                    new ModelResourceLocation(ApplyGrayAPI.MODID + ":metaitems/eco_" + family + "_cell_" + cell.ecoTier(), "inventory"));
-        }
     }
 }

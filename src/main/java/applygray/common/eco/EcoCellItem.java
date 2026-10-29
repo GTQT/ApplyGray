@@ -9,6 +9,9 @@ import ae2.api.upgrades.UpgradeInventories;
 import ae2.items.contents.CellConfig;
 import ae2.util.ConfigInventory;
 import gregtech.api.items.metaitem.StandardMetaItem;
+import gregtech.api.items.metaitem.MetaItem;
+import applygray.api.ApplyGrayAPI;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.world.World;
@@ -26,6 +29,9 @@ public final class EcoCellItem extends StandardMetaItem implements IBasicCellIte
     }
 
     public int ecoTier() { return tier; }
+    @Override public ResourceLocation createItemModelPath(MetaItem<?>.MetaValueItem item, String postfix) {
+        return ApplyGrayAPI.id("metaitems/eco_" + (fluid ? "fluid" : "item") + "_cell_" + tier + postfix);
+    }
     @Override public void registerSubItems() {
         addItem(0, "eco." + (fluid ? "fluid" : "item") + "_cell." + tier).setMaxStackSize(1);
     }

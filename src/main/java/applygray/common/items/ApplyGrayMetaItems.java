@@ -39,6 +39,15 @@ public final class ApplyGrayMetaItems {
 
     public static final class ApplyGrayMetaItem extends StandardMetaItem {
 
+        @Override
+        public net.minecraft.util.ResourceLocation createItemModelPath(MetaItem<?>.MetaValueItem item, String postfix) {
+            for (int tier = 1; tier <= EcoTiers.COUNT; tier++) {
+                if (EcoItems.MEMORY[tier - 1] == item)
+                    return ApplyGrayAPI.id("metaitems/eco_memory_cell_" + tier + postfix);
+            }
+            return super.createItemModelPath(item, postfix);
+        }
+
         @net.minecraftforge.fml.relauncher.SideOnly(net.minecraftforge.fml.relauncher.Side.CLIENT)
         @Override
         public void addInformation(ItemStack stack, World world,

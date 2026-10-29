@@ -6,13 +6,10 @@ import gregtech.api.items.metaitem.MetaItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.registries.IForgeRegistry;
-import java.util.ArrayList;
-import java.util.List;
 
 public final class EcoItems {
     public static final int MEMORY_META = 100;
     public static final MetaItem<?>.MetaValueItem[] MEMORY = new MetaItem<?>.MetaValueItem[EcoTiers.COUNT];
-    public static final List<EcoCellItem> CELLS = new ArrayList<>();
     private EcoItems() {}
 
     public static void registerMemory(ApplyGrayMetaItems.ApplyGrayMetaItem item) {
@@ -28,7 +25,6 @@ public final class EcoItems {
                 item.setRegistryName(ApplyGrayAPI.MODID, "eco_" + (fluid ? "fluid" : "item") + "_cell_" + tier);
                 registry.register(item);
                 item.registerSubItems();
-                CELLS.add(item);
             }
         }
     }

@@ -140,6 +140,10 @@ public final class EcoController extends MultiblockWithDisplayBase {
         if (previous != null) previous.refreshServices();
         dirty = true;
     }
+    @Override public void onUnload() {
+        if (getWorld() != null && !getWorld().isRemote) invalidateStructure();
+        super.onUnload();
+    }
     @Override protected void updateFormedValid() {
         if (getWorld().isRemote) return;
         if (dirty) rebuildHardware();

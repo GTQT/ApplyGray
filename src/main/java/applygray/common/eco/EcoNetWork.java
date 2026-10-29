@@ -100,6 +100,12 @@ public final class EcoNetWork extends MetaTileEntityAEHostablePart implements
     @Override public void removeFromMultiBlock(MultiblockControllerBase controller) {
         super.removeFromMultiBlock(controller); refreshServices();
     }
+    @Override public void onUnload() {
+        EcoController controller = controller();
+        if (getWorld() != null && !getWorld().isRemote && controller != null)
+            controller.invalidateStructure();
+        super.onUnload();
+    }
     @Override public Collection<EcoCpu> getProvidedCraftingCpus() {
         EcoController c = controller();
         return c != null && kind == EcoController.Kind.COMPUTER && c.enabled() ? c.cpus() : List.of();

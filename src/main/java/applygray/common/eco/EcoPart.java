@@ -151,6 +151,13 @@ public final class EcoPart extends MetaTileEntityMultiblockPart implements IMult
         return cell;
     }
     public void persistCell() { if (cell != null) cell.persist(); }
+    @Override public void onUnload() {
+        detachCell();
+        if (getWorld() != null && !getWorld().isRemote && getController() instanceof EcoController controller)
+            controller.invalidateStructure();
+        super.onUnload();
+    }
+    @Override public void onRemoval() { detachCell(); super.onRemoval(); }
     private void detachCell() {
         if (cell != null) { cell.persist(); cell.detach(); cell = null; }
     }
