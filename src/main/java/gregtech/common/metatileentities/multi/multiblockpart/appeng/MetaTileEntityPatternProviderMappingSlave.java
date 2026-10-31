@@ -46,7 +46,6 @@ import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.UISettings;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
-import com.cleanroommc.modularui.value.sync.SyncHandlers;
 import com.cleanroommc.modularui.widgets.PageButton;
 import com.cleanroommc.modularui.widgets.PagedWidget;
 import com.cleanroommc.modularui.widgets.SlotGroupWidget;
@@ -54,6 +53,7 @@ import com.cleanroommc.modularui.widgets.TextWidget;
 import com.cleanroommc.modularui.widgets.layout.Flow;
 import com.cleanroommc.modularui.widgets.layout.Grid;
 import com.cleanroommc.modularui.widgets.slot.ItemSlot;
+import com.cleanroommc.modularui.widgets.slot.ModularSlot;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -391,7 +391,7 @@ public class MetaTileEntityPatternProviderMappingSlave extends MetaTileEntityAEC
                 int index = i * rowSize + j;
                 widgetsPattern.get(i)
                         .add(new ItemSlot()
-                                .slot(SyncHandlers.itemSlot(patternSlot, index)
+                                .slot(new ModularSlot(patternSlot, index)
                                         .slotGroup("pattern_inv")
                                         .accessibility(true, true))
                                 .background(GTGuiTextures.SLOT, ApplyGrayGuiTextures.PATTERN_OVERLAY));

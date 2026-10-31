@@ -32,12 +32,12 @@ import com.cleanroommc.modularui.utils.Color;
 import com.cleanroommc.modularui.value.sync.IntSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
 import com.cleanroommc.modularui.value.sync.StringSyncValue;
-import com.cleanroommc.modularui.value.sync.SyncHandlers;
 import com.cleanroommc.modularui.widget.scroll.VerticalScrollData;
 import com.cleanroommc.modularui.widgets.ButtonWidget;
 import com.cleanroommc.modularui.widgets.layout.Flow;
 import com.cleanroommc.modularui.widgets.layout.Grid;
 import com.cleanroommc.modularui.widgets.slot.ItemSlot;
+import com.cleanroommc.modularui.widgets.slot.ModularSlot;
 import com.cleanroommc.modularui.widgets.textfield.TextFieldWidget;
 
 import java.util.ArrayList;
@@ -237,7 +237,7 @@ public class MetaTileEntityMEPatternManager extends MetaTileEntityAEHostablePart
 
                                     // 在槽位范围内的创建ItemSlot
                                     rowWidgets.add(new ItemSlot()
-                                            .slot(SyncHandlers.itemSlot(itemHandler, index)
+                                            .slot(new ModularSlot(itemHandler, index)
                                                     .slotGroup("pattern_slots" + num)
                                                     .accessibility(true, true))
                                             .background(GTGuiTextures.SLOT, ApplyGrayGuiTextures.PATTERN_OVERLAY)

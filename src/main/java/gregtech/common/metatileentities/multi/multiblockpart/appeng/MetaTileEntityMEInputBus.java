@@ -35,10 +35,10 @@ import com.cleanroommc.modularui.api.drawable.IKey;
 import com.cleanroommc.modularui.api.widget.IWidget;
 import com.cleanroommc.modularui.factory.PosGuiData;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
-import com.cleanroommc.modularui.value.sync.SyncHandlers;
 import com.cleanroommc.modularui.widget.Widget;
 import com.cleanroommc.modularui.widgets.layout.Grid;
 import com.cleanroommc.modularui.widgets.slot.ItemSlot;
+import com.cleanroommc.modularui.widgets.slot.ModularSlot;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
@@ -102,7 +102,7 @@ public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase
         if (index == 3) {
             panelSyncManager.registerSlotGroup("extra_slot", 1);
             return new ItemSlot()
-                    .slot(SyncHandlers.itemSlot(extraSlotInventory, 0)
+                    .slot(new ModularSlot(extraSlotInventory, 0)
                             .slotGroup("extra_slot"))
                     .addTooltipLine(IKey.lang("gregtech.gui.me_bus.extra_slot"));
         }

@@ -75,7 +75,6 @@ import com.cleanroommc.modularui.value.sync.BooleanSyncValue;
 import com.cleanroommc.modularui.value.sync.IntSyncValue;
 import com.cleanroommc.modularui.value.sync.PanelSyncManager;
 import com.cleanroommc.modularui.value.sync.StringSyncValue;
-import com.cleanroommc.modularui.value.sync.SyncHandlers;
 import com.cleanroommc.modularui.widgets.ButtonWidget;
 import com.cleanroommc.modularui.widgets.PageButton;
 import com.cleanroommc.modularui.widgets.PagedWidget;
@@ -85,6 +84,7 @@ import com.cleanroommc.modularui.widgets.ToggleButton;
 import com.cleanroommc.modularui.widgets.layout.Flow;
 import com.cleanroommc.modularui.widgets.layout.Grid;
 import com.cleanroommc.modularui.widgets.slot.ItemSlot;
+import com.cleanroommc.modularui.widgets.slot.ModularSlot;
 import com.cleanroommc.modularui.widgets.textfield.TextFieldWidget;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
 import gregtech.api.capability.IPatternBufferIsolatedHandler;
@@ -1226,7 +1226,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
 
                 widgetsPattern.get(i)
                         .add(new ItemSlot()
-                                .slot(SyncHandlers.itemSlot(patternSlot, index)
+                                .slot(new ModularSlot(patternSlot, index)
                                         .slotGroup("item_inv")
                                         .accessibility(true, true)
                                 )
