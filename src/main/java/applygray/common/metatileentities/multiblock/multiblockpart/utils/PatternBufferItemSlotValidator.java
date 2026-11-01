@@ -3,12 +3,12 @@ package applygray.common.metatileentities.multiblock.multiblockpart.utils;
 import net.minecraft.item.ItemStack;
 
 /** Validates the material type assigned to an isolated pattern-buffer slot. */
-final class PatternBufferItemSlotValidator {
+public final class PatternBufferItemSlotValidator {
 
     private PatternBufferItemSlotValidator() {
     }
 
-    static boolean accepts(ItemStack expected, ItemStack candidate) {
+    public static boolean accepts(ItemStack expected, ItemStack candidate) {
         return expected != null && !expected.isEmpty() && candidate != null && !candidate.isEmpty() &&
                 ItemStack.areItemsEqual(expected, candidate) &&
                 ItemStack.areItemStackTagsEqual(expected, candidate);

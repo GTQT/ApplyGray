@@ -1,6 +1,6 @@
 package applygray.mixins.supergiantfc;
 
-import gregtech.integration.ae2.GTCircuitHelper;
+import applygray.api.util.GTCircuitHelper;
 
 import net.minecraft.entity.player.EntityPlayer;
 

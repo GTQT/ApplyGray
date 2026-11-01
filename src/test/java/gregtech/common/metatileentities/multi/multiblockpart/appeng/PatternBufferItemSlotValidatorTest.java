@@ -1,6 +1,7 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
-import applygray.common.appeng.PatternBufferItemSlotValidator;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.PatternBufferItemSlotValidator;
+
 import net.minecraft.init.Bootstrap;
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;

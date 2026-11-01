@@ -129,7 +129,7 @@ public class MetaTileEntityMEPatternProviderProxy extends MetaTileEntityMultiblo
     }
 
     @Nullable
-    MetaTileEntityMEPatternProvider getResolvedMainForLink() {
+    public MetaTileEntityMEPatternProvider getResolvedMainForLink() {
         if ((main == null || !main.isValid()) && mainPos != null) {
             tryToSetMain();
         }

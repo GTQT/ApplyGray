@@ -104,7 +104,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-import static gregtech.api.util.AE2PatternCompat.toGenericStack;
+import static applygray.api.util.AE2PatternCompat.toGenericStack;
 
 /**
  * 可编程样板总成 — 带缓冲区池机制。
@@ -272,7 +272,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
     }
 
     @Nullable
-    SmartCopyLink getSmartCopyEndpointIdentity() {
+    public SmartCopyLink getSmartCopyEndpointIdentity() {
         World world = getWorld();
         return world == null ? null : new SmartCopyLink(world.provider.getDimension(), getPos());
     }
@@ -318,7 +318,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         smartCopyDependents.remove(dependent);
     }
 
-    void onSmartCopySourceChanged(MetaTileEntityMEPatternProvider source) {
+    public void onSmartCopySourceChanged(MetaTileEntityMEPatternProvider source) {
         if (smartCopyLink == null || !smartCopyLink.equals(source.getSmartCopyEndpointIdentity()) ||
                 source.getSmartCopyLink().isPresent()) {
             return;
@@ -331,7 +331,7 @@ public class MetaTileEntityMEPatternProvider extends MetaTileEntityAECraftingPar
         refreshSmartCopyPatterns();
     }
 
-    void onSmartCopySourceRemoved(MetaTileEntityMEPatternProvider source) {
+    public void onSmartCopySourceRemoved(MetaTileEntityMEPatternProvider source) {
         if (smartCopySource != source) return;
         smartCopySource = null;
         refreshSmartCopyPatterns();

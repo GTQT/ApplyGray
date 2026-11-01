@@ -2,7 +2,7 @@ package applygray.mixins.supergiant;
 
 import applygray.integration.ae2.DynamicRecipeInputPreview;
 import applygray.integration.ae2.DynamicRecipePatternRegistry;
-import gregtech.integration.ae2.GTCircuitHelper;
+import applygray.api.util.GTCircuitHelper;
 
 import ae2.api.config.FuzzyMode;
 import ae2.api.stacks.AEItemKey;

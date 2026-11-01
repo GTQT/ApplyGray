@@ -68,7 +68,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
-import static gregtech.api.util.AE2PatternCompat.*;
+import static applygray.api.util.AE2PatternCompat.*;
 
 public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPatternRegistrar
         implements IMEPatternProviderPart {

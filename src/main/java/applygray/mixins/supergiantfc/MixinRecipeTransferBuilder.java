@@ -1,6 +1,6 @@
 package applygray.mixins.supergiantfc;
 
-import gregtech.integration.ae2.GTCircuitHelper;
+import applygray.api.util.GTCircuitHelper;
 import gregtech.integration.jei.utils.render.ItemStackTextRenderer;
 import gregtech.mixins.jei.GuiIngredientAccessor;
 

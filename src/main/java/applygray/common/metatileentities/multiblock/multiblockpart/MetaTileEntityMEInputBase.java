@@ -10,7 +10,7 @@ import gregtech.api.capability.IGhostSlotConfigurable;
 import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.mui.GTGuiTextures;
 import gregtech.api.mui.GTGuis;
-import gregtech.api.mui.sync.appeng.AESyncHandler;
+import applygray.api.mui.sync.appeng.AESyncHandler;
 import gregtech.api.mui.widget.GhostCircuitSlotWidget;
 import gregtech.api.util.GTUtility;
 import gregtech.api.util.Mods;

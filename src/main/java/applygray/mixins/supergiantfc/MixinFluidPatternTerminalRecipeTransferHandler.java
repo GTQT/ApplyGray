@@ -1,6 +1,6 @@
 package applygray.mixins.supergiantfc;
 
-import gregtech.integration.ae2.GTCircuitHelper;
+import applygray.api.util.GTCircuitHelper;
 
 import ae2.api.crafting.PatternDetailsHelper;
 import ae2.api.stacks.AEItemKey;

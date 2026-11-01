@@ -9,10 +9,10 @@ import gregtech.api.metatileentity.multiblock.AbilityInstances;
 import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.mui.GTGuiTextures;
-import gregtech.api.mui.sync.appeng.AEFluidSyncHandler;
-import gregtech.api.mui.sync.appeng.AESyncHandler;
-import gregtech.api.mui.widget.appeng.fluid.AEFluidConfigSlot;
-import gregtech.api.mui.widget.appeng.fluid.AEFluidDisplaySlot;
+import applygray.api.mui.sync.appeng.AEFluidSyncHandler;
+import applygray.api.mui.sync.appeng.AESyncHandler;
+import applygray.api.mui.widget.appeng.fluid.AEFluidConfigSlot;
+import applygray.api.mui.widget.appeng.fluid.AEFluidDisplaySlot;
 import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEFluidList;
 import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEFluidSlot;
 

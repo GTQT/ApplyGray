@@ -4,11 +4,11 @@ import applygray.ApplyGrayMod;
 import applygray.client.renderer.texture.ApplyGrayTextures;
 
 import gregtech.api.color.ColoredBlockContainer;
-import gregtech.api.color.containers.AE2ColorContainer;
+import applygray.api.color.containers.AE2ColorContainer;
 import gregtech.api.pattern.StructureItemSourceRegistry;
 import gregtech.api.util.GTUtility;
 import gregtech.client.utils.ItemRenderCompat;
-import gregtech.common.items.tool.rotation.AECustomBlockRotations;
+import applygray.rotation.AECustomBlockRotations;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;

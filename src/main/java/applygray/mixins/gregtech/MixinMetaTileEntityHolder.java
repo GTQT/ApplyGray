@@ -3,7 +3,7 @@ package applygray.mixins.gregtech;
 import applygray.api.IAEManagedMetaTileEntity;
 
 import gregtech.api.cover.Cover;
-import gregtech.api.cover.IAECover;
+import applygray.api.cover.IAECover;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;
 
