@@ -1,0 +1,227 @@
+package applygray.common.metatileentities.multiblock.multiblockpart;
+
+import applygray.client.renderer.texture.ApplyGrayTextures;
+
+import gregtech.api.capability.impl.ItemHandlerList;
+import gregtech.api.capability.impl.NotifiableItemStackHandler;
+import gregtech.api.metatileentity.MetaTileEntity;
+import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
+import gregtech.api.metatileentity.multiblock.AbilityInstances;
+import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
+import gregtech.api.metatileentity.multiblock.MultiblockAbility;
+import gregtech.api.mui.GTGuiTextures;
+import gregtech.api.mui.sync.appeng.AEItemSyncHandler;
+import gregtech.api.mui.sync.appeng.AESyncHandler;
+import gregtech.api.mui.widget.appeng.item.AEItemConfigSlot;
+import gregtech.api.mui.widget.appeng.item.AEItemDisplaySlot;
+import gregtech.api.util.GTUtility;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEItemList;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEItemSlot;
+
+import net.minecraft.client.resources.I18n;
+import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTBase;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagList;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.world.World;
+import net.minecraftforge.items.IItemHandlerModifiable;
+
+import codechicken.lib.render.CCRenderState;
+import codechicken.lib.render.pipeline.IVertexOperation;
+import codechicken.lib.vec.Matrix4;
+import com.cleanroommc.modularui.api.drawable.IKey;
+import com.cleanroommc.modularui.api.widget.IWidget;
+import com.cleanroommc.modularui.factory.PosGuiData;
+import com.cleanroommc.modularui.value.sync.PanelSyncManager;
+import com.cleanroommc.modularui.widget.Widget;
+import com.cleanroommc.modularui.widgets.layout.Grid;
+import com.cleanroommc.modularui.widgets.slot.ItemSlot;
+import com.cleanroommc.modularui.widgets.slot.ModularSlot;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.Range;
+
+import java.util.List;
+
+public class MetaTileEntityMEInputBus extends MetaTileEntityMEInputBase
+        implements IMultiblockAbilityPart<IItemHandlerModifiable> {
+
+    public static final String ITEM_BUFFER_TAG = "ItemSlots";
+
+    protected NotifiableItemStackHandler extraSlotInventory;
+
+    public MetaTileEntityMEInputBus(ResourceLocation metaTileEntityId, int tier) {
+        super(metaTileEntityId, tier, false);
+    }
+
+    @Override
+    public MetaTileEntity createMetaTileEntity(IGregTechTileEntity iGregTechTileEntity) {
+        return new MetaTileEntityMEInputBus(metaTileEntityId, getTier());
+    }
+
+    @Override
+    protected void initializeInventory() {
+        this.extraSlotInventory = new NotifiableItemStackHandler(this, 1, this, false);
+        this.extraSlotInventory.addNotifiableMetaTileEntity(this);
+        super.initializeInventory();
+    }
+
+    @Override
+    protected IItemHandlerModifiable createImportItemHandler() {
+        return new ItemHandlerList(getAEHandler(), circuitInventory, extraSlotInventory);
+    }
+
+    @Override
+    protected @NotNull ExportOnlyAEItemList initializeAEHandler() {
+        return new ExportOnlyAEItemList(this, CONFIG_SIZE, this.getController());
+    }
+
+    @NotNull
+    protected ExportOnlyAEItemList getAEHandler() {
+        return (ExportOnlyAEItemList) aeHandler;
+    }
+
+    @Override
+    public void clearMachineInventory(@NotNull List<@NotNull ItemStack> itemBuffer) {
+        ItemStack extraSlotStack = extraSlotInventory.getStackInSlot(0);
+        if (!extraSlotStack.isEmpty()) {
+            itemBuffer.add(extraSlotStack);
+        }
+    }
+
+    @Override
+    protected @NotNull AESyncHandler createAESyncHandler() {
+        return new AEItemSyncHandler(getAEHandler(), this::markDirty, circuitInventory::setCircuitValue);
+    }
+
+    @Override
+    protected @NotNull Widget<?> createMainColumnWidget(@Range(from = 0, to = 3) int index, @NotNull PosGuiData guiData,
+                                                        @NotNull PanelSyncManager panelSyncManager) {
+        if (index == 3) {
+            panelSyncManager.registerSlotGroup("extra_slot", 1);
+            return new ItemSlot()
+                    .slot(new ModularSlot(extraSlotInventory, 0)
+                            .slotGroup("extra_slot"))
+                    .addTooltipLine(IKey.lang("gregtech.gui.me_bus.extra_slot"));
+        }
+
+        return super.createMainColumnWidget(index, guiData, panelSyncManager);
+    }
+
+    @Override
+    protected @NotNull Widget<?> createConfigGrid(@NotNull PosGuiData guiData,
+                                                  @NotNull PanelSyncManager panelSyncManager) {
+        Grid grid = new Grid()
+                .pos(7, 25)
+                .size(18 * 4)
+                .minElementMargin(0, 0)
+                .minColWidth(18)
+                .minRowHeight(18)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemConfigSlot(isStocking(), index, this::isAutoPull)
+                                .syncHandler(SYNC_HANDLER_NAME, 0)
+                                .name("Index " + index));
+
+        for (IWidget slotUpper : grid.getChildren()) {
+            ((AEItemConfigSlot) slotUpper).onSelect(() -> {
+                for (IWidget slotLower : grid.getChildren()) {
+                    ((AEItemConfigSlot) slotLower).deselect();
+                }
+            });
+        }
+
+        return grid;
+    }
+
+    @Override
+    protected @NotNull Widget<?> createDisplayGrid(@NotNull PosGuiData guiData,
+                                                   @NotNull PanelSyncManager panelSyncManager) {
+        return new Grid()
+                .pos(7 + 18 * 5, 25)
+                .size(18 * 4)
+                .minElementMargin(0, 0)
+                .minColWidth(18)
+                .minRowHeight(18)
+                .gridOfSizeWidth(CONFIG_SIZE, (int) Math.sqrt(CONFIG_SIZE),
+                        (x, y, index) -> new AEItemDisplaySlot(index)
+                                .background(GTGuiTextures.SLOT_DARK)
+                                .syncHandler(SYNC_HANDLER_NAME, 0)
+                                .name("Index " + index));
+    }
+
+    @Override
+    public NBTTagCompound writeToNBT(NBTTagCompound data) {
+        super.writeToNBT(data);
+
+        NBTTagList slots = new NBTTagList();
+        for (int i = 0; i < CONFIG_SIZE; i++) {
+            ExportOnlyAEItemSlot slot = this.getAEHandler().getInventory()[i];
+            NBTTagCompound slotTag = new NBTTagCompound();
+            slotTag.setInteger("slot", i);
+            slotTag.setTag("stack", slot.serializeNBT());
+            slots.appendTag(slotTag);
+        }
+        data.setTag(ITEM_BUFFER_TAG, slots);
+
+        GTUtility.writeItems(this.extraSlotInventory, "ExtraInventory", data);
+
+        return data;
+    }
+
+    @Override
+    public void readFromNBT(NBTTagCompound data) {
+        super.readFromNBT(data);
+
+        if (data.hasKey(ITEM_BUFFER_TAG, 9)) {
+            NBTTagList slots = (NBTTagList) data.getTag(ITEM_BUFFER_TAG);
+            for (NBTBase nbtBase : slots) {
+                NBTTagCompound slotTag = (NBTTagCompound) nbtBase;
+                ExportOnlyAEItemSlot slot = this.getAEHandler().getInventory()[slotTag.getInteger("slot")];
+                slot.deserializeNBT(slotTag.getCompoundTag("stack"));
+            }
+        }
+
+        GTUtility.readItems(this.extraSlotInventory, "ExtraInventory", data);
+        this.importItems = createImportItemHandler();
+    }
+
+    @Override
+    public void renderMetaTileEntity(CCRenderState renderState, Matrix4 translation, IVertexOperation[] pipeline) {
+        super.renderMetaTileEntity(renderState, translation, pipeline);
+        if (this.shouldRenderOverlay()) {
+            if (isOnline()) {
+                ApplyGrayTextures.ME_INPUT_BUS_ACTIVE.renderSided(getFrontFacing(), renderState, translation, pipeline);
+            } else {
+                ApplyGrayTextures.ME_INPUT_BUS.renderSided(getFrontFacing(), renderState, translation, pipeline);
+            }
+        }
+    }
+
+    @Override
+    public void addInformation(ItemStack stack, @Nullable World player, @NotNull List<String> tooltip,
+                               boolean advanced) {
+        super.addInformation(stack, player, tooltip, advanced);
+        tooltip.add(I18n.format("gregtech.machine.item_bus.import.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.item_import.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me_import_item_hatch.configs.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.copy_paste.tooltip"));
+        tooltip.add(I18n.format("gregtech.machine.me.extra_connections.tooltip"));
+        tooltip.add(I18n.format("gregtech.universal.enabled"));
+    }
+
+    @Override
+    public MultiblockAbility<IItemHandlerModifiable> getAbility() {
+        return MultiblockAbility.IMPORT_ITEMS;
+    }
+
+    @Override
+    public void registerAbilities(@NotNull AbilityInstances abilityInstances) {
+        abilityInstances.add(this.importItems);
+    }
+
+    @Override
+    public int getGhostCircuitConfig() {
+        return circuitInventory.getCircuitValue();
+    }
+}

@@ -1,6 +1,6 @@
 package applygray;
 
-import applygray.common.metatileentities.multi.electric.eco.gui.EcoGuiHandler;
+import applygray.common.metatileentities.multiblock.eco.gui.EcoGuiHandler;
 import applygray.api.ApplyGrayAPI;
 import applygray.common.ApplyGrayBlocks;
 import applygray.common.ApplyGrayCommonProxy;

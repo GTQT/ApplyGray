@@ -1,0 +1,506 @@
+package applygray.common.metatileentities.multiblock.multiblockpart;
+
+import meowmel.structurelib.integration.gregtech.PortableMeConfigurationAccess;
+
+import gregtech.api.capability.GregtechDataCodes;
+import gregtech.api.capability.GregtechTileCapabilities;
+import gregtech.api.capability.IControllable;
+import gregtech.api.capability.IDataStickIntractable;
+import gregtech.api.capability.IGhostSlotConfigurable;
+import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
+import gregtech.api.mui.GTGuiTextures;
+import gregtech.api.mui.GTGuis;
+import gregtech.api.mui.sync.appeng.AESyncHandler;
+import gregtech.api.mui.widget.GhostCircuitSlotWidget;
+import gregtech.api.util.GTUtility;
+import gregtech.api.util.Mods;
+import gregtech.common.ConfigHolder;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAESlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.IExportOnlyAEStackList;
+
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.network.PacketBuffer;
+import net.minecraft.util.EnumFacing;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.text.TextComponentTranslation;
+import net.minecraft.world.World;
+import net.minecraftforge.common.capabilities.Capability;
+import net.minecraftforge.common.util.Constants;
+import net.minecraftforge.items.IItemHandlerModifiable;
+
+import ae2.api.config.Actionable;
+import ae2.api.storage.MEStorage;
+import ae2.api.stacks.GenericStack;
+import com.cleanroommc.modularui.api.IPanelHandler;
+import com.cleanroommc.modularui.api.drawable.IDrawable;
+import com.cleanroommc.modularui.api.drawable.IKey;
+import com.cleanroommc.modularui.drawable.ItemDrawable;
+import com.cleanroommc.modularui.factory.PosGuiData;
+import com.cleanroommc.modularui.screen.ModularPanel;
+import com.cleanroommc.modularui.screen.UISettings;
+import com.cleanroommc.modularui.value.IntValue;
+import com.cleanroommc.modularui.value.sync.BooleanSyncValue;
+import com.cleanroommc.modularui.value.sync.IntSyncValue;
+import com.cleanroommc.modularui.value.sync.PanelSyncHandler;
+import com.cleanroommc.modularui.value.sync.PanelSyncManager;
+import com.cleanroommc.modularui.widget.Widget;
+import com.cleanroommc.modularui.widgets.ButtonWidget;
+import com.cleanroommc.modularui.widgets.SlotGroupWidget;
+import com.cleanroommc.modularui.widgets.ToggleButton;
+import com.cleanroommc.modularui.widgets.layout.Flow;
+import com.cleanroommc.modularui.widgets.textfield.TextFieldWidget;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Range;
+
+public abstract class MetaTileEntityMEInputBase extends MetaTileEntityAEHostableChannelPart
+        implements IControllable, IGhostSlotConfigurable, IDataStickIntractable, PortableMeConfigurationAccess {
+
+    public final static int CONFIG_SIZE = 16;
+    public static final String WORKING_TAG = "WorkingEnabled";
+    public static final String SYNC_HANDLER_NAME = "aeSync";
+
+    protected IExportOnlyAEStackList aeHandler;
+    protected GhostCircuitItemStackHandler circuitInventory;
+    protected boolean workingEnabled = true;
+    protected boolean preciseMode = false;
+
+    public MetaTileEntityMEInputBase(ResourceLocation metaTileEntityId, int tier, boolean isExportHatch) {
+        super(metaTileEntityId, tier, isExportHatch);
+    }
+
+    @Override
+    protected void initializeInventory() {
+        this.aeHandler = initializeAEHandler();
+        this.circuitInventory = new GhostCircuitItemStackHandler(this);
+        super.initializeInventory();
+    }
+
+    @Override
+    protected IItemHandlerModifiable createImportItemHandler() {
+        return circuitInventory;
+    }
+
+    protected abstract @NotNull IExportOnlyAEStackList initializeAEHandler();
+
+    protected abstract @NotNull IExportOnlyAEStackList getAEHandler();
+
+    @Override
+    public void update() {
+        super.update();
+        if (!getWorld().isRemote && workingEnabled && isOnline && shouldSyncME()) {
+            operateOnME();
+        }
+    }
+
+    public boolean isAutoPull() {
+        return getAEHandler().isAutoPull();
+    }
+
+    public boolean isStocking() {
+        return getAEHandler().isStocking();
+    }
+
+    protected void operateOnME() {
+        syncME();
+    }
+
+    protected void syncME() {
+        MEStorage monitor = getMonitor();
+        if (monitor == null) return;
+
+        for (ExportOnlyAESlot slot : getAEHandler().getInventory()) {
+            GenericStack exceedStack = slot.exceedStack();
+            if (exceedStack != null) {
+                long inserted = monitor.insert(exceedStack.what(), exceedStack.amount(), Actionable.MODULATE,
+                        getActionSource());
+                slot.decrementStock(inserted);
+                if (inserted < exceedStack.amount()) continue;
+            }
+
+            GenericStack requestStack = slot.requestStack();
+            if (requestStack == null) continue;
+
+            // Precise mode: only extract if network has enough stock >= config amount
+            if (preciseMode) {
+                GenericStack config = slot.getConfig();
+                long requiredAmount = config != null ? config.amount() : requestStack.amount();
+                if (monitor.extract(requestStack.what(), requiredAmount, Actionable.SIMULATE,
+                        getActionSource()) < requiredAmount) {
+                    continue;
+                }
+            }
+
+            long extracted = monitor.extract(requestStack.what(), requestStack.amount(), Actionable.MODULATE,
+                    getActionSource());
+            if (extracted > 0) {
+                slot.addStack(new GenericStack(requestStack.what(), extracted));
+            }
+        }
+    }
+
+    @Override
+    public void onRemoval() {
+        flushInventory();
+        super.onRemoval();
+    }
+
+    protected void flushInventory() {
+        MEStorage monitor = getMonitor();
+        if (monitor == null) return;
+
+        for (ExportOnlyAESlot slot : getAEHandler().getInventory()) {
+            GenericStack stock = slot.getStock();
+
+            if (stock == null) continue;
+            monitor.insert(stock.what(), stock.amount(), Actionable.MODULATE, getActionSource());
+        }
+    }
+
+    @Override
+    public boolean usesMui2() {
+        return true;
+    }
+
+    protected abstract @NotNull AESyncHandler createAESyncHandler();
+
+    @Override
+    public ModularPanel buildUI(PosGuiData guiData, PanelSyncManager panelSyncManager, UISettings settings) {
+        ModularPanel mainPanel = GTGuis.createPanel(this, 176, 18 + 18 * 4 + 94);
+        final boolean isStocking = getAEHandler().isStocking();
+
+        panelSyncManager.syncValue(SYNC_HANDLER_NAME, 0, createAESyncHandler());
+
+        return mainPanel.child(IKey.lang(getMetaFullName())
+                        .asWidget()
+                        .pos(5, 5))
+                .child(SlotGroupWidget.playerInventory(false)
+                        .left(7)
+                        .bottom(7))
+                .child(IKey.lang(() -> isOnline() ? "gregtech.gui.me_network.online" :
+                                "gregtech.gui.me_network.offline")
+                        .asWidget()
+                        .marginLeft(5)
+                        .widthRel(1.0f)
+                        .top(15))
+                .child(createConfigGrid(guiData, panelSyncManager))
+                .child(Flow.column()
+                        .pos(7 + 18 * 4, 25)
+                        .size(18, 18 * 4)
+                        .child(createMainColumnWidget(0, guiData, panelSyncManager))
+                        .child(createMainColumnWidget(1, guiData, panelSyncManager))
+                        .child(createMainColumnWidget(2, guiData, panelSyncManager))
+                        .child(createMainColumnWidget(3, guiData, panelSyncManager)))
+                .child(createDisplayGrid(guiData, panelSyncManager))
+                .child(Flow.row()
+                        .width(isStocking ? 18 : 18 * 2)
+                        .height(18)
+                        .top(5)
+                        .right(7)
+                        .childIf(!isStocking, ()->getMultiplierWidget(guiData, panelSyncManager))
+                        .child(getSettingWidget(guiData, panelSyncManager)));
+    }
+
+    protected abstract @NotNull Widget<?> createConfigGrid(@NotNull PosGuiData guiData,
+                                                           @NotNull PanelSyncManager panelSyncManager);
+
+    protected abstract @NotNull Widget<?> createDisplayGrid(@NotNull PosGuiData guiData,
+                                                            @NotNull PanelSyncManager panelSyncManager);
+
+    protected @NotNull Widget<?> createMainColumnWidget(@Range(from = 0, to = 3) int index, @NotNull PosGuiData guiData,
+                                                        @NotNull PanelSyncManager panelSyncManager) {
+        return switch (index) {
+            case 1 -> GTGuiTextures.ARROW_DOUBLE.asWidget();
+            case 2 -> createGhostCircuitWidget();
+            default -> new Widget<>()
+                    .size(18);
+        };
+    }
+
+    protected @NotNull GhostCircuitSlotWidget createGhostCircuitWidget() {
+        return new GhostCircuitSlotWidget()
+                .slot(circuitInventory, 0)
+                .background(GTGuiTextures.SLOT, GTGuiTextures.INT_CIRCUIT_OVERLAY);
+    }
+
+    protected Widget<?> getSettingWidget(@NotNull PosGuiData guiData, @NotNull PanelSyncManager guiSyncManager) {
+        IPanelHandler settingPopup = guiSyncManager.syncedPanel("settings_panel", true, this::buildSettingsPopup);
+
+        return new ButtonWidget<>()
+                .onMousePressed(mouse -> {
+                    if (settingPopup.isPanelOpen()) {
+                        settingPopup.closePanel();
+                    } else {
+                        settingPopup.openPanel();
+                    }
+
+                    return true;
+                })
+                .addTooltipLine(IKey.lang("gregtech.machine.me.settings.button"))
+                .overlay(GTGuiTextures.FILTER_SETTINGS_OVERLAY);
+    }
+
+    private final IDrawable CONTROLLER_ICON = new ItemDrawable(Mods.AppliedEnergistics2.getItem("controller"))
+            .asIcon().size(16);
+    protected ModularPanel buildSettingsPopup(PanelSyncManager syncManager, IPanelHandler syncHandler) {
+        IntSyncValue refreshRateSync = new IntSyncValue(this::getRefreshRate, this::setRefreshRate);
+        BooleanSyncValue preciseModeSync = new BooleanSyncValue(this::isPreciseMode, this::setPreciseMode);
+
+        final int width = 110;
+        return GTGuis.createPopupPanel("settings", width, getSettingsPopupHeight())
+                .child(Flow.row()
+                        .pos(4, 4)
+                        .height(16)
+                        .child(CONTROLLER_ICON.asWidget()
+                                .size(16)
+                                .marginRight(4))
+                        .child(IKey.lang("gregtech.machine.me.settings.button")
+                                .asWidget()
+                                .heightRel(1.0f)))
+                .child(IKey.lang("gregtech.machine.me.settings.refresh_rate")
+                        .asWidget()
+                        .left(5)
+                        .top(5 + 18))
+                .child(new TextFieldWidget()
+                        .left(5)
+                        .top(15 + 18)
+                        .size(width - 10, 10)
+                        .setNumbers(1, Integer.MAX_VALUE)
+                        .setDefaultNumber(ConfigHolder.compat.ae2.updateIntervals)
+                        .value(refreshRateSync))
+                .child(new ToggleButton()
+                        .left(5)
+                        .top(15 + 18 + 14)
+                        .size(width - 10, 14)
+                        .value(preciseModeSync)
+                        .overlay(IKey.lang("gregtech.machine.me.settings.precise_mode")));
+    }
+
+    protected int getSettingsPopupHeight() {
+        return 33 + 14 + 5 + 18;
+    }
+
+    public boolean isPreciseMode() {
+        return preciseMode;
+    }
+
+    public void setPreciseMode(boolean preciseMode) {
+        this.preciseMode = preciseMode;
+    }
+
+    protected Widget<?> getMultiplierWidget(@NotNull PosGuiData guiData, @NotNull PanelSyncManager syncManager) {
+        IPanelHandler multiplierPopup = syncManager.syncedPanel("multiplier_panel", true, this::buildMultiplierPopup);
+
+        return new ButtonWidget<>()
+                .onMousePressed(mouse -> {
+                    if (multiplierPopup.isPanelOpen()) {
+                        multiplierPopup.closePanel();
+                    } else {
+                        multiplierPopup.openPanel();
+                    }
+
+                    return true;
+                })
+                .addTooltipLine(IKey.lang("gregtech.machine.me.multiplier.button"))
+                .overlay(GTGuiTextures.ARROW_OPPOSITE);
+    }
+
+    protected ModularPanel buildMultiplierPopup(PanelSyncManager syncManager, IPanelHandler syncHandler) {
+        AESyncHandler aeSyncHandler = ((PanelSyncHandler) syncHandler).getSyncManager()
+                .findSyncHandler(SYNC_HANDLER_NAME, 0, AESyncHandler.class);
+        IntValue multiplier = new IntValue(2);
+
+        return GTGuis.createPopupPanel("multiplier", 100, 35)
+                .child(new ButtonWidget<>()
+                        .onMousePressed(mouse -> aeSyncHandler
+                                .modifyConfigAmounts((index, amount) -> Math.max(1, amount / multiplier.getIntValue())))
+                        .left(5)
+                        .top(7)
+                        .overlay(IKey.str("/")))
+                .child(new TextFieldWidget()
+                        .horizontalCenter()
+                        .top(5)
+                        .widthRel(0.5f)
+                        .height(20)
+                        .setNumbers(2, Integer.MAX_VALUE)
+                        .setDefaultNumber(2)
+                        .value(multiplier))
+                .child(new ButtonWidget<>()
+                        .onMousePressed(mouse -> aeSyncHandler.modifyConfigAmounts(
+                                (index, amount) -> GTUtility.multiplySaturated(amount, multiplier.getIntValue())))
+                        .right(5)
+                        .top(7)
+                        .overlay(IKey.str("x")));
+    }
+
+    @Override
+    public boolean isWorkingEnabled() {
+        return this.workingEnabled;
+    }
+
+    @Override
+    public void setWorkingEnabled(boolean workingEnabled) {
+        this.workingEnabled = workingEnabled;
+        World world = this.getWorld();
+        if (world != null && !world.isRemote) {
+            writeCustomData(GregtechDataCodes.WORKING_ENABLED, buf -> buf.writeBoolean(workingEnabled));
+        }
+    }
+
+    @Override
+    public boolean hasGhostCircuitInventory() {
+        return true;
+    }
+
+    @Override
+    public void setGhostCircuitConfig(int config) {
+        if (this.circuitInventory.getCircuitValue() == config) {
+            return;
+        }
+
+        this.circuitInventory.setCircuitValue(config);
+        if (!getWorld().isRemote) {
+            markDirty();
+        }
+    }
+
+    @Override
+    public void setGhostCustomStack(@NotNull ItemStack stack) {
+        if (this.circuitInventory == null) {
+            return;
+        }
+        this.circuitInventory.setCustomStack(stack);
+        if (!getWorld().isRemote) {
+            markDirty();
+        }
+    }
+
+    @Override
+    public <T> T getCapability(Capability<T> capability, EnumFacing side) {
+        if (capability == GregtechTileCapabilities.CAPABILITY_CONTROLLABLE) {
+            return GregtechTileCapabilities.CAPABILITY_CONTROLLABLE.cast(this);
+        }
+
+        return super.getCapability(capability, side);
+    }
+
+    @Override
+    public void writeInitialSyncData(PacketBuffer buf) {
+        super.writeInitialSyncData(buf);
+        buf.writeBoolean(this.workingEnabled);
+        buf.writeBoolean(this.preciseMode);
+    }
+
+    @Override
+    public void receiveInitialSyncData(PacketBuffer buf) {
+        super.receiveInitialSyncData(buf);
+        this.workingEnabled = buf.readBoolean();
+        this.preciseMode = buf.readBoolean();
+    }
+
+    @Override
+    protected boolean shouldSerializeInventories() {
+        return false;
+    }
+
+    @Override
+    public NBTTagCompound writeToNBT(NBTTagCompound data) {
+        super.writeToNBT(data);
+        data.setBoolean(WORKING_TAG, this.workingEnabled);
+        data.setBoolean("PreciseMode", this.preciseMode);
+        this.circuitInventory.write(data);
+        return data;
+    }
+
+    @Override
+    public void readFromNBT(NBTTagCompound data) {
+        super.readFromNBT(data);
+        if (data.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) {
+            this.workingEnabled = data.getBoolean(WORKING_TAG);
+        }
+        this.preciseMode = data.getBoolean("PreciseMode");
+        this.circuitInventory.read(data);
+    }
+
+    @Override
+    public final void onDataStickLeftClick(EntityPlayer player, ItemStack dataStick) {
+        NBTTagCompound tag = new NBTTagCompound();
+        tag.setTag("MEInputBus", writeConfigToTag());
+        dataStick.setTagCompound(tag);
+        dataStick.setTranslatableName("gregtech.machine.me.item_import.data_stick.name");
+        player.sendStatusMessage(new TextComponentTranslation("gregtech.machine.me.import_copy_settings"), true);
+    }
+
+    protected NBTTagCompound writeConfigToTag() {
+        NBTTagCompound tag = new NBTTagCompound();
+        NBTTagCompound configStacks = new NBTTagCompound();
+
+        ExportOnlyAESlot[] inventory = getAEHandler().getInventory();
+        tag.setTag("ConfigStacks", configStacks);
+        for (int index = 0; index < CONFIG_SIZE; index++) {
+            ExportOnlyAESlot slot = inventory[index];
+            GenericStack config = slot.getConfig();
+            if (config == null) continue;
+
+            configStacks.setTag(Integer.toString(index), GenericStack.writeTag(config));
+        }
+
+        tag.setByte("GhostCircuit", (byte) this.circuitInventory.getCircuitValue());
+        tag.setInteger(REFRESH_RATE_TAG, getRefreshRate());
+        return tag;
+    }
+
+    @Override
+    public final boolean onDataStickRightClick(EntityPlayer player, ItemStack dataStick) {
+        NBTTagCompound tag = dataStick.getTagCompound();
+        if (tag == null || !tag.hasKey("MEInputBus")) {
+            return false;
+        }
+        readConfigFromTag(tag.getCompoundTag("MEInputBus"));
+        syncME();
+        player.sendStatusMessage(new TextComponentTranslation("gregtech.machine.me.import_paste_settings"), true);
+        return true;
+    }
+
+    protected void readConfigFromTag(NBTTagCompound tag) {
+        if (tag.hasKey("ConfigStacks")) {
+            ExportOnlyAESlot[] inventory = getAEHandler().getInventory();
+            NBTTagCompound configStacks = tag.getCompoundTag("ConfigStacks");
+            for (int index = 0; index < CONFIG_SIZE; index++) {
+                GenericStack stack = null;
+                String key = Integer.toString(index);
+                if (configStacks.hasKey(key)) {
+                    NBTTagCompound configTag = configStacks.getCompoundTag(key);
+                    stack = GenericStack.readTag(configTag);
+                }
+
+                inventory[index].setConfig(stack);
+            }
+        }
+
+        if (tag.hasKey("GhostCircuit")) {
+            this.setGhostCircuitConfig(tag.getByte("GhostCircuit"));
+        }
+
+        if (tag.hasKey(REFRESH_RATE_TAG)) {
+            setRefreshRate(tag.getInteger(REFRESH_RATE_TAG));
+        }
+    }
+
+    /** Portable configuration boundary used by integrations that relocate this ME hatch/bus. */
+    public final NBTTagCompound exportPortableMeConfiguration() {
+        NBTTagCompound tag = writeConfigToTag();
+        tag.setBoolean(WORKING_TAG, workingEnabled);
+        tag.setBoolean("PreciseMode", preciseMode);
+        return tag;
+    }
+
+    /** Restores only the user-facing ME configuration, never live network stock. */
+    public final void importPortableMeConfiguration(NBTTagCompound tag) {
+        readConfigFromTag(tag);
+        if (tag.hasKey(WORKING_TAG, Constants.NBT.TAG_BYTE)) workingEnabled = tag.getBoolean(WORKING_TAG);
+        if (tag.hasKey("PreciseMode", Constants.NBT.TAG_BYTE)) preciseMode = tag.getBoolean("PreciseMode");
+    }
+
+}

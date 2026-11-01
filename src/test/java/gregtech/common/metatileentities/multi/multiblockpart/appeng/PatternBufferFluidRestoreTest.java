@@ -1,5 +1,6 @@
 package gregtech.common.metatileentities.multi.multiblockpart.appeng;
 
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternProvider;
 import gregtech.api.capability.impl.FluidTankList;
 
 import net.minecraft.init.Bootstrap;

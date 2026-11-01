@@ -4,7 +4,7 @@ import net.minecraft.entity.player.InventoryPlayer;
 import net.minecraft.util.EnumHand;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 
-import applygray.common.metatileentities.multi.electric.eco.gui.EcoContainer;
+import applygray.common.metatileentities.multiblock.eco.gui.EcoContainer;
 
 /** Side-neutral lifecycle hook. Client-only Matter Manipulator input is installed by the client subclass. */
 public class ApplyGrayCommonProxy {

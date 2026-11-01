@@ -2,7 +2,7 @@ package applygray.mixins.supergiant;
 
 import applygray.integration.ae2.RecipeMapPatternAccessDisplay;
 
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMERecipeMapPatternProvider;
 
 import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.client.gui.me.patternaccess.PatternContainerEntry;

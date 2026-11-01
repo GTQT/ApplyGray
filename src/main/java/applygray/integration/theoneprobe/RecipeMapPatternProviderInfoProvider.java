@@ -6,8 +6,8 @@ import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.util.TextFormattingUtil;
 import applygray.integration.ae2.recipe.RecipeBinding;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider.PatternBuffer;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternProvider.PatternBuffer;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMERecipeMapPatternProvider;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayer;

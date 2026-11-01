@@ -2,14 +2,13 @@ package applygray.common;
 
 import applygray.mattermanipulator.item.MatterManipulatorItems;
 import applygray.mattermanipulator.item.ManipulatorComponent;
-import applygray.common.metatileentities.multi.electric.eco.EcoRecipes;
+import applygray.common.metatileentities.multiblock.eco.EcoRecipes;
 
 import gregtech.api.GTValues;
 import gregtech.api.recipes.ModHandler;
-import gregtech.api.recipes.RecipeMaps;
 import gregtech.api.util.GTUtility;
 import gregtech.api.util.Mods;
-import gregtech.common.metatileentities.MetaTileEntities;
+
 import static gregtech.api.GTValues.VA;
 import static gregtech.api.GTValues.EV;
 import static gregtech.api.GTValues.HV;

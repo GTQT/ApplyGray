@@ -1,6 +1,6 @@
 package gregtech.api.mui.sync.appeng;
 
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.IConfigurableSlot;
 
 import net.minecraft.network.PacketBuffer;
 import net.minecraftforge.fml.relauncher.Side;

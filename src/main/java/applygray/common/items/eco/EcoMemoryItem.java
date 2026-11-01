@@ -1,7 +1,7 @@
 package applygray.common.items.eco;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.common.metatileentities.multi.electric.eco.EcoTiers;
+import applygray.common.metatileentities.multiblock.eco.EcoTiers;
 
 import gregtech.api.items.metaitem.MetaItem;
 import gregtech.api.items.metaitem.StandardMetaItem;

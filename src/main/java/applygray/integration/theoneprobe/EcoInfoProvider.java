@@ -1,18 +1,18 @@
 package applygray.integration.theoneprobe;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.common.metatileentities.multi.electric.eco.EcoTiers;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoComputer;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoController;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoEnergyStorage;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoMolecularAssembler;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoStorage;
-import applygray.common.metatileentities.multi.multiblockpart.eco.EcoPartRole;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoDrivePart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoEnergyPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoNetworkPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoWorkerPart;
+import applygray.common.metatileentities.multiblock.eco.EcoTiers;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoComputer;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoController;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoEnergyStorage;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoMolecularAssembler;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoStorage;
+import applygray.common.metatileentities.multiblock.eco.part.EcoPartRole;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoDrivePart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoEnergyPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoNetworkPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoWorkerPart;
 
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;

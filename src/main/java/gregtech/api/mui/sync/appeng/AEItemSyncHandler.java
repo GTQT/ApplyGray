@@ -7,9 +7,9 @@ import gregtech.api.util.GTUtility;
 import gregtech.api.util.JEIUtil;
 import gregtech.common.items.MetaItems;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemList;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEItemSlot;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEItemList;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEItemSlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.IConfigurableSlot;
 
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;

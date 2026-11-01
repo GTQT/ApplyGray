@@ -7,7 +7,7 @@ import gregtech.api.metatileentity.multiblock.AbilityInstances;
 import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityAEHostablePart;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityAEHostablePart;
 
 import net.minecraft.client.resources.I18n;
 import net.minecraft.item.ItemStack;

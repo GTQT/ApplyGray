@@ -1,50 +1,52 @@
 package applygray.common;
 
 import applygray.api.ApplyGrayAPI;
-import applygray.ApplyGrayMod;
-import applygray.common.metatileentities.multi.electric.eco.EcoControllerType;
-import applygray.common.metatileentities.multi.electric.eco.EcoTiers;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoComputer;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoEnergyStorage;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoMolecularAssembler;
-import applygray.common.metatileentities.multi.electric.eco.MetaTileEntityEcoStorage;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoDrivePart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoEnergyPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoHyperThreadPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoMemoryPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoNetworkPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoParallelPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoPatternBusPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoThreadPart;
-import applygray.common.metatileentities.multi.multiblockpart.eco.MetaTileEntityEcoWorkerPart;
+import applygray.common.metatileentities.multiblock.eco.EcoControllerType;
+import applygray.common.metatileentities.multiblock.eco.EcoTiers;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoComputer;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoEnergyStorage;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoMolecularAssembler;
+import applygray.common.metatileentities.multiblock.eco.MetaTileEntityEcoStorage;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoDrivePart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoEnergyPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoHyperThreadPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoMemoryPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoNetworkPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoParallelPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoPatternBusPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoThreadPart;
+import applygray.common.metatileentities.multiblock.eco.part.MetaTileEntityEcoWorkerPart;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEGridEnergyHatch;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumAccessHatch;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumFluidStorage;
 import applygray.common.metatileentities.multiblock.storage.MetaTileEntityQuantumItemStorage;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplink;
 import applygray.mattermanipulator.uplink.MetaTileEntityQuantumUplinkHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternProviderProxy;
+
+import gregtech.common.metatileentities.MetaTileEntities;
+
 import meowmel.structurelib.integration.gregtech.CribProxyProviders;
 import net.minecraft.item.ItemStack;
 
 import gregtech.api.GTValues;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEDualExportHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEDualInputHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEGasHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEMufflerHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOreDictBus;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOrePrefixPatternProvider;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternManager;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProvider;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEPatternProviderProxy;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEInputBus;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEInputHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOutputBus;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEOutputHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEStockingBus;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMEStockingHatch;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityPatternProviderMappingSlave;
+import gregtech.api.GregTechAPI;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEDualExportHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEDualInputHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEGasHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEMufflerHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEOreDictBus;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEOrePrefixPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternManager;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMERecipeMapPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEInputBus;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEInputHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEOutputBus;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEOutputHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEStockingBus;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEStockingHatch;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityPatternProviderMappingSlave;
 
 import static gregtech.api.GTValues.VN;
 import static gregtech.common.metatileentities.MetaTileEntities.registerMetaTileEntity;
@@ -121,6 +123,24 @@ public class ApplyGrayMetaTileEntities {
     public static final MetaTileEntityEcoWorkerPart[] ECO_WORKER =
             new MetaTileEntityEcoWorkerPart[EcoTiers.COUNT];
     public static MetaTileEntityEcoPatternBusPart ECO_PATTERN_BUS;
+
+    // ## ME Grid Energy Hatches
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_INPUT_HATCH =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_OUTPUT_HATCH =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_INPUT_HATCH_4A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_OUTPUT_HATCH_4A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_INPUT_HATCH_16A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_OUTPUT_HATCH_16A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_INPUT_HATCH_64A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
+    public static final MetaTileEntityMEGridEnergyHatch[] GRID_ENERGY_OUTPUT_HATCH_64A =
+            new MetaTileEntityMEGridEnergyHatch[GTValues.V.length - 1];
 
     public static void init() {
         // ME Hatches, IDs 0-
@@ -235,37 +255,75 @@ public class ApplyGrayMetaTileEntities {
             ECO_MEMORY[i] = registerMetaTileEntity(210 + i,
                     new MetaTileEntityEcoMemoryPart(ApplyGrayAPI.id("eco.memory." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_THREAD[i] = registerMetaTileEntity(215 + i,
                     new MetaTileEntityEcoThreadPart(ApplyGrayAPI.id("eco.thread." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_HYPER_THREAD[i] = registerMetaTileEntity(220 + i,
                     new MetaTileEntityEcoHyperThreadPart(ApplyGrayAPI.id("eco.hyper_thread." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_PARALLEL[i] = registerMetaTileEntity(225 + i,
                     new MetaTileEntityEcoParallelPart(ApplyGrayAPI.id("eco.parallel." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_DRIVE[i] = registerMetaTileEntity(230 + i,
                     new MetaTileEntityEcoDrivePart(ApplyGrayAPI.id("eco.drive." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_ENERGY[i] = registerMetaTileEntity(235 + i,
                     new MetaTileEntityEcoEnergyPart(ApplyGrayAPI.id("eco.energy." + tier), tier));
         }
+
         for (int i = 0; i < EcoTiers.COUNT; i++) {
             int tier = i + 1;
             ECO_WORKER[i] = registerMetaTileEntity(240 + i,
                     new MetaTileEntityEcoWorkerPart(ApplyGrayAPI.id("eco.worker." + tier), tier));
         }
+
         ECO_PATTERN_BUS = registerMetaTileEntity(245,
                 new MetaTileEntityEcoPatternBusPart(ApplyGrayAPI.id("eco.pattern_bus.1")));
+
+        // Grid Energy Hatches
+        int endPos = GregTechAPI.isHighTier() ? GRID_ENERGY_INPUT_HATCH.length - 1 : Math.min(GRID_ENERGY_INPUT_HATCH.length - 1, GTValues.UEV);
+        for (int tier = 0; tier < endPos; tier++) {
+            String voltageName = VN[tier].toLowerCase();
+
+            GRID_ENERGY_INPUT_HATCH[tier] = registerMetaTileEntity(300,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input." + voltageName),
+                            tier, 2, false));
+            GRID_ENERGY_OUTPUT_HATCH[tier] = registerMetaTileEntity(315,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output." + voltageName),
+                            tier, 2, true));
+            GRID_ENERGY_INPUT_HATCH_4A[tier] = registerMetaTileEntity(330,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_4a." + voltageName),
+                            tier, 4, false));
+            GRID_ENERGY_OUTPUT_HATCH_4A[tier] = registerMetaTileEntity(345,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_4a." + voltageName),
+                            tier, 4, true));
+            GRID_ENERGY_INPUT_HATCH_16A[tier] = registerMetaTileEntity(360,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_16a." + voltageName),
+                            tier, 16, false));
+            GRID_ENERGY_OUTPUT_HATCH_16A[tier] = registerMetaTileEntity(375,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_16a." + voltageName),
+                            tier, 16, true));
+            GRID_ENERGY_INPUT_HATCH_64A[tier] = registerMetaTileEntity(390,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_64a." + voltageName),
+                            tier, 64, false));
+            GRID_ENERGY_OUTPUT_HATCH_64A[tier] = registerMetaTileEntity(405,
+                    new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_64a." + voltageName),
+                            tier, 64, true));
+        }
     }
 }

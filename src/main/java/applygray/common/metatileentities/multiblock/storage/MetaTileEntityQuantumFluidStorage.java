@@ -1,7 +1,7 @@
 package applygray.common.metatileentities.multiblock.storage;
 
-import applygray.common.quantum.QuantumStorageElement;
-import applygray.common.quantum.QuantumStorageHandler;
+import applygray.common.metatileentities.multiblock.storage.quantum.QuantumStorageElement;
+import applygray.common.metatileentities.multiblock.storage.quantum.QuantumStorageHandler;
 
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;

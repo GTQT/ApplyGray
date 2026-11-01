@@ -5,7 +5,7 @@ import applygray.mixins.supergiant.AccessorPatternAccessSupport;
 import applygray.mixins.supergiant.AccessorPatternAccessSupportContainerTracker;
 import applygray.mixins.supergiant.InvokerAEBaseContainer;
 
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMERecipeMapPatternProvider;
 
 import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.container.AEBaseContainer;

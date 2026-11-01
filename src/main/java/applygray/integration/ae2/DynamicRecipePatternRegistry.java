@@ -43,7 +43,7 @@ import gregtech.api.unification.stack.MaterialStack;
 import gregtech.api.unification.stack.UnificationEntry;
 import gregtech.common.items.MetaItems;
 import gregtech.common.items.behaviors.ProgrammableCircuit;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.MetaTileEntityMERecipeMapPatternProvider;
+import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMERecipeMapPatternProvider;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;

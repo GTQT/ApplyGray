@@ -5,9 +5,9 @@ import gregtech.api.capability.impl.GhostCircuitItemStackHandler;
 import gregtech.api.recipes.ingredients.IntCircuitIngredient;
 import gregtech.api.util.GTUtility;
 import gregtech.api.util.JEIUtil;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidList;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.ExportOnlyAEFluidSlot;
-import gregtech.common.metatileentities.multi.multiblockpart.appeng.slot.IConfigurableSlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEFluidList;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.ExportOnlyAEFluidSlot;
+import applygray.common.metatileentities.multiblock.multiblockpart.utils.slot.IConfigurableSlot;
 
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;

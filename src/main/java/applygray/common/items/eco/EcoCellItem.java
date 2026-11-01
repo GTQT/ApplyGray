@@ -11,7 +11,7 @@ import ae2.util.ConfigInventory;
 import gregtech.api.items.metaitem.MetaItem;
 import gregtech.api.items.metaitem.StandardMetaItem;
 import applygray.api.ApplyGrayAPI;
-import applygray.common.metatileentities.multi.electric.eco.EcoTiers;
+import applygray.common.metatileentities.multiblock.eco.EcoTiers;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.world.World;
