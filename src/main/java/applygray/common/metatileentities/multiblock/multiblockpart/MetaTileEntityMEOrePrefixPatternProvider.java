@@ -31,11 +31,11 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.items.IItemHandler;
 import net.minecraftforge.items.ItemStackHandler;
 
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.crafting.PatternDetailsHelper;
-import ae2.api.stacks.KeyCounter;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
@@ -67,14 +67,28 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import static applygray.api.util.AE2PatternCompat.*;
 
+/**
+ * 按矿辞前缀生成虚拟配方的样板总成。
+ *
+ * <p>
+ * 旧版只支持「单输入前缀 × 单输出前缀」的笛卡尔积，无法表达「锭+粉→板」这类多对多关系。
+ * 现在一条规则就是一个 {@link OrePrefixMapping}：输入组与输出组同属一个样板，
+ * 组内任一条目在该材料上不可用时整条规则跳过，避免生成残缺样板。
+ */
 public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPatternRegistrar
         implements IMEPatternProviderPart {
 
-    ArrayList<PrefixEntry> inputPrefixes = new ArrayList<>();
-    ArrayList<PrefixEntry> outputPrefixes = new ArrayList<>();
+    /** 魔法前缀：代表材料自身的流体，数量单位为 mB。 */
+    public static final String FLUID_PREFIX = "fluid";
+    /** AE 处理样板单侧的容量，组大小以此为上限。 */
+    public static final int MAX_GROUP_SIZE = 9;
+    public static final int MAX_OUTPUT_GROUP_SIZE = 3;
+
+    List<OrePrefixMapping> mappings = new ArrayList<>();
     ArrayList<String> blackList = new ArrayList<>();
     ArrayList<String> whiteTagList = new ArrayList<>();
     ArrayList<String> blackTagList = new ArrayList<>();
@@ -84,6 +98,8 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     public MetaTileEntityMEOrePrefixPatternProvider(ResourceLocation metaTileEntityId, int tier) {
         super(metaTileEntityId, tier);
     }
+
+    // ## 序列化
 
     public static String listToString(List<String> list) {
         if (list == null || list.isEmpty()) {
@@ -95,8 +111,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     public static List<String> stringToList(String str) {
         List<String> result = new ArrayList<>();
         if (str != null && !str.trim().isEmpty()) {
-            String[] parts = str.split(",");
-            for (String part : parts) {
+            for (String part : str.split(",")) {
                 String trimmed = part.trim();
                 if (!trimmed.isEmpty()) {
                     result.add(trimmed);
@@ -106,27 +121,70 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         return result;
     }
 
-    public static String prefixEntriesToString(List<PrefixEntry> entries) {
+    public static String groupToText(List<PrefixEntry> entries) {
         if (entries == null || entries.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < entries.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(entries.get(i).prefix).append(":").append(entries.get(i).amount);
+        for (PrefixEntry entry : entries) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(entry.prefix).append(':').append(entry.amount);
         }
         return sb.toString();
     }
 
-    public static List<PrefixEntry> stringToPrefixEntries(String str) {
+    /** 兼容旧调用名；数量可省略，解析失败不再抛异常。 */
+    public static String prefixEntriesToString(List<PrefixEntry> entries) {
+        return groupToText(entries);
+    }
+
+    public static List<PrefixEntry> parseGroup(String str) {
         List<PrefixEntry> result = new ArrayList<>();
-        if (str != null && !str.trim().isEmpty()) {
-            String[] parts = str.split(",");
-            for (String part : parts) {
-                String trimmed = part.trim();
-                if (trimmed.isEmpty()) continue;
-                String[] pair = trimmed.split(":");
-                String prefix = pair[0];
-                int amount = pair.length > 1 ? Math.max(1, Integer.parseInt(pair[1])) : 1;
-                result.add(new PrefixEntry(prefix, amount));
+        if (str == null || str.trim().isEmpty()) return result;
+        for (String part : str.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            String prefix = trimmed;
+            int amount = 1;
+            int colon = trimmed.indexOf(':');
+            if (colon >= 0) {
+                prefix = trimmed.substring(0, colon).trim();
+                String amountText = trimmed.substring(colon + 1).trim();
+                if (!amountText.isEmpty()) {
+                    try {
+                        amount = Math.max(1, Integer.parseInt(amountText));
+                    } catch (NumberFormatException e) {
+                        // 数量手输错误时按 1 处理，不要因此丢掉整条规则
+                        amount = 1;
+                    }
+                }
+            }
+            if (prefix.isEmpty()) continue;
+            result.add(new PrefixEntry(prefix, amount));
+        }
+        return result;
+    }
+
+    public static List<PrefixEntry> stringToPrefixEntries(String str) {
+        return parseGroup(str);
+    }
+
+    public static String mappingsToString(List<OrePrefixMapping> mappings) {
+        if (mappings == null || mappings.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (OrePrefixMapping mapping : mappings) {
+            if (mapping == null || mapping.isEmpty()) continue;
+            if (sb.length() > 0) sb.append(';');
+            sb.append(mapping.toText());
+        }
+        return sb.toString();
+    }
+
+    public static List<OrePrefixMapping> stringToMappings(String str) {
+        List<OrePrefixMapping> result = new ArrayList<>();
+        if (str == null || str.trim().isEmpty()) return result;
+        for (String part : str.split(";")) {
+            OrePrefixMapping mapping = OrePrefixMapping.parse(part);
+            if (mapping != null) {
+                result.add(mapping);
             }
         }
         return result;
@@ -135,11 +193,6 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     @Override
     public MetaTileEntity createMetaTileEntity(IGregTechTileEntity tileEntity) {
         return new MetaTileEntityMEOrePrefixPatternProvider(metaTileEntityId, getTier());
-    }
-
-    @Override
-    public void update() {
-        super.update();
     }
 
     @Override
@@ -156,9 +209,7 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         super.writeToNBT(data);
         data.setTag("ExtraInput", this.extraInput.serializeNBT());
         data.setTag("ExtraOutput", this.extraOutput.serializeNBT());
-
-        data.setString("inputPrefixes", prefixEntriesToString(inputPrefixes));
-        data.setString("outputPrefixes", prefixEntriesToString(outputPrefixes));
+        data.setString("Mappings", mappingsToString(mappings));
 
         data.setInteger("blackListSize", blackList.size());
         for (int i = 0; i < blackList.size(); i++) {
@@ -182,13 +233,20 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         this.extraInput.deserializeNBT(data.getCompoundTag("ExtraInput"));
         this.extraOutput.deserializeNBT(data.getCompoundTag("ExtraOutput"));
 
-        List<PrefixEntry> loaded = stringToPrefixEntries(data.getString("inputPrefixes"));
-        inputPrefixes.clear();
-        if (loaded != null) inputPrefixes.addAll(loaded);
-
-        loaded = stringToPrefixEntries(data.getString("outputPrefixes"));
-        outputPrefixes.clear();
-        if (loaded != null) outputPrefixes.addAll(loaded);
+        mappings.clear();
+        String mappingText = data.getString("Mappings");
+        if (!mappingText.trim().isEmpty()) {
+            mappings.addAll(stringToMappings(mappingText));
+        } else {
+            // 旧存档只有两个前缀列表，按旧版笛卡尔积语义迁移成规则
+            List<PrefixEntry> legacyInputs = parseGroup(data.getString("inputPrefixes"));
+            List<PrefixEntry> legacyOutputs = parseGroup(data.getString("outputPrefixes"));
+            for (PrefixEntry input : legacyInputs) {
+                for (PrefixEntry output : legacyOutputs) {
+                    mappings.add(new OrePrefixMapping(List.of(input), List.of(output)));
+                }
+            }
+        }
 
         blackList.clear();
         int size = data.getInteger("blackListSize");
@@ -207,12 +265,14 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         }
     }
 
+    // ## 样板生成
+
     @Override
     public void setPatternDetails() {
         patternDetails = new ArrayList<>();
-        List<ItemStack> patternSlot = createPatterns();
-        for (int i = 0; i < patternSlot.size(); i++) {
-            ItemStack pattern = patternSlot.get(i);
+        List<ItemStack> patterns = createPatterns();
+        for (int i = 0; i < patterns.size(); i++) {
+            ItemStack pattern = patterns.get(i);
             if (pattern.isEmpty()) {
                 patternDetails.add(i, null);
                 continue;
@@ -229,13 +289,10 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     @Override
     public List<ItemStack> createPatterns() {
         ArrayList<ItemStack> patterns = new ArrayList<>();
-
-        // 1. 基础验证
-        if (inputPrefixes.isEmpty() || outputPrefixes.isEmpty()) {
+        if (mappings.isEmpty()) {
             return patterns;
         }
 
-        // 2. 材料过滤
         List<MaterialFlag> whiteTag = MaterialFlag.getFlagListByName(whiteTagList);
         List<MaterialFlag> blackTag = MaterialFlag.getFlagListByName(blackTagList);
 
@@ -243,93 +300,52 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
             if (blackList.contains(material.toString())) continue;
             if (!MaterialFlag.checkMaterialHasFlag(material, whiteTag, blackTag)) continue;
 
-            // 3. 笛卡尔积：遍历所有输入输出前缀条目
-            for (PrefixEntry inputEntry : inputPrefixes) {
-                for (PrefixEntry outputEntry : outputPrefixes) {
-                    String inPrefix = inputEntry.prefix;
-                    String outPrefix = outputEntry.prefix;
-                    boolean isFluidPattern = "fluid".equals(inPrefix) || "fluid".equals(outPrefix);
+            for (OrePrefixMapping mapping : mappings) {
+                List<ItemStack> inputs = resolveGroup(mapping.inputs, material);
+                if (inputs == null) continue;
+                List<ItemStack> outputs = resolveGroup(mapping.outputs, material);
+                if (outputs == null) continue;
 
-                    ItemStack inputStack;
-                    ItemStack outputStack;
-
-                    if ("fluid".equals(inPrefix)) {
-                        if (!material.hasFluid()) continue;
-                        FluidStack fluid = material.getFluid(inputEntry.amount);
-                        inputStack = fluid == null ? ItemStack.EMPTY : toFluidDrop(fluid);
-                    } else {
-                        OrePrefix orePrefix = OrePrefix.getPrefix(inPrefix);
-                        if (orePrefix == null) continue;
-                        inputStack = OreDictUnifier.get(orePrefix, material, inputEntry.amount);
-                    }
-
-                    if ("fluid".equals(outPrefix)) {
-                        if (!material.hasFluid()) continue;
-                        FluidStack fluid = material.getFluid(outputEntry.amount);
-                        outputStack = fluid == null ? ItemStack.EMPTY : toFluidDrop(fluid);
-                    } else {
-                        OrePrefix orePrefix = OrePrefix.getPrefix(outPrefix);
-                        if (orePrefix == null) continue;
-                        outputStack = OreDictUnifier.get(orePrefix, material, outputEntry.amount);
-                    }
-
-                    if (inputStack.isEmpty() || outputStack.isEmpty()) continue;
-
-                    patterns.add(virtualCraftingPattern(inputStack, outputStack, true, isFluidPattern));
+                ItemStack[] inputArray = inputs.toArray(new ItemStack[0]);
+                ItemStack pattern = createProcessingPattern(
+                        inputArray,
+                        outputs.toArray(new ItemStack[0]),
+                        false,
+                        containsFluid(inputArray));
+                if (!pattern.isEmpty()) {
+                    patterns.add(pattern);
                 }
             }
         }
         return patterns;
     }
 
-    private ItemStack virtualCraftingPattern(
-            ItemStack input,
-            ItemStack output,
-            boolean substitute,
-            boolean isFluidPattern
-    ) {
-        // 1. 准备槽位 (AE2标准布局)
-        ItemStack[] inputs = new ItemStack[9];
-        ItemStack[] outputs = new ItemStack[3];
-
-        // 1.1 主槽位
-        inputs[0] = input.copy();
-        outputs[0] = output.copy();
-
-        // Extra item slots are local push metadata only; do not encode them into AE patterns.
-
-        // 2. 无条件执行决策
-        return createProcessingPattern(inputs, outputs, substitute, isFluidPattern);
-    }
-
-    @Override
-    protected KeyCounter[] withProgrammableExtraInputs(KeyCounter[] inputHolder) {
-        return appendProgrammableExtraInputs(inputHolder, extraInput);
-    }
-
-    @Override
-    public void onRemoval() {
-        super.onRemoval();
-    }
-
-    // ==================== IMEPatternProviderPart ====================
-
-    @Override
+    /**
+     * 把一组前缀条目解析成实际堆栈；任一条目在该材料上不存在就返回 null，整条规则跳过。
+     */
     @Nullable
-    public net.minecraftforge.items.IItemHandler getPatternSlot() {
-        return null;
+    private static List<ItemStack> resolveGroup(List<PrefixEntry> entries, Material material) {
+        if (entries.isEmpty()) return null;
+        List<ItemStack> result = new ArrayList<>(entries.size());
+        for (PrefixEntry entry : entries) {
+            ItemStack stack;
+            if (FLUID_PREFIX.equals(entry.prefix)) {
+                if (!material.hasFluid()) return null;
+                FluidStack fluid = material.getFluid(entry.amount);
+                if (fluid == null || fluid.amount <= 0) return null;
+                stack = toFluidDrop(fluid);
+            } else {
+                OrePrefix prefix = OrePrefix.getPrefix(entry.prefix);
+                if (prefix == null) return null;
+                stack = OreDictUnifier.get(prefix, material, entry.amount);
+            }
+            if (stack == null || stack.isEmpty()) return null;
+            result.add(stack);
+        }
+        return result;
     }
 
-    @Override
-    public String getShowName() {
-        return getMetaFullName();
-    }
-
-    @Override
-    @Nullable
-    public MultiblockControllerBase getController() {
-        return super.getController();
-    }
+    // ## UI
 
     @Override
     public boolean usesMui2() {
@@ -339,574 +355,210 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     @Override
     public ModularPanel buildUI(PosGuiData guiData, PanelSyncManager guiSyncManager, UISettings settings) {
         int backgroundWidth = 9 * 18 + 18 + 14 + 5 + 18;
-        int backgroundHeight = 18 + 18 * 7 + 94;
+        int backgroundHeight = 18 + 18 * 8 + 94;
         guiSyncManager.registerSlotGroup("item_inv", extraInput.getSlots());
+        EntityPlayer player = guiSyncManager.getPlayer();
 
-        List<List<IWidget>> widgetsPattern = new ArrayList<>();
-        widgetsPattern.add(new ArrayList<>());
+        List<List<IWidget>> extraSlots = new ArrayList<>();
+        extraSlots.add(new ArrayList<>());
         for (int i = 0; i < extraInput.getSlots(); i++) {
-            widgetsPattern.get(0)
+            extraSlots.get(0)
                     .add(new ItemSlot()
                             .slot(new ModularSlot(extraInput, i)
                                     .slotGroup("item_inv")
-                                    .accessibility(true, true)
-                            )
-                            .background(GTGuiTextures.SLOT)
-                    );
+                                    .accessibility(true, true))
+                            .background(GTGuiTextures.SLOT));
         }
-
-        widgetsPattern.add(new ArrayList<>());
+        extraSlots.add(new ArrayList<>());
         for (int i = 0; i < extraOutput.getSlots(); i++) {
-            widgetsPattern.get(1)
+            extraSlots.get(1)
                     .add(new ItemSlot()
                             .slot(new ModularSlot(extraOutput, i)
                                     .slotGroup("item_inv")
-                                    .accessibility(true, true)
-                            )
-                            .background(GTGuiTextures.SLOT)
-                    );
+                                    .accessibility(true, true))
+                            .background(GTGuiTextures.SLOT));
         }
 
-        // 1. 创建同步值
-        StringSyncValue inputPrefixesValue = new StringSyncValue(
-                () -> prefixEntriesToString(inputPrefixes),
+        StringSyncValue mappingsValue = new StringSyncValue(
+                () -> mappingsToString(mappings),
                 str -> {
                     if (str != null) {
-                        List<PrefixEntry> newList = stringToPrefixEntries(str);
-                        inputPrefixes.clear();
-                        inputPrefixes.addAll(newList);
+                        List<OrePrefixMapping> parsed = stringToMappings(str);
+                        mappings.clear();
+                        mappings.addAll(parsed);
+                        // 规则变了就重推，否则 AE 端要等到下次网络刷新
+                        setNeedPatternSync(true);
                     }
-                }
-        );
+                });
+        guiSyncManager.syncValue("ore_prefix_mappings", mappingsValue);
 
-        StringSyncValue outputPrefixesValue = new StringSyncValue(
-                () -> prefixEntriesToString(outputPrefixes),
-                str -> {
-                    if (str != null) {
-                        List<PrefixEntry> newList = stringToPrefixEntries(str);
-                        outputPrefixes.clear();
-                        outputPrefixes.addAll(newList);
-                    }
-                }
-        );
-
-        // 注册同步值
-        guiSyncManager.syncValue("inputPrefixes", inputPrefixesValue);
-        guiSyncManager.syncValue("outputPrefixes", outputPrefixesValue);
-
-        List<List<IWidget>> weightText = new ArrayList<>();
-
-        // ★ 输入矿辞管理行 ★
-        weightText.add(new ArrayList<>());
-
-        TextFieldWidget inputPrefixTextField = new TextFieldWidget()
-                .widthRel(0.28f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .background(GTGuiTextures.DISPLAY);
-
-        weightText.get(0).add(inputPrefixTextField);
-        weightText.get(0).add(IKey.str(" x ").asWidget()
-                .widthRel(0.05f)
-                .height(20));
-
-        TextFieldWidget inputAmountTextField = new TextFieldWidget()
-                .widthRel(0.12f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .setValidator(str -> {
-                    if (str.isEmpty()) return "1";
-                    try {
-                        int num = Integer.parseInt(str);
-                        return String.valueOf(Math.max(1, num));
-                    } catch (NumberFormatException e) { return "1"; }
-                })
-                .background(GTGuiTextures.DISPLAY);
-        weightText.get(0).add(inputAmountTextField);
-
-        // Add 按钮
-        weightText.get(0).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String prefix = inputPrefixTextField.getText().trim();
-                    int amount;
-                    try {
-                        amount = Math.max(1, Integer.parseInt(inputAmountTextField.getText()));
-                    } catch (NumberFormatException e) { amount = 1; }
-                    if (!prefix.isEmpty()) {
-                        inputPrefixes.removeIf(e -> e.prefix.equals(prefix));
-                        inputPrefixes.add(new PrefixEntry(prefix, amount));
-                        inputPrefixesValue.setValue(prefixEntriesToString(inputPrefixes));
-                        guiSyncManager.getPlayer().sendMessage(
-                                new TextComponentTranslation(prefix + " x" + amount + " 已添加到输入矿辞"));
-                        inputPrefixTextField.setText("");
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.PLUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("添加输入矿辞"))));
-
-        // Remove 按钮
-        weightText.get(0).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = inputPrefixTextField.getText().trim();
-                    if (!value.isEmpty()) {
-                        inputPrefixes.removeIf(e -> e.prefix.equals(value));
-                        inputPrefixesValue.setValue(prefixEntriesToString(inputPrefixes));
-                        guiSyncManager.getPlayer().sendMessage(
-                                new TextComponentTranslation(value + " 已从输入矿辞移除"));
-                        inputPrefixTextField.setText("");
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.MINUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("移除输入矿辞"))));
-
-        // ★ 输出矿辞管理行 ★
-        weightText.add(new ArrayList<>());
-
-        TextFieldWidget outputPrefixTextField = new TextFieldWidget()
-                .widthRel(0.28f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .background(GTGuiTextures.DISPLAY);
-
-        weightText.get(1).add(outputPrefixTextField);
-        weightText.get(1).add(IKey.str(" x ").asWidget()
-                .widthRel(0.05f)
-                .height(20));
-
-        TextFieldWidget outputAmountTextField = new TextFieldWidget()
-                .widthRel(0.12f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .setValidator(str -> {
-                    if (str.isEmpty()) return "1";
-                    try {
-                        int num = Integer.parseInt(str);
-                        return String.valueOf(Math.max(1, num));
-                    } catch (NumberFormatException e) { return "1"; }
-                })
-                .background(GTGuiTextures.DISPLAY);
-        weightText.get(1).add(outputAmountTextField);
-
-        // Add 按钮
-        weightText.get(1).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String prefix = outputPrefixTextField.getText().trim();
-                    int amount;
-                    try {
-                        amount = Math.max(1, Integer.parseInt(outputAmountTextField.getText()));
-                    } catch (NumberFormatException e) { amount = 1; }
-                    if (!prefix.isEmpty()) {
-                        outputPrefixes.removeIf(e -> e.prefix.equals(prefix));
-                        outputPrefixes.add(new PrefixEntry(prefix, amount));
-                        outputPrefixesValue.setValue(prefixEntriesToString(outputPrefixes));
-                        guiSyncManager.getPlayer().sendMessage(
-                                new TextComponentTranslation(prefix + " x" + amount + " 已添加到输出矿辞"));
-                        outputPrefixTextField.setText("");
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.PLUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("添加输出矿辞"))));
-
-        // Remove 按钮
-        weightText.get(1).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = outputPrefixTextField.getText().trim();
-                    if (!value.isEmpty()) {
-                        outputPrefixes.removeIf(e -> e.prefix.equals(value));
-                        outputPrefixesValue.setValue(prefixEntriesToString(outputPrefixes));
-                        guiSyncManager.getPlayer().sendMessage(
-                                new TextComponentTranslation(value + " 已从输出矿辞移除"));
-                        outputPrefixTextField.setText("");
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.MINUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("移除输出矿辞"))));
-
-        // 在初始化时创建同步值
         StringSyncValue blackListValue = new StringSyncValue(
                 () -> listToString(blackList),
-                str -> {
-                    if (str != null) {
-                        List<String> newList = stringToList(str);
-                        blackList.clear();
-                        blackList.addAll(newList);
-                    }
-                }
-        );
-
+                this::applyBlackList);
         StringSyncValue whiteTagListValue = new StringSyncValue(
                 () -> listToString(whiteTagList),
-                str -> {
-                    if (str != null) {
-                        List<String> newList = stringToList(str);
-                        whiteTagList.clear();
-                        whiteTagList.addAll(newList);
-                    }
-                }
-        );
-
+                this::applyWhiteTags);
         StringSyncValue blackTagListValue = new StringSyncValue(
                 () -> listToString(blackTagList),
-                str -> {
-                    if (str != null) {
-                        List<String> newList = stringToList(str);
-                        blackTagList.clear();
-                        blackTagList.addAll(newList);
-                    }
-                }
-        );
-
-        // 注册到同步管理器
+                this::applyBlackTags);
         guiSyncManager.syncValue("blackList", blackListValue);
         guiSyncManager.syncValue("whiteTagList", whiteTagListValue);
         guiSyncManager.syncValue("blackTagList", blackTagListValue);
 
-        // ★ 第三行：黑名单管理行 ★
-        weightText.add(new ArrayList<>());
-
-        // 创建文本框并保存引用
-        TextFieldWidget blackListTextField = new TextFieldWidget()
-                .widthRel(0.4f)
-                .height(20)
+        // ### 映射编辑页
+        TextFieldWidget inputGroupField = new TextFieldWidget()
+                .width(168)
+                .height(18)
                 .setTextColor(Color.WHITE.darker(1))
-                .background(GTGuiTextures.DISPLAY);
+                .background(GTGuiTextures.DISPLAY)
+                .tooltip(t -> t.addLine(IKey.lang(key("ui.hint.format"))));
 
-        weightText.get(2).add(blackListTextField);
+        TextFieldWidget outputGroupField = new TextFieldWidget()
+                .width(168)
+                .height(18)
+                .setTextColor(Color.WHITE.darker(1))
+                .background(GTGuiTextures.DISPLAY)
+                .tooltip(t -> t.addLine(IKey.lang(key("ui.hint.format"))));
 
-        // 添加到黑名单按钮
-        weightText.get(2).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = blackListTextField.getText().trim();
-                    if (!value.isEmpty() && !blackList.contains(value)) {
-                        // 添加并同步
-                        blackList.add(value);
-                        blackListValue.setValue(listToString(blackList));
+        Flow mappingPage = Flow.column()
+                .top(0)
+                .widthRel(1f)
+                .leftRel(0.5f)
+                .child(new Grid()
+                        .height(36)
+                        .leftRel(0.5f)
+                        .widthRel(1.0f)
+                        .grid(extraSlots))
+                .child(new TextWidget<>(IKey.lang(key("ui.group.input"))).pos(10, 38))
+                .child(inputGroupField.pos(10, 50))
+                .child(new ButtonWidget<>()
+                        .size(18, 18)
+                        .overlay(GTGuiTextures.PLUS)
+                        .tooltip(t -> t.addLine(IKey.lang(key("ui.button.add"))))
+                        .onMousePressed(b -> addMapping(player, inputGroupField, outputGroupField, mappingsValue))
+                        .pos(182, 50))
+                .child(new TextWidget<>(IKey.lang(key("ui.group.output"))).pos(10, 70))
+                .child(outputGroupField.pos(10, 82))
+                .child(new ButtonWidget<>()
+                        .size(18, 18)
+                        .overlay(GTGuiTextures.MINUS)
+                        .tooltip(t -> t.addLine(IKey.lang(key("ui.button.remove"))))
+                        .onMousePressed(b -> removeMapping(player, inputGroupField, outputGroupField, mappingsValue))
+                        .pos(182, 82))
+                .child(new ScrollableTextWidget()
+                        .top(104)
+                        .height(40)
+                        .autoUpdate(true)
+                        .leftRel(0.5f)
+                        .widthRel(0.94f)
+                        .alignment(Alignment.TopLeft)
+                        .textBuilder(text -> {
+                            text.addLine(IKey.lang(key("ui.list.header")));
+                            if (mappings.isEmpty()) {
+                                text.addLine(IKey.lang(key("ui.list.empty")));
+                                return;
+                            }
+                            for (int i = 0; i < mappings.size(); i++) {
+                                text.addLine((i + 1) + ". " + mappings.get(i).toText());
+                            }
+                        }));
 
-                        guiSyncManager.getPlayer().sendMessage(new TextComponentTranslation(value + "已添加到黑名单"));
-                        blackListTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.PLUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("添加到黑名单"))));
+        // ### 过滤页
+        List<String> filterLabelKeys = List.of("ui.filter.blacklist", "ui.filter.white", "ui.filter.black");
+        List<List<String>> filterTargets = List.of(blackList, whiteTagList, blackTagList);
+        List<StringSyncValue> filterValues = List.of(blackListValue, whiteTagListValue, blackTagListValue);
 
-        // 从黑名单移除按钮
-        weightText.get(2).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = blackListTextField.getText().trim();
-                    if (!value.isEmpty() && blackList.contains(value)) {
-                        // 移除并同步
-                        blackList.remove(value);
-                        blackListValue.setValue(listToString(blackList));
+        Flow filterPage = Flow.column()
+                .top(0)
+                .widthRel(1f)
+                .leftRel(0.5f);
+        for (int i = 0; i < filterLabelKeys.size(); i++) {
+            int y = 4 + i * 36;
+            String labelKey = filterLabelKeys.get(i);
+            List<String> target = filterTargets.get(i);
+            StringSyncValue value = filterValues.get(i);
 
-                        guiSyncManager.getPlayer()
-                                .sendMessage(new TextComponentTranslation(value + "已从黑名单中移除"));
-                        blackListTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.MINUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("从黑名单移除"))));
-
-        // 显示当前黑名单按钮
-        weightText.get(2).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    if (blackList.isEmpty()) {
-                        guiSyncManager.getPlayer().sendMessage(new TextComponentTranslation("黑名单列表为空"));
-                        return true;
-                    }
-
-                    StringBuilder sb = new StringBuilder("黑名单列表：");
-                    for (int i = 0; i < blackList.size(); i++) {
-                        sb.append(blackList.get(i));
-                        if (i < blackList.size() - 1) {
-                            sb.append(", ");
+            TextFieldWidget field = new TextFieldWidget()
+                    .width(150)
+                    .height(18)
+                    .setTextColor(Color.WHITE.darker(1))
+                    .background(GTGuiTextures.DISPLAY);
+            filterPage.child(new TextWidget<>(IKey.lang(key(labelKey))).pos(10, y));
+            filterPage.child(field.pos(10, y + 12));
+            filterPage.child(new ButtonWidget<>()
+                    .size(18, 18)
+                    .overlay(GTGuiTextures.PLUS)
+                    .tooltip(t -> t.addLine(IKey.lang(key("ui.button.add"))))
+                    .onMousePressed(b -> {
+                        String entry = field.getText().trim();
+                        if (!entry.isEmpty() && !target.contains(entry)) {
+                            target.add(entry);
+                            value.setValue(listToString(target));
+                            message(player, "ui.msg.added", entry);
+                            field.setText("");
                         }
-                    }
-                    guiSyncManager.getPlayer().sendMessage(new TextComponentTranslation(sb.toString()));
+                        return true;
+                    })
+                    .pos(166, y + 12));
+            filterPage.child(new ButtonWidget<>()
+                    .size(18, 18)
+                    .overlay(GTGuiTextures.MINUS)
+                    .tooltip(t -> t.addLine(IKey.lang(key("ui.button.remove"))))
+                    .onMousePressed(b -> {
+                        String entry = field.getText().trim();
+                        if (!entry.isEmpty() && target.remove(entry)) {
+                            value.setValue(listToString(target));
+                            message(player, "ui.msg.removed", entry);
+                            field.setText("");
+                        }
+                        return true;
+                    })
+                    .pos(184, y + 12));
+        }
+        filterPage.child(new ScrollableTextWidget()
+                .top(112)
+                .height(36)
+                .autoUpdate(true)
+                .leftRel(0.5f)
+                .widthRel(0.94f)
+                .alignment(Alignment.TopLeft)
+                .textBuilder(text -> {
+                    text.addLine(I18n.format(key("ui.filter.white")) + ": " + listToString(whiteTagList));
+                    text.addLine(I18n.format(key("ui.filter.black")) + ": " + listToString(blackTagList));
+                    text.addLine(I18n.format(key("ui.filter.blacklist")) + ": " + listToString(blackList));
+                }));
 
-                    return true;
-                })
-                .overlay(GTGuiTextures.BUTTON_BLACKLIST)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("显示当前黑名单列表"))));
-
-        List<List<IWidget>> weightTagList = new ArrayList<>();
-        // ★ 第一行：白标签管理行 ★
-        weightTagList.add(new ArrayList<>());
-
-        // 白标签文本框
-        TextFieldWidget whiteTagTextField = new TextFieldWidget()
-                .widthRel(0.4f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .background(GTGuiTextures.DISPLAY);
-
-        weightTagList.get(0).add(whiteTagTextField);
-
-        // 添加到白标签按钮
-        weightTagList.get(0).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = whiteTagTextField.getText().trim();
-                    if (!value.isEmpty() && !whiteTagList.contains(value)) {
-                        // 添加并同步
-                        whiteTagList.add(value);
-                        whiteTagListValue.setValue(listToString(whiteTagList));
-
-                        guiSyncManager.getPlayer().sendMessage(new TextComponentTranslation(value + "已添加到白标签"));
-                        whiteTagTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.PLUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("添加到白标签"))));
-
-        // 从白标签移除按钮
-        weightTagList.get(0).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = whiteTagTextField.getText().trim();
-                    if (!value.isEmpty() && whiteTagList.contains(value)) {
-                        // 移除并同步
-                        whiteTagList.remove(value);
-                        whiteTagListValue.setValue(listToString(whiteTagList));
-
-                        guiSyncManager.getPlayer()
-                                .sendMessage(new TextComponentTranslation(value + "已从白标签中移除"));
-                        whiteTagTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.MINUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("从白标签移除"))));
-
-        // ★ 第二行：黑标签管理行 ★
-        weightTagList.add(new ArrayList<>());
-
-        // 黑标签文本框
-        TextFieldWidget blackTagTextField = new TextFieldWidget()
-                .widthRel(0.4f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .background(GTGuiTextures.DISPLAY);
-
-        weightTagList.get(1).add(blackTagTextField);
-
-        // 添加到黑标签按钮
-        weightTagList.get(1).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = blackTagTextField.getText().trim();
-                    if (!value.isEmpty() && !blackTagList.contains(value)) {
-                        // 添加并同步
-                        blackTagList.add(value);
-                        blackTagListValue.setValue(listToString(blackTagList));
-
-                        guiSyncManager.getPlayer().sendMessage(new TextComponentTranslation(value + "已添加到黑标签"));
-                        blackTagTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.PLUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("添加到黑标签"))));
-
-        // 从黑标签移除按钮
-        weightTagList.get(1).add(new ButtonWidget<>()
-                .size(18, 18)
-                .onMousePressed(mouseButton -> {
-                    String value = blackTagTextField.getText().trim();
-                    if (!value.isEmpty() && blackTagList.contains(value)) {
-                        // 移除并同步
-                        blackTagList.remove(value);
-                        blackTagListValue.setValue(listToString(blackTagList));
-
-                        guiSyncManager.getPlayer()
-                                .sendMessage(new TextComponentTranslation(value + "已从黑标签中移除"));
-                        blackTagTextField.setText(""); // 清空文本框
-                    }
-                    return true;
-                })
-                .overlay(GTGuiTextures.MINUS)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("从黑标签移除"))));
-
-        // 创建用于显示的值（带前缀）和用于存储的值（纯数字）
+        // ### 网络代理页
         StringSyncValue displayXValue = new StringSyncValue(
-                () -> "X:" + AEProxy_pos.getX(),  // 显示时带前缀
-                str -> {
-                    // 移除前缀并解析
-                    if (str.startsWith("X:")) {
-                        str = str.substring(2);
-                    } else if (str.startsWith("x:")) {
-                        str = str.substring(2);
-                    }
-                    try {
-                        AEProxy_pos = new BlockPos(Integer.parseInt(str.trim()), AEProxy_pos.getY(),
-                                AEProxy_pos.getZ());
-                    } catch (NumberFormatException e) {
-                        // 解析失败时保持原值
-                        System.err.println("Invalid X coordinate: " + str);
-                    }
-                }
-        );
-
+                () -> "X:" + AEProxy_pos.getX(),
+                str -> applyProxyCoordinate(str, 'X'));
         StringSyncValue displayYValue = new StringSyncValue(
                 () -> "Y:" + AEProxy_pos.getY(),
-                str -> {
-                    if (str.startsWith("Y:")) {
-                        str = str.substring(2);
-                    } else if (str.startsWith("y:")) {
-                        str = str.substring(2);
-                    }
-                    try {
-                        AEProxy_pos = new BlockPos(AEProxy_pos.getX(), Integer.parseInt(str.trim()),
-                                AEProxy_pos.getZ());
-                    } catch (NumberFormatException e) {
-                        System.err.println("Invalid Y coordinate: " + str);
-                    }
-                }
-        );
-
+                str -> applyProxyCoordinate(str, 'Y'));
         StringSyncValue displayZValue = new StringSyncValue(
                 () -> "Z:" + AEProxy_pos.getZ(),
-                str -> {
-                    if (str.startsWith("Z:")) {
-                        str = str.substring(2);
-                    } else if (str.startsWith("z:")) {
-                        str = str.substring(2);
-                    }
-                    try {
-                        AEProxy_pos = new BlockPos(AEProxy_pos.getX(), AEProxy_pos.getY(),
-                                Integer.parseInt(str.trim()));
-                    } catch (NumberFormatException e) {
-                        System.err.println("Invalid Z coordinate: " + str);
-                    }
-                }
-        );
+                str -> applyProxyCoordinate(str, 'Z'));
 
-        // 注册同步值
         BooleanSyncValue useProxyStateValue = new BooleanSyncValue(() -> useProxy, val -> useProxy = val);
         guiSyncManager.syncValue("useProxyStateValue", useProxyStateValue);
 
-        List<List<IWidget>> weightsPos = new ArrayList<>();
-        List<IWidget> row = new ArrayList<>();
-
-        // 添加开关按钮
-        row.add(new ToggleButton()
+        List<List<IWidget>> proxyRows = new ArrayList<>();
+        List<IWidget> proxyRow = new ArrayList<>();
+        proxyRow.add(new ToggleButton()
                 .width(20)
                 .height(20)
-                .value(new BoolValue.Dynamic(useProxyStateValue::getBoolValue,
-                        useProxyStateValue::setBoolValue))
+                .value(new BoolValue.Dynamic(useProxyStateValue::getBoolValue, useProxyStateValue::setBoolValue))
                 .overlay(ApplyGrayGuiTextures.PROXY_OVERLAY)
-                .tooltip(tooltip -> tooltip.addLine(IKey.str("无线代理模式"))));
-
-        // 添加X坐标文本框
-        row.add((new TextFieldWidget()
-                .widthRel(0.25f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .setValidator(str -> {
-                    // 确保字符串以X:开头
-                    if (!str.startsWith("X:") && !str.startsWith("x:")) {
-                        if (str.isEmpty()) {
-                            return "X:";
-                        }
-                        // 如果用户删除了前缀，自动添加回来
-                        return "X:" + str;
-                    }
-
-                    // 提取数字部分进行验证
-                    String numPart = str.substring(2);
-                    if (numPart.isEmpty()) {
-                        return str; // 允许空数字部分（用户正在输入）
-                    }
-
-                    try {
-                        // 验证数字部分
-                        Long.parseLong(numPart.trim());
-                        return str; // 验证通过
-                    } catch (NumberFormatException e) {
-                        // 验证失败，返回当前值
-                        return displayXValue.getValue();
-                    }
-                })
-                .value(displayXValue)
-                .background(GTGuiTextures.DISPLAY)));
-
-        // 添加Y坐标文本框
-        row.add((new TextFieldWidget()
-                .widthRel(0.25f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .setValidator(str -> {
-                    if (!str.startsWith("Y:") && !str.startsWith("y:")) {
-                        if (str.isEmpty()) {
-                            return "Y:";
-                        }
-                        return "Y:" + str;
-                    }
-
-                    String numPart = str.substring(2);
-                    if (numPart.isEmpty()) {
-                        return str;
-                    }
-
-                    try {
-                        Long.parseLong(numPart.trim());
-                        return str;
-                    } catch (NumberFormatException e) {
-                        return displayYValue.getValue();
-                    }
-                })
-                .value(displayYValue)
-                .background(GTGuiTextures.DISPLAY)));
-
-        // 添加Z坐标文本框
-        row.add((new TextFieldWidget()
-                .widthRel(0.25f)
-                .height(20)
-                .setTextColor(Color.WHITE.darker(1))
-                .setValidator(str -> {
-                    if (!str.startsWith("Z:") && !str.startsWith("z:")) {
-                        if (str.isEmpty()) {
-                            return "Z:";
-                        }
-                        return "Z:" + str;
-                    }
-
-                    String numPart = str.substring(2);
-                    if (numPart.isEmpty()) {
-                        return str;
-                    }
-
-                    try {
-                        Long.parseLong(numPart.trim());
-                        return str;
-                    } catch (NumberFormatException e) {
-                        return displayZValue.getValue();
-                    }
-                })
-                .value(displayZValue)
-                .background(GTGuiTextures.DISPLAY)));
-
-        weightsPos.add(row);
+                .tooltip(t -> t.addLine(IKey.lang(key("ui.proxy.mode")))));
+        proxyRow.add(coordinateField(displayXValue, 'X', 0.25f));
+        proxyRow.add(coordinateField(displayYValue, 'Y', 0.25f));
+        proxyRow.add(coordinateField(displayZValue, 'Z', 0.25f));
+        proxyRows.add(proxyRow);
 
         BooleanSyncValue blockStateValue = new BooleanSyncValue(this::isBlockedMode, this::setBlockedMode);
         guiSyncManager.syncValue("block_state", blockStateValue);
-
         BooleanSyncValue collapseStateValue = new BooleanSyncValue(this::isAutoCollapse, this::setAutoCollapse);
         guiSyncManager.syncValue("collapse_state", collapseStateValue);
-
         BooleanSyncValue exportStateValue = new BooleanSyncValue(this::isExport, this::setExport);
         guiSyncManager.syncValue("export_state", exportStateValue);
 
@@ -923,200 +575,263 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
                         .topRel(0f, 3, 1f)
                         .child(new PageButton(0, controller)
                                 .tab(GuiTextures.TAB_TOP, 0)
-                                .addTooltipLine(IKey.lang("前缀模式"))
+                                .addTooltipLine(IKey.lang(key("ui.tab.mapping")))
                                 .overlay(HATCH))
                         .child(new PageButton(1, controller)
                                 .tab(GuiTextures.TAB_TOP, 0)
-                                .addTooltipLine(IKey.lang("标签过滤"))
+                                .addTooltipLine(IKey.lang(key("ui.tab.filter")))
                                 .overlay(FILTER))
                         .child(new PageButton(2, controller)
                                 .tab(GuiTextures.TAB_TOP, 0)
-                                .addTooltipLine(IKey.lang("网络代理"))
+                                .addTooltipLine(IKey.lang(key("ui.tab.proxy")))
                                 .overlay(PROXY))
                         .child(new PageButton(3, controller)
                                 .tab(GuiTextures.TAB_TOP, 0)
-                                .addTooltipLine(IKey.lang(
-                                        "gregtech.machine.me_ore_prefix_pattern_provider.ui.tab.link"))
-                                .overlay(LINK))
-                )
+                                .addTooltipLine(IKey.lang(key("ui.tab.link")))
+                                .overlay(LINK)))
                 .child(IKey.lang(getMetaFullName()).asWidget().pos(5, 5))
                 .child(SlotGroupWidget.playerInventory(false).left(7).bottom(7))
                 .child(new PagedWidget<>()
-                        .top(18) // 调整 PagedWidget 的顶部位置为 18
-                        .margin(0) // 移除 margin 避免偏移
-                        .widthRel(1f) // 宽度设为父容器的 100%
+                        .top(18)
+                        .margin(0)
+                        .widthRel(1f)
                         .controller(controller)
-                        .addPage(// 样板模式页面
-                                Flow.column() // 使用列布局
-                                        .top(0)
-                                        .widthRel(0.8f)
-                                        .leftRel(0.5f)
-                                        .child(
-                                                new Grid()
-                                                        .height(36)
-                                                        .leftRel(0.5f)
-                                                        .widthRel(1.0f)
-                                                        .grid(widgetsPattern)
-                                        )
-                                        .child(
-                                                new Grid()
-                                                        .top(36)
-                                                        .leftRel(0.5f)
-                                                        .widthRel(1.0f)
-                                                        .grid(weightText)
-                                        )
-
-                        )
-                        .addPage(
-                                Flow.column() // 使用列布局
-                                        .top(0)
-                                        .widthRel(0.8f)
-                                        .leftRel(0.5f)
-                                        .child(
-                                                new Grid()
-                                                        .height(40)
-                                                        .leftRel(0.5f)
-                                                        .widthRel(1.0f)
-                                                        .grid(weightTagList)
-                                        )
-                                        .child(
-                                                new ScrollableTextWidget()
-                                                        .top(40)
-                                                        .height(54)
-                                                        .autoUpdate(true)
-                                                        .leftRel(0.5f)
-                                                        .widthRel(1.0f)
-                                                        .alignment(Alignment.TopLeft)
-                                                        .textBuilder(text -> {
-                                                            text.addLine(IKey.lang("白标签列表"));
-                                                            for (String tag : whiteTagList) {
-                                                                text.addLine(tag);
-                                                            }
-                                                            text.addLine(IKey.lang("黑标签列表"));
-                                                            for (String tag : blackTagList) {
-                                                                text.addLine(tag);
-                                                            }
-                                                        })
-                                        )
-
-                        )
-                        .addPage(// 代理模式页面
-                                Flow.column() // 使用列布局
-                                        .top(0)
+                        .addPage(mappingPage)
+                        .addPage(filterPage)
+                        .addPage(Flow.column()
+                                .top(0)
+                                .widthRel(1f)
+                                .leftRel(0.5f)
+                                .child(new Grid()
+                                        .height(25)
+                                        .minElementMargin(0, 0)
+                                        .minColWidth((int) (0.24f * backgroundWidth))
+                                        .minRowHeight(18)
+                                        .grid(proxyRows))
+                                .childIf(useProxy, () -> Flow.column()
                                         .widthRel(1f)
-                                        .leftRel(0.5f)
-                                        .child(
-                                                new Grid()
-                                                        .height(25)
-                                                        .minElementMargin(0, 0)
-                                                        .minColWidth((int) (0.24f * backgroundWidth))
-                                                        .minRowHeight(18)
-                                                        .grid(weightsPos)
-                                        )
-                                        .childIf(useProxy, () -> Flow.column() // 创建多行文本列
-                                                .widthRel(1f)
-                                                .top(30)
-                                                .margin(5, 0)
-                                                .child(new TextWidget<>(IKey.str("无线代理模式")))
-                                                .childIf(useProxy, () -> {
-                                                    TileEntity tileEntity = this.getWorld().getTileEntity(
-                                                            AEProxy_pos);
-                                                    if (tileEntity != null) {
-                                                        return Flow.column()
-                                                                .widthRel(1f)
-                                                                .child(new TextWidget<>(IKey.lang("连接至无线网络")))
-                                                                .child(new TextWidget<>(IKey.dynamic(() ->
-                                                                        "位置:" + AEProxy_pos.getX() + ", " +
-                                                                                AEProxy_pos.getY() + ", " +
-                                                                                AEProxy_pos.getZ()
-                                                                )))
-                                                                .child(new TextWidget<>(IKey.dynamic(() ->
-                                                                        "名称:" +
-                                                                                tileEntity.getBlockType().getLocalizedName()
-                                                                )));
-                                                    } else {
-                                                        return Flow.column()
-                                                                .widthRel(1f)
-                                                                .child(new TextWidget<>(IKey.str("未找到无线网络代理")))
-                                                                .child(new TextWidget<>(IKey.dynamic(() ->
-                                                                        "坐标:" + AEProxy_pos.getX() + ", " +
-                                                                                AEProxy_pos.getY() + ", " +
-                                                                                AEProxy_pos.getZ()
-                                                                )));
-                                                    }
-                                                })
-                                        )
-                                        .childIf(!useProxy, () -> Flow.column() // 创建多行文本列
-                                                .widthRel(1f)
-                                                .top(30)
-                                                .margin(5, 0)
-                                                .child(new TextWidget<>(IKey.str("有线代理模式")))
-                                        )
-                        )
-                        .addPage(// 链接信息页面
-                                Flow.column()
-                                        .top(0)
-                                        .widthRel(1f)
-                                        .leftRel(0.5f)
+                                        .top(30)
                                         .margin(5, 0)
-                                        .child(new TextWidget<>(IKey.lang(
-                                                "gregtech.machine.me_ore_prefix_pattern_provider.ui.link.title")))
-                                        .child(new TextWidget<>(IKey.dynamic(this::getLinkStatusText)))
-                                        .child(new TextWidget<>(IKey.dynamic(this::getLinkTargetText)))
-                                        .child(new TextWidget<>(IKey.dynamic(this::getLinkBufferText)))
-                                        .child(new TextWidget<>(IKey.lang(
-                                                "gregtech.machine.me_ore_prefix_pattern_provider.ui.link.hint")))
-                        )
-                )
+                                        .child(new TextWidget<>(IKey.lang(key("ui.proxy.wireless"))))
+                                        .childIf(useProxy, () -> {
+                                            TileEntity tileEntity = this.getWorld().getTileEntity(AEProxy_pos);
+                                            if (tileEntity != null) {
+                                                return Flow.column()
+                                                        .widthRel(1f)
+                                                        .child(new TextWidget<>(IKey.lang(key("ui.proxy.connected"))))
+                                                        .child(new TextWidget<>(IKey.dynamic(() ->
+                                                                "位置:" + AEProxy_pos.getX() + ", " +
+                                                                        AEProxy_pos.getY() + ", " +
+                                                                        AEProxy_pos.getZ())))
+                                                        .child(new TextWidget<>(IKey.dynamic(() ->
+                                                                "名称:" + tileEntity.getBlockType().getLocalizedName())));
+                                            }
+                                            return Flow.column()
+                                                    .widthRel(1f)
+                                                    .child(new TextWidget<>(IKey.lang(key("ui.proxy.missing"))))
+                                                    .child(new TextWidget<>(IKey.dynamic(() ->
+                                                            "坐标:" + AEProxy_pos.getX() + ", " +
+                                                                    AEProxy_pos.getY() + ", " +
+                                                                    AEProxy_pos.getZ())));
+                                        }))
+                                .childIf(!useProxy, () -> Flow.column()
+                                        .widthRel(1f)
+                                        .top(30)
+                                        .margin(5, 0)
+                                        .child(new TextWidget<>(IKey.lang(key("ui.proxy.wired"))))))
+                        .addPage(Flow.column()
+                                .top(0)
+                                .widthRel(1f)
+                                .leftRel(0.5f)
+                                .margin(5, 0)
+                                .child(new TextWidget<>(IKey.lang(key("ui.link.title"))))
+                                .child(new TextWidget<>(IKey.dynamic(this::getLinkStatusText)))
+                                .child(new TextWidget<>(IKey.dynamic(this::getLinkTargetText)))
+                                .child(new TextWidget<>(IKey.dynamic(this::getLinkBufferText)))
+                                .child(new TextWidget<>(IKey.lang(key("ui.link.hint"))))))
                 .child(Flow.column()
                         .pos(backgroundWidth - 7 - 36, backgroundHeight - 18 * 4 - 7 - 5)
                         .width(36).height(18 * 4 + 5)
-
                         .child(GTGuiTextures.getLogo(getUITheme()).asWidget()
                                 .top(18 * 3 + 5)
-                                .size(17)
-                        )
-
+                                .size(17))
                         .child(new ToggleButton()
                                 .top(18 * 2)
                                 .value(new BoolValue.Dynamic(blockStateValue::getBoolValue,
                                         blockStateValue::setBoolValue))
                                 .overlay(ApplyGrayGuiTextures.BUTTON_DUAL_OUTPUT)
-                                .tooltip(tooltip -> tooltip.addLine(IKey.str("阻挡模式"))))
+                                .tooltip(t -> t.addLine(IKey.lang(key("ui.mode.blocked")))))
                         .child(new ToggleButton()
                                 .top(18 * 2)
                                 .left(18)
                                 .value(new BoolValue.Dynamic(exportStateValue::getBoolValue,
                                         exportStateValue::setBoolValue))
                                 .overlay(ApplyGrayGuiTextures.EXPORT_OVERLAY)
-                                .tooltip(tooltip -> tooltip.addLine(IKey.str("返回模式"))))
-
+                                .tooltip(t -> t.addLine(IKey.lang(key("ui.mode.export")))))
                         .child(new ToggleButton()
                                 .top(18)
                                 .value(new BoolValue.Dynamic(collapseStateValue::getBoolValue,
                                         collapseStateValue::setBoolValue))
                                 .overlay(ApplyGrayGuiTextures.BUTTON_DUAL_COLLAPSE)
-                                .tooltip(tooltip -> tooltip.addLine(IKey.str("自动整理"))))
-
+                                .tooltip(t -> t.addLine(IKey.lang(key("ui.mode.collapse")))))
                         .child(new ButtonWidget<>()
                                 .top(0)
-                                .onMousePressed(mouseButton -> {
-                                    handlePatternGenerate(guiSyncManager.getPlayer());
+                                .onMousePressed(b -> {
+                                    handlePatternGenerate(player);
                                     return true;
                                 })
                                 .overlay(ApplyGrayGuiTextures.PATTERN_OVERLAY)
-                                .tooltip(tooltip -> tooltip.addLine(IKey.lang(
-                                        "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.button"))))
-
-                );
+                                .tooltip(t -> t.addLine(IKey.lang(key("ui.generate.button"))))));
     }
+
+    private static String key(String suffix) {
+        return "gregtech.machine.me_ore_prefix_pattern_provider." + suffix;
+    }
+
+    private void message(EntityPlayer player, String suffix, String arg) {
+        player.sendMessage(new TextComponentTranslation(key(suffix), arg));
+    }
+
+    // ## 映射编辑
+
+    private boolean addMapping(EntityPlayer player, TextFieldWidget inputField, TextFieldWidget outputField,
+                               StringSyncValue mappingsValue) {
+        OrePrefixMapping mapping = OrePrefixMapping.parse(inputField.getText() + ">" + outputField.getText());
+        if (mapping == null) {
+            message(player, "ui.msg.invalid", inputField.getText().trim() + " → " + outputField.getText().trim());
+            return true;
+        }
+        String unknown = firstUnknownPrefix(mapping);
+        if (unknown != null) {
+            message(player, "ui.msg.unknown_prefix", unknown);
+            return true;
+        }
+        if (mapping.inputs.size() > MAX_GROUP_SIZE) {
+            message(player, "ui.msg.too_many_inputs", String.valueOf(MAX_GROUP_SIZE));
+            return true;
+        }
+        if (mapping.outputs.size() > MAX_OUTPUT_GROUP_SIZE) {
+            message(player, "ui.msg.too_many_outputs", String.valueOf(MAX_OUTPUT_GROUP_SIZE));
+            return true;
+        }
+
+        boolean updated = mappings.removeIf(existing -> existing.equals(mapping));
+        mappings.add(mapping);
+        mappingsValue.setValue(mappingsToString(mappings));
+        message(player, updated ? "ui.msg.updated" : "ui.msg.added", mapping.toText());
+        inputField.setText("");
+        outputField.setText("");
+        return true;
+    }
+
+    private boolean removeMapping(EntityPlayer player, TextFieldWidget inputField, TextFieldWidget outputField,
+                                  StringSyncValue mappingsValue) {
+        OrePrefixMapping mapping = OrePrefixMapping.parse(inputField.getText() + ">" + outputField.getText());
+        if (mapping == null) {
+            message(player, "ui.msg.invalid", inputField.getText().trim() + " → " + outputField.getText().trim());
+            return true;
+        }
+        if (!mappings.removeIf(existing -> existing.equals(mapping))) {
+            message(player, "ui.msg.not_found", mapping.toText());
+            return true;
+        }
+        mappingsValue.setValue(mappingsToString(mappings));
+        message(player, "ui.msg.removed", mapping.toText());
+        inputField.setText("");
+        outputField.setText("");
+        return true;
+    }
+
+    @Nullable
+    private static String firstUnknownPrefix(OrePrefixMapping mapping) {
+        for (PrefixEntry entry : mapping.inputs) {
+            if (!FLUID_PREFIX.equals(entry.prefix) && OrePrefix.getPrefix(entry.prefix) == null) {
+                return entry.prefix;
+            }
+        }
+        for (PrefixEntry entry : mapping.outputs) {
+            if (!FLUID_PREFIX.equals(entry.prefix) && OrePrefix.getPrefix(entry.prefix) == null) {
+                return entry.prefix;
+            }
+        }
+        return null;
+    }
+
+    // ## 同步值回写
+
+    private void applyBlackList(String str) {
+        if (str == null) return;
+        blackList.clear();
+        blackList.addAll(stringToList(str));
+        setNeedPatternSync(true);
+    }
+
+    private void applyWhiteTags(String str) {
+        if (str == null) return;
+        whiteTagList.clear();
+        whiteTagList.addAll(stringToList(str));
+        setNeedPatternSync(true);
+    }
+
+    private void applyBlackTags(String str) {
+        if (str == null) return;
+        blackTagList.clear();
+        blackTagList.addAll(stringToList(str));
+        setNeedPatternSync(true);
+    }
+
+    private void applyProxyCoordinate(String str, char axis) {
+        String body = str;
+        if (body.length() >= 2 && body.charAt(1) == ':' && Character.toUpperCase(body.charAt(0)) == axis) {
+            body = body.substring(2);
+        }
+        try {
+            int value = Integer.parseInt(body.trim());
+            AEProxy_pos = switch (axis) {
+                case 'X' -> new BlockPos(value, AEProxy_pos.getY(), AEProxy_pos.getZ());
+                case 'Y' -> new BlockPos(AEProxy_pos.getX(), value, AEProxy_pos.getZ());
+                default -> new BlockPos(AEProxy_pos.getX(), AEProxy_pos.getY(), value);
+            };
+        } catch (NumberFormatException e) {
+            // 输入过程中的半成品坐标不写回
+        }
+    }
+
+    private static TextFieldWidget coordinateField(StringSyncValue value, char axis, float widthRel) {
+        String prefix = axis + ":";
+        return new TextFieldWidget()
+                .widthRel(widthRel)
+                .height(20)
+                .setTextColor(Color.WHITE.darker(1))
+                .setValidator(str -> {
+                    if (!str.startsWith(prefix)) {
+                        if (str.isEmpty()) {
+                            return prefix;
+                        }
+                        return prefix + str;
+                    }
+                    String number = str.substring(2);
+                    if (number.isEmpty()) {
+                        return str;
+                    }
+                    try {
+                        Long.parseLong(number.trim());
+                        return str;
+                    } catch (NumberFormatException e) {
+                        return value.getValue();
+                    }
+                })
+                .value(value)
+                .background(GTGuiTextures.DISPLAY);
+    }
+
+    // ## 样板推送与链接页
 
     private void handlePatternGenerate(EntityPlayer player) {
         int patternCount = refreshGeneratedPatternDetails();
         if (patternCount <= 0) {
             setNeedPatternSync(true);
-            player.sendStatusMessage(new TextComponentTranslation(
-                    "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.none"), true);
+            player.sendStatusMessage(new TextComponentTranslation(key("ui.generate.none")), true);
             return;
         }
 
@@ -1125,10 +840,10 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         setNeedPatternSync(waitingForSync);
 
         String messageKey = waitingForSync
-                ? "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.queued"
+                ? key("ui.generate.queued")
                 : hasMaster()
-                        ? "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.success"
-                        : "gregtech.machine.me_ore_prefix_pattern_provider.ui.generate.unlinked";
+                        ? key("ui.generate.success")
+                        : key("ui.generate.unlinked");
         player.sendStatusMessage(new TextComponentTranslation(messageKey, patternCount), true);
     }
 
@@ -1148,22 +863,21 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
 
     private String getLinkStatusText() {
         if (hasMaster() && masterPos != null) {
-            return I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.ui.link.status.linked",
+            return I18n.format(key("ui.link.status.linked"),
                     masterPos.getX(), masterPos.getY(), masterPos.getZ());
         }
         if (masterSet && masterPos != null) {
-            return I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.ui.link.status.waiting",
+            return I18n.format(key("ui.link.status.waiting"),
                     masterPos.getX(), masterPos.getY(), masterPos.getZ());
         }
-        return I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.ui.link.status.none");
+        return I18n.format(key("ui.link.status.none"));
     }
 
     private String getLinkTargetText() {
         if (!hasMaster()) {
             return "";
         }
-        return I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.ui.link.status.target",
-                I18n.format(master.getMetaFullName()));
+        return I18n.format(key("ui.link.status.target"), I18n.format(master.getMetaFullName()));
     }
 
     private String getLinkBufferText() {
@@ -1178,8 +892,24 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         for (MetaTileEntityMEPatternProvider.PatternBuffer buffer : bufferPool) {
             if (!buffer.isEmpty()) usedBuffers++;
         }
-        return I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.ui.link.status.buffers",
-                usedBuffers, master.getBufferCount());
+        return I18n.format(key("ui.link.status.buffers"), usedBuffers, master.getBufferCount());
+    }
+
+    @Override
+    public MultiblockControllerBase getController() {
+        return super.getController();
+    }
+
+    @Override
+    public String getShowName() {
+        return getMetaFullName();
+    }
+
+    @Nullable
+    @Override
+    public IItemHandler getPatternSlot() {
+        // 样板不落在槽位里，全部由规则在运行时生成
+        return null;
     }
 
     @Override
@@ -1190,15 +920,15 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
     @Override
     public void addInformation(ItemStack stack, @Nullable World player, @NotNull List<String> tooltip,
                                boolean advanced) {
-        tooltip.add(I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.tooltip.1"));
-        tooltip.add(I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.tooltip.2"));
-        tooltip.add(I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.tooltip.3"));
-        tooltip.add(I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.tooltip.4"));
-        tooltip.add(I18n.format("gregtech.machine.me_ore_prefix_pattern_provider.tooltip.5"));
+        for (int i = 1; i <= 6; i++) {
+            tooltip.add(I18n.format(key("tooltip." + i)));
+        }
         tooltip.add(I18n.format("gregtech.machine.me_pattern.tooltip.2"));
         tooltip.add(I18n.format("gregtech.machine.me.data_stick_proxy"));
         tooltip.add(I18n.format("gregtech.universal.enabled"));
     }
+
+    // ## 数据模型
 
     public static class PrefixEntry {
 
@@ -1208,6 +938,100 @@ public class MetaTileEntityMEOrePrefixPatternProvider extends MetaTileEntityAEPa
         public PrefixEntry(String prefix, int amount) {
             this.prefix = prefix;
             this.amount = amount;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (!(obj instanceof PrefixEntry other)) return false;
+            return amount == other.amount && prefix.equals(other.prefix);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(prefix, amount);
+        }
+
+        @Override
+        public String toString() {
+            return prefix + ":" + amount;
+        }
+    }
+
+    /**
+     * 一条「矿辞组 → 矿辞组」规则。
+     *
+     * <p>
+     * 组内同名前缀在构造时合并，因此 `ingot:1,ingot:2` 等价于 `ingot:3`；
+     * 也让删除按钮可以直接按内容匹配已有规则。
+     */
+    public static class OrePrefixMapping {
+
+        public final List<PrefixEntry> inputs;
+        public final List<PrefixEntry> outputs;
+
+        public OrePrefixMapping(List<PrefixEntry> inputs, List<PrefixEntry> outputs) {
+            this.inputs = normalize(inputs);
+            this.outputs = normalize(outputs);
+        }
+
+        @Nullable
+        public static OrePrefixMapping parse(String text) {
+            if (text == null) return null;
+            String trimmed = text.trim();
+            int arrow = trimmed.indexOf('>');
+            if (arrow <= 0 || arrow == trimmed.length() - 1) return null;
+            List<PrefixEntry> inputs = parseGroup(trimmed.substring(0, arrow));
+            List<PrefixEntry> outputs = parseGroup(trimmed.substring(arrow + 1));
+            if (inputs.isEmpty() || outputs.isEmpty()) return null;
+            return new OrePrefixMapping(inputs, outputs);
+        }
+
+        private static List<PrefixEntry> normalize(List<PrefixEntry> entries) {
+            List<PrefixEntry> result = new ArrayList<>();
+            for (PrefixEntry entry : entries) {
+                if (entry == null || entry.prefix == null || entry.prefix.trim().isEmpty()) continue;
+                String prefix = entry.prefix.trim();
+                int amount = Math.max(1, entry.amount);
+                PrefixEntry existing = null;
+                for (PrefixEntry candidate : result) {
+                    if (candidate.prefix.equals(prefix)) {
+                        existing = candidate;
+                        break;
+                    }
+                }
+                if (existing != null) {
+                    existing.amount += amount;
+                } else {
+                    result.add(new PrefixEntry(prefix, amount));
+                }
+            }
+            return result;
+        }
+
+        public boolean isEmpty() {
+            return inputs.isEmpty() || outputs.isEmpty();
+        }
+
+        public String toText() {
+            return groupToText(inputs) + " > " + groupToText(outputs);
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (!(obj instanceof OrePrefixMapping other)) return false;
+            return inputs.equals(other.inputs) && outputs.equals(other.outputs);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(inputs, outputs);
+        }
+
+        @Override
+        public String toString() {
+            return toText();
         }
     }
 }

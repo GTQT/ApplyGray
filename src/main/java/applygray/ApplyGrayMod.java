@@ -6,7 +6,10 @@ import applygray.common.ApplyGrayBlocks;
 import applygray.common.ApplyGrayCommonProxy;
 import applygray.common.ApplyGrayMetaTileEntities;
 import applygray.common.ApplyGrayRecipes;
+import applygray.common.items.ApplyGrayAeItems;
+import applygray.common.network.PacketHandler;
 import applygray.integration.ApplyGrayIntegrationBootstrap;
+import applygray.integration.ae2.encoding.ExtendedEncodingTermGuiHandler;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.integration.theoneprobe.TheOneProbeIntegration;
 import applygray.mattermanipulator.network.MatterManipulatorNetwork;
@@ -46,21 +49,25 @@ public class ApplyGrayMod {
         MatterManipulatorConfig.load(event.getModConfigurationDirectory());
         RecipePatternRules.initialize(event.getModConfigurationDirectory());
         MatterManipulatorNetwork.initialize();
+        PacketHandler.initialize();
         proxy.preInit(event);
         TheOneProbeIntegration.enqueueIMC();
         ApplyGrayIntegrationBootstrap.init();
         ApplyGrayBlocks.init();
         ApplyGrayMetaTileEntities.init();
         EcoGuiHandler.initialize();
+        ExtendedEncodingTermGuiHandler.initialize();
     }
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
+        proxy.init(event);
         ApplyGrayRecipes.init();
     }
 
     @Mod.EventHandler
     public void postInit(FMLPostInitializationEvent event) {
+        ApplyGrayAeItems.registerUpgradeAssociations();
         ApplyGrayRecipes.postInit();
     }
 }

@@ -1,4 +1,4 @@
-package gregtech.common.metatileentities.multi.multiblockpart.appeng;
+package applygray.common.metatileentities.multiblock.multiblockpart;
 
 import applygray.common.metatileentities.multiblock.multiblockpart.MetaTileEntityMEPatternProvider;
 import gregtech.api.capability.impl.FluidTankList;

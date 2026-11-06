@@ -300,28 +300,28 @@ public class ApplyGrayMetaTileEntities {
         for (int tier = 0; tier < endPos; tier++) {
             String voltageName = VN[tier].toLowerCase();
 
-            GRID_ENERGY_INPUT_HATCH[tier] = registerMetaTileEntity(300,
+            GRID_ENERGY_INPUT_HATCH[tier] = registerMetaTileEntity(300 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input." + voltageName),
                             tier, 2, false));
-            GRID_ENERGY_OUTPUT_HATCH[tier] = registerMetaTileEntity(315,
+            GRID_ENERGY_OUTPUT_HATCH[tier] = registerMetaTileEntity(315 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output." + voltageName),
                             tier, 2, true));
-            GRID_ENERGY_INPUT_HATCH_4A[tier] = registerMetaTileEntity(330,
+            GRID_ENERGY_INPUT_HATCH_4A[tier] = registerMetaTileEntity(330 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_4a." + voltageName),
                             tier, 4, false));
-            GRID_ENERGY_OUTPUT_HATCH_4A[tier] = registerMetaTileEntity(345,
+            GRID_ENERGY_OUTPUT_HATCH_4A[tier] = registerMetaTileEntity(345 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_4a." + voltageName),
                             tier, 4, true));
-            GRID_ENERGY_INPUT_HATCH_16A[tier] = registerMetaTileEntity(360,
+            GRID_ENERGY_INPUT_HATCH_16A[tier] = registerMetaTileEntity(360 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_16a." + voltageName),
                             tier, 16, false));
-            GRID_ENERGY_OUTPUT_HATCH_16A[tier] = registerMetaTileEntity(375,
+            GRID_ENERGY_OUTPUT_HATCH_16A[tier] = registerMetaTileEntity(375 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_16a." + voltageName),
                             tier, 16, true));
-            GRID_ENERGY_INPUT_HATCH_64A[tier] = registerMetaTileEntity(390,
+            GRID_ENERGY_INPUT_HATCH_64A[tier] = registerMetaTileEntity(390 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.input_64a." + voltageName),
                             tier, 64, false));
-            GRID_ENERGY_OUTPUT_HATCH_64A[tier] = registerMetaTileEntity(405,
+            GRID_ENERGY_OUTPUT_HATCH_64A[tier] = registerMetaTileEntity(405 + tier,
                     new MetaTileEntityMEGridEnergyHatch(ApplyGrayAPI.id("me_grid_energy_hatch.output_64a." + voltageName),
                             tier, 64, true));
         }

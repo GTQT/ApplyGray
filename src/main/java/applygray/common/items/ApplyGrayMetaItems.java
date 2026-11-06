@@ -21,11 +21,7 @@ import net.minecraftforge.registries.IForgeRegistry;
  */
 public final class ApplyGrayMetaItems {
 
-    /** AE 多方块构建器的 meta 值；字段注释里引用它，避免同一个数字写两遍。 */
-    public static final int AE_BUILDER_META = 1;
-
     public static ApplyGrayMetaItem META_ITEM;
-    public static MetaItem<?>.MetaValueItem ORDER; // meta 0
     public static MetaItem<?>.MetaValueItem AE_BUILDER; // meta AE_BUILDER_META
 
     // Eco 内存芯片：每个等级一个独立 MetaItem，等级存在物品上
@@ -50,7 +46,6 @@ public final class ApplyGrayMetaItems {
 
     private ApplyGrayMetaItems() {}
 
-    /** 物品注册入口：一个物品一行，构造 → 交给 Forge → 展开子项。 */
     public static void register(IForgeRegistry<Item> registry) {
         META_ITEM = register(registry, new ApplyGrayMetaItem());
 
@@ -73,7 +68,6 @@ public final class ApplyGrayMetaItems {
         ECO_FLUID_CELL_5 = register(registry, new EcoCellItem(5, true));
     }
 
-    /** 注册名已在构造器绑定；顺序固定为先进注册表、再展开该物品的 meta 子项。 */
     private static <T extends StandardMetaItem> T register(IForgeRegistry<Item> registry, T item) {
         registry.register(item);
         item.registerSubItems();

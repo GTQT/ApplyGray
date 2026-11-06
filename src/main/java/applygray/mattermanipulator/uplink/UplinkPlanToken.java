@@ -3,7 +3,7 @@ package applygray.mattermanipulator.uplink;
 import java.util.ArrayList;
 import java.util.List;
 
-import applygray.common.items.ApplyGrayMetaItems;
+import applygray.common.items.ApplyGrayItems;
 import meowmel.structurelib.building.BlockSpec;
 import meowmel.structurelib.inventory.FluidRequirement;
 import meowmel.structurelib.inventory.ResourceRequirement;
@@ -66,7 +66,7 @@ final class UplinkPlanToken {
      * plans distinct, because AE2 matches patterns by their output key.
      */
     static ItemStack createToken(String planName, long discriminator, int part, int partCount) {
-        ItemStack token = ApplyGrayMetaItems.ORDER.getStackForm();
+        ItemStack token = new ItemStack(ApplyGrayItems.ORDER);
         String label = planLabel(planName, discriminator, part, partCount);
 
         NBTTagCompound data = token.hasTagCompound() ? token.getTagCompound() : new NBTTagCompound();
@@ -123,7 +123,7 @@ final class UplinkPlanToken {
     }
 
     private static long boundedAmount(long amount) {
-        if (amount <= 0L || amount > PatternDetailsHelper.MAX_PROCESSING_PATTERN_AMOUNT) {
+        if (amount <= 0L || amount > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("A single plan requirement of " + amount + " exceeds one AE2 pattern");
         }
         return amount;

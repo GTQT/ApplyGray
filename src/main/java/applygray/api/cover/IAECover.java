@@ -1,6 +1,7 @@
 package applygray.api.cover;
 
 import ae2.api.networking.IGridNode;
+import gregtech.api.cover.Cover;
 import ae2.api.util.AECableType;
 import net.minecraft.util.EnumFacing;
 import org.jetbrains.annotations.Nullable;

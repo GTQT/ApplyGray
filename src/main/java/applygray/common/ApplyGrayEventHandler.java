@@ -1,6 +1,8 @@
 package applygray.common;
 
 import applygray.api.ApplyGrayAPI;
+import applygray.common.items.ApplyGrayItems;
+import applygray.common.items.ApplyGrayAeItems;
 import applygray.common.items.ApplyGrayMetaItems;
 import applygray.integration.ae2.rules.RecipePatternRules;
 import applygray.mattermanipulator.item.MatterManipulatorItems;
@@ -41,7 +43,9 @@ public final class ApplyGrayEventHandler {
     public static void registerItems(RegistryEvent.Register<Item> event) {
         ApplyGrayBlocks.registerItemBlocks(event.getRegistry());
         ApplyGrayMetaItems.register(event.getRegistry());
+        ApplyGrayItems.register(event.getRegistry());
         MatterManipulatorItems.register(event.getRegistry());
+        ApplyGrayAeItems.register(event.getRegistry());
     }
 
     @SubscribeEvent(priority = EventPriority.LOWEST)

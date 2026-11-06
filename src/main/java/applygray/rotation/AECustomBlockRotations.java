@@ -1,6 +1,8 @@
 package applygray.rotation;
 
 import gregtech.api.cover.CoverRayTracer;
+import gregtech.common.items.tool.rotation.CustomBlockRotations;
+import gregtech.common.items.tool.rotation.ICustomRotationBehavior;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.EnumFacing;

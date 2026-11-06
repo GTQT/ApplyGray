@@ -29,6 +29,8 @@ public abstract class MixinContainerCraftAmountRecipeMapGeneration implements IR
     @Unique private static final String APPLYGRAY_GENERATE_RECIPE_MAP_PATTERNS =
             "applygray.generate_recipe_map_patterns";
 
+    @Unique private static final long APPLYGRAY_MAX_AUTO_CRAFT_AMOUNT = 1_000_000L;
+
     @Shadow @Nullable private AEKey whatToCraft;
 
     @GuiSync(31)
@@ -39,12 +41,12 @@ public abstract class MixinContainerCraftAmountRecipeMapGeneration implements IR
                                                              CallbackInfo ci) {
         ((InvokerAEBaseContainer) (Object) this).applygray$registerClientAction(
                 APPLYGRAY_GENERATE_RECIPE_MAP_PATTERNS,
-                Integer.class,
+                Long.class,
                 this::applygray$startRecipeMapPatternGeneration);
     }
 
     @Override
-    public void applygray$generateOptimalRoutePatterns(int amount) {
+    public void applygray$generateOptimalRoutePatterns(long amount) {
         AEBaseContainer container = (AEBaseContainer) (Object) this;
         if (container.isClientSide()) {
             ((InvokerAEBaseContainer) container).applygray$sendClientAction(
@@ -60,7 +62,7 @@ public abstract class MixinContainerCraftAmountRecipeMapGeneration implements IR
     }
 
     @Unique
-    private void applygray$startRecipeMapPatternGeneration(int amount) {
+    private void applygray$startRecipeMapPatternGeneration(long amount) {
         AEBaseContainer container = (AEBaseContainer) (Object) this;
         if (container.isClientSide()) return;
         if (applygray$generationTree.getStatus() == PatternGenerationTreeData.Status.GENERATING) return;
@@ -71,7 +73,7 @@ public abstract class MixinContainerCraftAmountRecipeMapGeneration implements IR
         IGridNode node = actionHost == null ? null : actionHost.getActionableNode();
         IGrid grid = node == null ? null : node.grid();
         World world = node == null ? null : node.getLevel();
-        if (target == null || grid == null || amount <= 0 || amount > ContainerCraftAmount.MAX_AUTO_CRAFT_AMOUNT) {
+        if (target == null || grid == null || amount <= 0 || amount > APPLYGRAY_MAX_AUTO_CRAFT_AMOUNT) {
             applygray$generationTree = PatternGenerationTreeData.unavailable();
             return;
         }

@@ -25,12 +25,11 @@
     "supergiant.AccessorPatternAccessSupportContainerTracker",
     "supergiant.MixinContainerPatternAccessTermRecipeMapClear",
     "supergiant.MixinContainerPEATermRecipeMapClear",
-
-
-
-
-
-
+    "supergiant.MixinAEProcessingPattern",
+    "supergiant.MixinContainerPatternEncodingTerm",
+    "supergiant.MixinPatternProviderLogic",
+    "supergiant.MixinPatternProviderP2PTunnelPart",
+    "supergiant.MixinPseudoPatternDetails",
     "supergiantfc.MixinUtil",
     "supergiantfc.MixinFluidPatternTerminalRecipeTransferHandler"
   ],
@@ -41,7 +40,9 @@
     "supergiant.MixinAbstractPatternAccessTermRecipeMapClear",
     "supergiant.MixinOpenGuiPacketRecipeMapGeneration",
     "supergiantfc.MixinRecipeTransferBuilder",
-    "supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler"
+    "supergiantfc.MixinExtendedFluidPatternTerminalRecipeTransferHandler",
+    "supergiant.MixinEncodingModePanel",
+    "supergiant.MixinProcessingEncodingPanel"
   ],
   "server": []
 }

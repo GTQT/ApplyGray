@@ -1,6 +1,6 @@
 package applygray.mixins.supergiant;
 
-import applygray.common.items.ApplyGrayMetaItems;
+import applygray.common.items.ApplyGrayItems;
 
 import ae2.api.networking.energy.IEnergyService;
 import ae2.api.stacks.AEItemKey;
@@ -53,7 +53,7 @@ public abstract class MixinCraftingCPUCluster {
      */
     private static boolean applygray$isOrderToken(AEKey key) {
         if (!(key instanceof AEItemKey itemKey)) return false;
-        ItemStack order = ApplyGrayMetaItems.ORDER.getStackForm();
+        ItemStack order = new ItemStack(ApplyGrayItems.ORDER);
         return itemKey.getItem() == order.getItem() &&
                 itemKey.getReadOnlyStack().getItemDamage() == order.getItemDamage();
     }

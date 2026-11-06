@@ -27,8 +27,8 @@ public class GuiRecipePatternCraftAmount extends GuiCraftAmount {
 
     private void openPatternGenerationTree() {
         NumberEntryWidget numberEntry = (NumberEntryWidget) getWidgets().getComposite("amountToCraft");
-        int amount = numberEntry == null ? getContainer().getInitialAmount() :
-                numberEntry.getIntValue().orElse(getContainer().getInitialAmount());
+        long amount = numberEntry == null ? getContainer().getInitialAmount() :
+                numberEntry.getLongValue().orElse(getContainer().getInitialAmount());
         boolean craftMissingAmount = numberEntry != null && numberEntry.startsWithEquals();
         if (amount <= 0) return;
 

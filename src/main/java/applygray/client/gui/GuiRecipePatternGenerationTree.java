@@ -36,7 +36,7 @@ public class GuiRecipePatternGenerationTree extends AEBaseGui<ContainerCraftAmou
     };
 
     private final GuiRecipePatternCraftAmount parent;
-    private final int requestedAmount;
+    private final long requestedAmount;
     private final boolean craftMissingAmount;
     private final CraftingTreeWidget tree = new CraftingTreeWidget();
     private final TabButton next;
@@ -48,7 +48,7 @@ public class GuiRecipePatternGenerationTree extends AEBaseGui<ContainerCraftAmou
     private boolean awaitingGeneration = true;
 
     public GuiRecipePatternGenerationTree(ContainerCraftAmount container, InventoryPlayer playerInventory,
-                                          GuiRecipePatternCraftAmount parent, int requestedAmount,
+                                          GuiRecipePatternCraftAmount parent, long requestedAmount,
                                           boolean craftMissingAmount) {
         super(container, playerInventory);
         this.parent = parent;
