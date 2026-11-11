@@ -1,5 +1,7 @@
 package applygray.integration;
 
+import applygray.common.items.ApplyGrayMetaItems;
+
 import gregtech.api.pattern.StructureItemSource;
 
 import net.minecraft.entity.player.EntityPlayer;
@@ -19,6 +21,8 @@ public final class AE2StructureItemSource implements StructureItemSource {
     @Override
     public boolean extract(@NotNull EntityPlayer player, @NotNull ItemStack candidate, boolean simulate) {
         if (player.world.isRemote || candidate.isEmpty()) return false;
+        // Only the AE builder pulls from the network; a plain GT builder stays inventory-only.
+        if (!isHoldingBuilder(player)) return false;
         try {
             AEItemKey key = AEItemKey.of(candidate);
             if (key == null) return false;
@@ -40,7 +44,8 @@ public final class AE2StructureItemSource implements StructureItemSource {
      *
      * <p>供构建器在诊断与建造成败反馈里区分“AE 里没有”和“根本没连上 AE”。
      */
-    public static boolean isLinked(@NotNull EntityPlayer player) {
+    @Override
+    public boolean isLinked(@NotNull EntityPlayer player) {
         return findConnectedTerminal(player) != null;
     }
 
@@ -54,5 +59,12 @@ public final class AE2StructureItemSource implements StructureItemSource {
             }
         }
         return null;
+    }
+
+    /** The AE builder must be the held item for network extraction to apply. */
+    public static boolean isHoldingBuilder(@NotNull EntityPlayer player) {
+        return ApplyGrayMetaItems.AE_BUILDER != null &&
+                (ApplyGrayMetaItems.AE_BUILDER.isItemEqual(player.getHeldItemMainhand()) ||
+                        ApplyGrayMetaItems.AE_BUILDER.isItemEqual(player.getHeldItemOffhand()));
     }
 }
